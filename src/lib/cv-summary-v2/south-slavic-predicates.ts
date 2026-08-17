@@ -48,7 +48,12 @@ function isLikelyAdjectiveOrNounEnding(token: string): boolean {
 
 /** Strong verbal present 3sg endings — safe for coordinated (non-lead) predicates. */
 function hasStrongPresent3sgEnding(token: string): boolean {
-  return /(?:uje|ira|ava|iva|ova|eva|avlja|inja|ed[ae]|ује|ира|ава|ива|ова|ева|авља)$/u.test(token);
+  // A bare `-ede` ending is ambiguous in a coordinated duty: the plural noun
+  // `rasporede` (layouts) is a direct object in `priprema ... i rasporede`,
+  // not a second finite predicate.  Treat only unambiguous verbal endings as
+  // coordinated predicates; an unknown ambiguous surface must remain intact
+  // rather than be fabricated into a first-person verb.
+  return /(?:uje|ira|ava|iva|ova|eva|avlja|inja|ује|ира|ава|ива|ова|ева|авља)$/u.test(token);
 }
 
 function hasLeadPresent3sgEnding(token: string): boolean {

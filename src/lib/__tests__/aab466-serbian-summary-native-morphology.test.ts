@@ -99,4 +99,25 @@ describe('AAB466 Serbian Summary native morphology', () => {
     expect(valid.nativeSurfaceValidationPassed).toBe(true);
     expect(VALID_SUMMARY).toContain('rasporede za digitalne materijale');
   });
+
+  it('keeps a coordinated layout object intact instead of manufacturing a predicate', () => {
+    const current = realizeSouthSlavicPredicateChain({
+      bullet: 'Priprema vizuelne koncepte i rasporede za digitalne materijale.',
+      locale: 'sr',
+      employmentState: 'present',
+      gender: 'female',
+    });
+    const completed = realizeSouthSlavicPredicateChain({
+      bullet: 'Priprema vizuelne koncepte i rasporede za digitalne materijale.',
+      locale: 'sr',
+      employmentState: 'completed',
+      gender: 'female',
+    });
+
+    expect(current.text).toBe('pripremam vizuelne koncepte i rasporede za digitalne materijale');
+    expect(completed.text).toBe('pripremala vizuelne koncepte i rasporede za digitalne materijale');
+    expect(`${current.text} ${completed.text}`).not.toMatch(/raspored(?:em|ela)/iu);
+    expect(current.diagnostics.predicateChainValidationPassed).toBe(true);
+    expect(completed.diagnostics.predicateChainValidationPassed).toBe(true);
+  });
 });
