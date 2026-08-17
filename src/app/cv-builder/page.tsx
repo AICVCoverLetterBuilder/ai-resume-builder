@@ -204,6 +204,7 @@ import {
   buildExperienceLocalizationSnapshot,
   experienceDescriptionLocalizationLimitViolation,
   prepareExperienceLocalizedSurfaces,
+  resolveExperiencePresentationSnapshot,
   type ExperienceLocalizationProviderResponse,
   type ExperienceLocalizationRequest,
   type ExperienceLocalizationDiagnostics,
@@ -1104,7 +1105,11 @@ export default function CVBuilderPage() {
   const localizedPreviewCv = useMemo<CVData>(
     () => {
       const migratedCv = normalizeLegacyCvRuntime(cv, locale);
-      const qualityCv = applyCvContentQuality(migratedCv, locale, {
+      const presentation = resolveExperiencePresentationSnapshot({
+        cv: migratedCv,
+        targetLocale: locale,
+      });
+      const qualityCv = applyCvContentQuality(presentation.cv, locale, {
         gender: migratedCv.personal?.gender,
         summaryOrigin: migratedCv.summaryOrigin,
       }).cv;

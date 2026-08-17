@@ -1,7 +1,15 @@
 import { formatExperienceBullets, splitExperienceBullets } from './cv-canonical-facts';
+import { buildFactSetFromExperienceDescription } from './cv-canonical-facts';
 import { validateAiUnitLocalePurity } from './cv-ai-unit-locale-purity';
 import { detectExperienceUnsupportedClaimExpansion } from './cv-experience-unsupported-claims';
 import { validateCrossEntryExperienceLeakage } from './cv-experience-entry-isolation';
+import { localesEquivalent } from './cv-content-locale';
+import { resolveExperienceSourceLocale } from './cv-experience-source-locale';
+import {
+  isAcceptableExperiencePresentationPurity,
+  recoverExperiencePresentationFromSource,
+} from './cv-content-quality';
+import { validateLocalizedExperienceBullets } from './cv-semantic-fidelity';
 import {
   recoverSemanticDutiesFromUserOrigin,
   type ExperienceSemanticGrounding,
@@ -55,6 +63,80 @@ export type ExperienceLocalizedSurfaceStore = {
   schemaVersion: typeof EXPERIENCE_LOCALIZED_SURFACE_STORE_SCHEMA;
   surfaces: Record<string, PersistedExperienceLocalizedSurface>;
 };
+
+/**
+ * One display-only Experience projection shared by preview and export.
+ * It deliberately keeps the current textarea and immutable grounding apart:
+ * the former is presentation authority when target-valid; the latter is used
+ * only to locate a persisted, independently validated target projection.
+ */
+export type ExperiencePresentationAuthority =
+  | 'current_visible'
+  | 'validated_target_projection'
+  | 'same_entry_semantic_recovery'
+  | 'unresolved';
+
+export type ExperiencePresentationRecord = {
+  owningEntryHash: string;
+  currentVisibleDescriptionHash: string;
+  immutableFactSetHash: string;
+  sourceLocale: string | null;
+  targetLocale: Locale;
+  projectionRequired: boolean;
+  presentationAuthority: ExperiencePresentationAuthority;
+  recoveryAttempted: boolean;
+  recoveryKind: 'same_entry_semantic_recovery' | 'validated_target_projection' | null;
+  rejectionReason: string | null;
+  selectedPresentationHash: string;
+  finalPresentationHash: string;
+  requiredFactCount: number | null;
+  coveredFactCount: number | null;
+  missingFactCount: number | null;
+  factCoveragePassed: boolean | null;
+  detectedLocaleByBullet: Array<string | null>;
+  detectedScriptByBullet: string[];
+  mixedLanguageBulletCount: number;
+  sourceLanguageLeakageDetected: boolean;
+  crossEntryOwnershipPassed: boolean;
+};
+
+export type ExperiencePresentationSnapshot = {
+  cv: CVData;
+  records: ExperiencePresentationRecord[];
+  ok: boolean;
+};
+
+function evaluatePresentationFactCoverage(
+  exp: WorkExperience,
+  description: string,
+  locale: Locale,
+): { required: number | null; covered: number | null; missing: number | null; passed: boolean | null } {
+  const source = String(exp.originalUserDescription || exp.canonicalDescription || '').trim();
+  if (!source || !description.trim()) {
+    return { required: null, covered: null, missing: null, passed: null };
+  }
+  const factSet = buildFactSetFromExperienceDescription(source, {
+    company: exp.company,
+    position: exp.position,
+    startDate: exp.startDate,
+    endDate: exp.endDate,
+    isPresent: exp.isPresent,
+  });
+  const required = factSet.facts.filter((fact) => fact.type === 'experience_bullet').length;
+  const result = validateLocalizedExperienceBullets(description, factSet, {
+    locale,
+    experienceIndex: 0,
+    isPresent: exp.isPresent,
+    stage: 'presentation_snapshot',
+  });
+  if (result.valid) {
+    return { required, covered: required, missing: 0, passed: true };
+  }
+  // Do not manufacture partial coverage from a failed presentation check.
+  // The validator either establishes complete entry-owned coverage or leaves
+  // coverage unevaluated for this diagnostic snapshot.
+  return { required, covered: null, missing: null, passed: false };
+}
 
 export type ExperienceLocalizationRequestRecord = ExperienceLocalizedSurfaceBinding & {
   requestIdentity: string;
@@ -981,6 +1063,115 @@ export function projectExperienceFromLocalizedSurfaces(options: {
     localized.push(surface.localizedText);
   }
   return formatExperienceBullets(localized);
+}
+
+export function resolveExperiencePresentationSnapshot(options: {
+  cv: CVData;
+  targetLocale: Locale;
+}): ExperiencePresentationSnapshot {
+  const records: ExperiencePresentationRecord[] = [];
+  let ok = true;
+  const experience = (options.cv.experience || []).map((exp) => {
+    const current = String(exp.description || '').trim();
+    const grounding = recoverSemanticDutiesFromUserOrigin(exp, options.cv.canonicalSnapshot);
+    const currentLocale = resolveExperienceSourceLocale(exp, options.cv.canonicalSnapshot).locale;
+    const projectionRequired = Boolean(current)
+      && Boolean(currentLocale)
+      && !localesEquivalent(currentLocale, options.targetLocale);
+    const currentPurity = validateAiUnitLocalePurity(current, options.targetLocale, {
+      kind: 'experience_bullet',
+      requireUnits: true,
+    });
+    let description = current;
+    let presentationAuthority: ExperiencePresentationAuthority = 'current_visible';
+    let recoveryAttempted = false;
+    let recoveryKind: ExperiencePresentationRecord['recoveryKind'] = null;
+    let rejectionReason: string | null = null;
+
+    if (!current || projectionRequired || !currentPurity.ok) {
+      recoveryAttempted = true;
+      const projected = projectExperienceFromLocalizedSurfaces({
+        cv: options.cv,
+        exp,
+        grounding,
+        targetLocale: options.targetLocale,
+      });
+      const projectedPurity = validateAiUnitLocalePurity(projected || '', options.targetLocale, {
+        kind: 'experience_bullet',
+        requireUnits: true,
+      });
+      if (projected && isAcceptableExperiencePresentationPurity(projectedPurity, options.targetLocale)) {
+        description = projected;
+        presentationAuthority = 'validated_target_projection';
+        recoveryKind = 'validated_target_projection';
+      } else {
+        const recovered = recoverExperiencePresentationFromSource(
+          { ...exp, description: '' },
+          options.targetLocale,
+          options.cv.personal?.gender,
+        );
+        const recoveredPurity = validateAiUnitLocalePurity(recovered.description || '', options.targetLocale, {
+          kind: 'experience_bullet',
+          requireUnits: true,
+        });
+        if (
+          recovered.description
+          && isAcceptableExperiencePresentationPurity(recoveredPurity, options.targetLocale)
+        ) {
+          description = recovered.description;
+          presentationAuthority = 'same_entry_semantic_recovery';
+          recoveryKind = 'same_entry_semantic_recovery';
+        } else {
+          // No source-bound target projection or same-entry semantic recovery:
+          // never compose historical source, stale generated, and visible lines.
+          description = '';
+          presentationAuthority = 'unresolved';
+          rejectionReason = recovered.rejectionReason || 'same_entry_presentation_unresolved';
+          ok = false;
+        }
+      }
+    }
+
+    const selectedPurity = validateAiUnitLocalePurity(description, options.targetLocale, {
+      kind: 'experience_bullet',
+      requireUnits: true,
+    });
+    const leakage = description
+      ? validateCrossEntryExperienceLeakage({
+        cv: options.cv,
+        targetExperienceId: exp.id,
+        candidate: description,
+      })
+      : { ok: false };
+    const factCoverage = evaluatePresentationFactCoverage(exp, description, options.targetLocale);
+    records.push({
+      owningEntryHash: hashExperienceLocalizedSurfaceValue(exp.id),
+      currentVisibleDescriptionHash: hashExperienceLocalizedSurfaceValue(current),
+      immutableFactSetHash: hashExperienceLocalizedSurfaceValue(
+        grounding.duties.map((duty) => duty.sourceFactId || duty.key).join('|'),
+      ),
+      sourceLocale: currentLocale,
+      targetLocale: options.targetLocale,
+      projectionRequired,
+      presentationAuthority,
+      recoveryAttempted,
+      recoveryKind,
+      rejectionReason,
+      selectedPresentationHash: hashExperienceLocalizedSurfaceValue(description),
+      finalPresentationHash: hashExperienceLocalizedSurfaceValue(description),
+      requiredFactCount: factCoverage.required,
+      coveredFactCount: factCoverage.covered,
+      missingFactCount: factCoverage.missing,
+      factCoveragePassed: factCoverage.passed,
+      detectedLocaleByBullet: selectedPurity.detectedLocaleByUnit,
+      detectedScriptByBullet: selectedPurity.detectedScriptByUnit,
+      mixedLanguageBulletCount: selectedPurity.mixedLanguageUnitCount,
+      sourceLanguageLeakageDetected: selectedPurity.sourceLanguageLeakageDetected,
+      crossEntryOwnershipPassed: leakage.ok,
+    });
+    return { ...exp, description };
+  });
+  return { cv: { ...options.cv, experience }, records, ok };
 }
 
 export function parseExperienceLocalizationProviderJson(

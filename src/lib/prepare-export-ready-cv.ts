@@ -64,11 +64,18 @@ import {
   validateMaterialDutyCoverage,
 } from './cv-material-duty-coverage';
 import { validateSourceFactIdentityCoverage } from './cv-source-fact-identity';
-import { projectExperienceFromLocalizedSurfaces } from './cv-experience-localized-surfaces';
+import {
+  projectExperienceFromLocalizedSurfaces,
+  resolveExperiencePresentationSnapshot,
+  type ExperiencePresentationRecord,
+} from './cv-experience-localized-surfaces';
 import {
   resolveSummaryCurrentTextAuthority,
   SUMMARY_CURRENT_TEXT_AUTHORITY_REVISION,
 } from './cv-summary-current-text-authority';
+import { captureSummaryV2Snapshot } from './cv-summary-v2/snapshot';
+import { buildSummaryV2SelectionManifest } from './cv-summary-v2/manifest';
+import { hashSummaryV2Text } from './cv-summary-v2/facts';
 
 function classifyMaterialBulletScript(bullet: string): 'hi' | 'en' | 'mixed' | 'empty' {
   const t = (bullet || '').trim();
@@ -140,6 +147,12 @@ export type ExportReadyDiagnostics = {
   staleSummaryExcluded?: boolean;
   summaryFactKeysBefore?: string[];
   summaryFactKeysUsed?: string[];
+  /** Privacy-safe ownership boundary for the Summary V2 export fact set. */
+  summarySelectedEntryHashes?: string[];
+  summaryOmittedEntryHashes?: string[];
+  summaryRequiredFactHashes?: Array<{ owningEntryHash: string; factHash: string }>;
+  /** Same entry-owned presentation snapshot contract consumed by preview/PDF/DOCX. */
+  experiencePresentation?: ExperiencePresentationRecord[];
   occupationGenericFallbackUsed?: boolean;
   unsupportedRoleSpecificClaimReason?: string;
   durationCompositionSource?: string;
@@ -450,17 +463,35 @@ function projectExperienceDisplayFromSemanticDuties(
 function buildSemanticSummaryFactSet(
   cv: CVData,
   groundingById: Map<string, ExperienceSemanticGrounding>,
+  options: { locale: Locale; gender: string; referenceDate: Date | string },
 ): { factSet: CvCanonicalFactSet; source: ExportReadyDiagnostics['summaryFactSetSource']; keys: SemanticDutyKey[] } {
+  const snapshot = captureSummaryV2Snapshot({
+    cv,
+    locale: options.locale,
+    gender: options.gender,
+    referenceDateIso: typeof options.referenceDate === 'string'
+      ? options.referenceDate
+      : options.referenceDate.toISOString().slice(0, 10),
+  });
+  const manifest = buildSummaryV2SelectionManifest(snapshot);
+  const selectedEntries = [manifest.current, ...manifest.priors]
+    .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
+  const selectedIds = new Set(selectedEntries.map((entry) => entry.entryId));
   const keys: SemanticDutyKey[] = [];
-  const experience = (cv.experience || []).map((exp) => {
+  const experience = (cv.experience || []).flatMap((exp) => {
+    if (!selectedIds.has(exp.id)) return [];
     const grounding = groundingById.get(exp.id) || { source: 'none' as const, duties: [] };
+    const selected = selectedEntries.find((entry) => entry.entryId === exp.id);
+    const facts = selected?.facts || [];
+    // Summary V2's selected immutable facts, not all historical Experience
+    // entries, are authoritative for the export Summary fact set.
+    const factText = formatExperienceBullets(facts.map((fact) => fact.bulletText));
     keys.push(...semanticDutyKeys(grounding));
-    const shells = internalShellsFromSemanticDuties(grounding.duties);
-    return {
+    return [{
       ...exp,
       // Fact-set only: never write these shells into the returned export description.
-      description: shells || exp.description,
-    };
+      description: factText || exp.description,
+    }];
   });
   const factSet = buildCvCanonicalFactSet({
     ...cv,
@@ -765,6 +796,23 @@ export function prepareExportReadyCv(
     }),
   };
 
+  // Re-run the shared display contract over the completed export projection so
+  // preview and both renderers expose the same per-entry authority metadata.
+  const presentationSnapshot = resolveExperiencePresentationSnapshot({
+    cv,
+    targetLocale: requestedLocale,
+  });
+  if (!presentationSnapshot.ok) {
+    const diagnostics = baseDiagnostics();
+    diagnostics.recoveryInvoked = recoveryInvoked;
+    diagnostics.runtimeMigrationVersion = cv.runtimeMigrationVersion;
+    diagnostics.experienceProvenance = buildProvenanceRows(cv, groundingById);
+    diagnostics.experiencePresentation = presentationSnapshot.records;
+    diagnostics.summarySemanticDutyKeys = [...new Set(allKeys)];
+    return fail('localized_display_projection_incomplete', stage, diagnostics);
+  }
+  cv = presentationSnapshot.cv;
+
   // Hard postcondition: never report projection ok with English/mixed bullets.
   for (const exp of cv.experience || []) {
     const grounding = groundingById.get(exp.id);
@@ -784,12 +832,45 @@ export function prepareExportReadyCv(
   );
 
   stage = 'construct_summary_fact_set';
-  const { factSet, source: factSourceRaw, keys: summaryKeys } = buildSemanticSummaryFactSet(cv, groundingById);
+  const summaryReferenceDate = options?.referenceDate ?? new Date();
+  const summarySnapshot = captureSummaryV2Snapshot({
+    cv,
+    locale: requestedLocale,
+    gender,
+    referenceDateIso: typeof summaryReferenceDate === 'string'
+      ? summaryReferenceDate
+      : summaryReferenceDate.toISOString().slice(0, 10),
+  });
+  const summaryManifest = buildSummaryV2SelectionManifest(summarySnapshot);
+  const selectedSummaryEntries = [summaryManifest.current, ...summaryManifest.priors]
+    .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
+  const selectedSummaryIds = new Set(selectedSummaryEntries.map((entry) => entry.entryId));
+  const summarySelectedEntryHashes = selectedSummaryEntries.map((entry) => hashSummaryV2Text(entry.entryId));
+  const summaryOmittedEntryHashes = (cv.experience || [])
+    .filter((entry) => !selectedSummaryIds.has(entry.id))
+    .map((entry) => hashSummaryV2Text(entry.id));
+  const summaryRequiredFactHashes = [
+    ...summaryManifest.requiredCurrentFacts,
+    ...summaryManifest.requiredPriorFacts,
+  ].map((fact) => ({
+    owningEntryHash: hashSummaryV2Text(fact.entryId),
+    factHash: fact.sourceFactHash,
+  }));
+  const { factSet, source: factSourceRaw, keys: summaryKeys } = buildSemanticSummaryFactSet(
+    cv,
+    groundingById,
+    { locale: requestedLocale, gender, referenceDate: summaryReferenceDate },
+  );
   let factSource: ExportReadyDiagnostics['summaryFactSetSource'] = summaryKeys.length === 0 && (
     occupationGenericFallbackUsed || hasContextSafeEmptyDutyDisplay
   )
     ? 'occupation_generic'
     : factSourceRaw;
+  const assignSummaryOwnershipDiagnostics = (diagnostics: ExportReadyDiagnostics) => {
+    diagnostics.summarySelectedEntryHashes = summarySelectedEntryHashes;
+    diagnostics.summaryOmittedEntryHashes = summaryOmittedEntryHashes;
+    diagnostics.summaryRequiredFactHashes = summaryRequiredFactHashes;
+  };
   if (
     hadDisplay
     && summaryKeys.length === 0
@@ -802,6 +883,7 @@ export function prepareExportReadyCv(
     diagnostics.runtimeMigrationVersion = cv.runtimeMigrationVersion;
     diagnostics.experienceProvenance = buildProvenanceRows(cv, groundingById);
     diagnostics.summaryFactKeysBefore = [...new Set(summaryFactKeysBefore)];
+    assignSummaryOwnershipDiagnostics(diagnostics);
     return fail('summary_fact_set_missing_recovered_duties', stage, diagnostics);
   }
 
@@ -1067,6 +1149,7 @@ export function prepareExportReadyCv(
       diagnostics.staleSummaryExcluded = staleSummaryExcluded;
       diagnostics.summaryFactKeysBefore = [...new Set(summaryFactKeysBefore)];
       diagnostics.summaryFactKeysUsed = summaryKeys;
+      assignSummaryOwnershipDiagnostics(diagnostics);
       return fail('summary_validation_failed_after_recovery', stage, diagnostics);
     }
   } else {
@@ -1160,6 +1243,7 @@ export function prepareExportReadyCv(
       diagnostics.experienceProvenance = buildProvenanceRows(cv, groundingById);
       diagnostics.summaryFactSetSource = factSource;
       diagnostics.summarySemanticDutyKeys = summaryKeys;
+      assignSummaryOwnershipDiagnostics(diagnostics);
       diagnostics.summaryInitialValid = initialSummaryValidation.valid;
       diagnostics.summaryInitialReason = initialSummaryValidation.reason;
       diagnostics.summaryRecoverySource = summaryRecoverySource;
@@ -1178,6 +1262,7 @@ export function prepareExportReadyCv(
       diagnostics.experienceProvenance = buildProvenanceRows(cv, groundingById);
       diagnostics.summaryFactSetSource = factSource;
       diagnostics.summarySemanticDutyKeys = summaryKeys;
+      assignSummaryOwnershipDiagnostics(diagnostics);
       diagnostics.summaryInitialValid = initialSummaryValidation.valid;
       diagnostics.summaryInitialReason = initialSummaryValidation.reason;
       diagnostics.summaryRecoverySource = summaryRecoverySource;
@@ -1301,6 +1386,10 @@ export function prepareExportReadyCv(
     staleSummaryExcluded,
     summaryFactKeysBefore: [...new Set(summaryFactKeysBefore)],
     summaryFactKeysUsed: summaryKeys,
+    summarySelectedEntryHashes,
+    summaryOmittedEntryHashes,
+    summaryRequiredFactHashes,
+    experiencePresentation: presentationSnapshot.records,
     occupationGenericFallbackUsed,
     unsupportedRoleSpecificClaimReason,
     durationCompositionSource,

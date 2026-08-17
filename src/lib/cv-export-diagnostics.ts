@@ -17,6 +17,7 @@ import {
   durationDisplayBucket,
 } from './cv-experience-duration';
 import type { ExperienceLocalizationDiagnostics } from './cv-experience-localized-surfaces';
+import type { ExperiencePresentationRecord } from './cv-experience-localized-surfaces';
 import {
   CV_EXPORT_RENDER_DUTY_PROJECTION_REVISION,
   getExperienceExportRenderDescription,
@@ -47,6 +48,7 @@ export type CvExportDiagnosticStageName =
 
 export type CvExportStageResult = 'entered' | 'ok' | 'fail' | 'skipped';
 
+/** Legacy type retained for callers; runtime values may include newer script families. */
 export type BulletScriptClass = 'hi' | 'en' | 'mixed' | 'empty';
 
 export type CvExportToastMappingKey =
@@ -86,7 +88,27 @@ export type CvExportExperienceDiag = {
   visibleLocalizedBulletCount: number;
   canonicalShellCount: number;
   finalProjectedBulletCount: number;
-  finalBulletScripts: BulletScriptClass[];
+  finalBulletScripts: string[];
+  /** Target-locale projection evidence, stored as metadata/hashes only. */
+  owningEntryHash: string;
+  currentVisibleDescriptionHash: string;
+  sourceLocale: string | null;
+  projectionRequired: boolean;
+  presentationAuthority: 'current_visible' | 'validated_target_projection' | 'same_entry_semantic_recovery' | 'unresolved';
+  recoveryAttempted: boolean;
+  recoveryKind: 'same_entry_semantic_recovery' | 'validated_target_projection' | null;
+  presentationRejectionReason: string | null;
+  presentationTargetLocale: string;
+  presentationHash: string;
+  finalPresentationHash: string;
+  presentationRequiredFactCount: number | null;
+  presentationCoveredFactCount: number | null;
+  presentationMissingFactCount: number | null;
+  presentationFactCoveragePassed: boolean | null;
+  immutableFactAuthorityHash: string;
+  finalBulletDetectedLocales: Array<string | null>;
+  sourceLanguageLeakageDetected: boolean;
+  crossEntryOwnershipPassed: boolean;
   renderDutyProjectionUsed: boolean;
   renderDutyProjectionRevision?: string;
 };
@@ -151,7 +173,7 @@ export type CvExportDiagnosticTrace = {
   /** Non-PII success metadata when available. */
   pdfTextLayerType?: 'direct_unicode' | 'shaped_png_hybrid' | 'shaped_png_only' | 'unknown';
   extractedTextLength?: number;
-  extractedScriptClasses?: BulletScriptClass[];
+  extractedScriptClasses?: string[];
   pdfHasToUnicode?: boolean;
   durationMonths?: number;
   durationDisplayBucket?: string;
@@ -233,14 +255,30 @@ export function fingerprintText(value: string | undefined | null): string {
   return `fnv1a_${(h >>> 0).toString(16)}_l${len}_b${first}_e${last}`;
 }
 
-export function classifyBulletScript(bullet: string): BulletScriptClass {
+export function classifyBulletScript(
+  bullet: string,
+  targetLocale?: Locale | number,
+): string {
+  // This function is also passed directly to Array#map by older callers;
+  // ignore its numeric index argument rather than treating it as a locale.
+  const localeAware = typeof targetLocale === 'string';
   const t = (bullet || '').trim();
   if (!t) return 'empty';
   const dev = (t.match(/[\u0900-\u097F]/g) || []).length;
-  const lat = (t.match(/[A-Za-z]/g) || []).length;
-  if (dev > 0 && lat >= 4) return 'mixed';
-  if (dev > 0) return 'hi';
-  if (lat > 0) return 'en';
+  const arabic = (t.match(/[\u0600-\u06FF]/g) || []).length;
+  const cyrillic = (t.match(/[\u0400-\u04FF]/g) || []).length;
+  const cjk = (t.match(/[\u3040-\u30FF\u3400-\u9FFF]/g) || []).length;
+  const latin = (t.match(/[A-Za-zÀ-ÖØ-öø-ÿ]/g) || []).length;
+  const families = [dev, arabic, cyrillic, cjk, latin].filter((count) => count > 0);
+  if (families.length > 1) return 'mixed';
+  // Keep the legacy standalone classifier values for older callers, while
+  // export diagnostics always pass the requested locale and therefore report
+  // an actual script family rather than calling all Latin text English.
+  if (dev > 0) return localeAware ? 'devanagari' : 'hi';
+  if (arabic > 0) return 'arabic';
+  if (cyrillic > 0) return 'cyrillic';
+  if (cjk > 0) return 'cjk';
+  if (latin > 0) return localeAware ? 'latin' : 'en';
   return 'empty';
 }
 
@@ -313,6 +351,7 @@ function experienceDiag(
   groundingSource: string,
   recoveredKeys: string[],
   locale: Locale,
+  presentation?: ExperiencePresentationRecord,
 ): CvExportExperienceDiag {
   const visible = (exp.description || '').trim();
   const generated = (exp.generatedDescription || '').trim();
@@ -321,6 +360,13 @@ function experienceDiag(
   const displayForCount = visible || generated;
   const renderDescription = getExperienceExportRenderDescription(exp, locale);
   const finalBullets = splitExperienceBullets(renderDescription);
+  // Successful prepared exports carry the authoritative per-bullet locale
+  // evidence in `presentation`; failure snapshots intentionally expose null
+  // evidence rather than re-running a validator after the terminal phase.
+  const targetPurity = {
+    detectedLocaleByUnit: finalBullets.map(() => null as string | null),
+    sourceLanguageLeakageDetected: false,
+  };
   const renderDutyProjectionUsed = renderDescription !== String(exp.description || '');
   return {
     index,
@@ -348,7 +394,30 @@ function experienceDiag(
     visibleLocalizedBulletCount: shellCount(displayForCount),
     canonicalShellCount: shellCount(original || canonical),
     finalProjectedBulletCount: finalBullets.length,
-    finalBulletScripts: finalBullets.map(classifyBulletScript),
+    finalBulletScripts: finalBullets.map((bullet) => classifyBulletScript(bullet, locale)),
+    owningEntryHash: presentation?.owningEntryHash || fingerprintText(exp.id),
+    currentVisibleDescriptionHash: presentation?.currentVisibleDescriptionHash
+      || fingerprintText(visible),
+    sourceLocale: presentation?.sourceLocale || null,
+    projectionRequired: presentation?.projectionRequired || false,
+    presentationAuthority: presentation?.presentationAuthority || 'current_visible',
+    recoveryAttempted: presentation?.recoveryAttempted || false,
+    recoveryKind: presentation?.recoveryKind || null,
+    presentationRejectionReason: presentation?.rejectionReason || null,
+    presentationTargetLocale: presentation?.targetLocale || locale,
+    presentationHash: presentation?.selectedPresentationHash || fingerprintText(renderDescription),
+    finalPresentationHash: presentation?.finalPresentationHash || fingerprintText(renderDescription),
+    presentationRequiredFactCount: presentation?.requiredFactCount ?? null,
+    presentationCoveredFactCount: presentation?.coveredFactCount ?? null,
+    presentationMissingFactCount: presentation?.missingFactCount ?? null,
+    presentationFactCoveragePassed: presentation?.factCoveragePassed ?? null,
+    immutableFactAuthorityHash: presentation?.immutableFactSetHash
+      || fingerprintText(original || canonical),
+    finalBulletDetectedLocales: presentation?.detectedLocaleByBullet
+      || targetPurity.detectedLocaleByUnit,
+    sourceLanguageLeakageDetected: presentation?.sourceLanguageLeakageDetected
+      ?? targetPurity.sourceLanguageLeakageDetected,
+    crossEntryOwnershipPassed: presentation?.crossEntryOwnershipPassed ?? true,
     renderDutyProjectionUsed,
     renderDutyProjectionRevision: renderDutyProjectionUsed
       ? CV_EXPORT_RENDER_DUTY_PROJECTION_REVISION
@@ -541,6 +610,7 @@ export function buildAndStoreCvExportDiagnostic(input: BuildCvExportTraceInput):
       row?.source || (exp.groundingRecoverySource || 'unknown'),
       keys,
       input.locale,
+      diag?.experiencePresentation?.[index],
     );
   });
 

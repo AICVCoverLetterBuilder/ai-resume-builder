@@ -4,7 +4,14 @@
  */
 import type { CVData, CvSummaryOrigin, WorkExperience } from './types';
 import type { Locale } from './i18n/translations';
-import { formatExperienceBullets, splitExperienceBullets, buildCvCanonicalFactSet, classifyDutyCategory } from './cv-canonical-facts';
+import {
+  formatExperienceBullets,
+  splitExperienceBullets,
+  buildCvCanonicalFactSet,
+  buildFactSetFromExperienceDescription,
+  bulletsForExperience,
+  classifyDutyCategory,
+} from './cv-canonical-facts';
 import {
   buildExperienceDurationSnapshot,
   formatApproximateDurationPhrase,
@@ -27,6 +34,7 @@ import {
   isDurationOnlyFragmentSentence,
   UNSUPPORTED_SUMMARY_FLUFF,
   validateLocalizedSummary,
+  validateLocalizedExperienceBullets,
   validateSummaryCompleteness,
 } from './cv-semantic-fidelity';
 import {
@@ -112,7 +120,11 @@ function splitHindiSummaryUnitsLocal(text: string): string[] {
 import { deduplicateSkillsForExport } from './cv-skills-projection';
 import { localizeCvLanguageLevel } from './cv-language-levels';
 import { getLocalizedCvLanguageName } from './cv-language-options';
-import { deterministicLocalizedSummaryFromCanonical, localizeCanonicalBulletLine } from './cv-localized-fallback';
+import {
+  deterministicLocalizedBulletsFromCanonical,
+  deterministicLocalizedSummaryFromCanonical,
+  localizeCanonicalBulletLine,
+} from './cv-localized-fallback';
 import { normalizeHindiGeneratedWhitespace } from './cv-hindi-normalize';
 import { resolveExperienceGroundingDescription } from './cv-experience-provenance';
 import { scrubOrphanDurationFragments } from './cv-experience-job-context';
@@ -130,6 +142,9 @@ import {
 } from './cv-serbian-latin-script';
 import { normalizeSerbianDurationGrammar } from './cv-serbian-grammar';
 import { sourceUsableInLocale } from './cv-source-fact-identity';
+import { validateAiUnitLocalePurity } from './cv-ai-unit-locale-purity';
+import { resolveExperienceSourceLocale } from './cv-experience-source-locale';
+import { localesEquivalent } from './cv-content-locale';
 
 /** Structured context used to build a natural, non-fragment duration sentence. */
 export type DurationIntegrationContext = {
@@ -441,6 +456,47 @@ export function normalizeExperienceBulletsForQuality(
   locale: Locale,
   gender?: string,
 ): { description: string; changed: boolean } {
+  const currentVisible = String(exp.description || '').trim();
+  const isPlaceholderVisible = /^\s*(?:[•\-*]\s*)?x\s*$/iu.test(currentVisible);
+  // The editor's current, target-locale textarea is presentation authority.
+  // Grounding snapshots may have a different locale and bullet cardinality; using
+  // them as an index-aligned display source can splice stale clauses into a
+  // perfectly valid visible entry.  Keep semantic authority separate from this
+  // display-only quality pass.
+  if (currentVisible && !isPlaceholderVisible) {
+    const visibleLocale = resolveExperienceSourceLocale(exp);
+    const currentVisibleBelongsToTarget = !visibleLocale.locale
+      || localesEquivalent(visibleLocale.locale, locale);
+    const visiblePurity = validateAiUnitLocalePurity(currentVisible, locale, {
+      kind: 'experience_bullet',
+      requireUnits: true,
+    });
+    if (currentVisibleBelongsToTarget && visiblePurity.ok) {
+      let description = currentVisible;
+      if ((locale === 'sr' || locale === 'hr') && exp.isPresent) {
+        description = applySerbianCurrentRoleTense(description);
+      }
+      if (locale === 'hi') {
+        description = normalizeHindiCustomerServiceWording(
+          normalizeHindiGeneratedWhitespace(description, 'hi'),
+        );
+        if (exp.isPresent) description = applyHindiCurrentRoleTense(description);
+      }
+      return { description, changed: description !== currentVisible };
+    }
+    // The current surface is not safe presentation authority. Rebuild from
+    // this entry's immutable/canonical facts through the same deterministic
+    // locale-bound path used by legacy export recovery. Never index-splice the
+    // rejected visible lines or borrow another entry's generated surface.
+    const recovered = recoverExperiencePresentationFromSource(
+      { ...exp, description: '' },
+      locale,
+      gender,
+    );
+    return recovered.description
+      ? { description: recovered.description, changed: recovered.description !== currentVisible }
+      : { description: '', changed: true };
+  }
   const source = resolveExperienceGroundingDescription(exp);
   const sourceBullets = splitExperienceBullets(source);
   const locBullets = splitExperienceBullets(exp.description || '');
@@ -543,6 +599,87 @@ export function normalizeExperienceBulletsForQuality(
   }
   if (!next.length) return { description: exp.description || '', changed: false };
   return { description: formatExperienceBullets(next), changed };
+}
+
+export type ExperiencePresentationRecovery = {
+  description: string;
+  recoveryKind: 'same_entry_semantic_recovery' | null;
+  rejectionReason: string | null;
+};
+
+/**
+ * Locale detectors can return a neighbouring language for a fully target-script
+ * projection (for example Hindi templates classified as Nepali).  Treat that
+ * as compatible only when every unit is in the target script and no mixed/source
+ * language content is present; a foreign script or mixed unit still fails closed.
+ */
+export function isAcceptableExperiencePresentationPurity(
+  purity: ReturnType<typeof validateAiUnitLocalePurity>,
+  locale: Locale,
+): boolean {
+  if (purity.ok) return true;
+  if (locale === 'hi') {
+    return purity.units.length > 0
+      && purity.units.every((unit) => unit.detectedScript === 'devanagari')
+      && purity.detectedLocaleByUnit.every((detected) => detected === 'hi' || detected === 'ne')
+      && purity.mixedLanguageUnitCount === 0;
+  }
+  return false;
+}
+
+/**
+ * Reconstruct one entry's target-locale presentation from its own immutable
+ * source facts. This is deliberately separate from visible-text authority:
+ * a rejected/placeholder/foreign surface may trigger it, but its clauses are
+ * never reused as source material.
+ */
+export function recoverExperiencePresentationFromSource(
+  exp: WorkExperience,
+  locale: Locale,
+  gender?: string,
+): ExperiencePresentationRecovery {
+  const source = resolveExperienceGroundingDescription(exp).trim();
+  if (!source) {
+    return { description: '', recoveryKind: null, rejectionReason: 'immutable_source_unavailable' };
+  }
+  const factSet = buildFactSetFromExperienceDescription(source, {
+    company: exp.company,
+    position: exp.position,
+    startDate: exp.startDate,
+    endDate: exp.endDate,
+    isPresent: exp.isPresent,
+  });
+  const candidate = deterministicLocalizedBulletsFromCanonical(
+    bulletsForExperience(factSet, 0),
+    locale,
+    gender,
+    { isPresent: exp.isPresent },
+  ).trim();
+  if (!candidate || candidate === '• x') {
+    return { description: '', recoveryKind: null, rejectionReason: 'same_entry_projection_empty' };
+  }
+  const purity = validateAiUnitLocalePurity(candidate, locale, {
+    kind: 'experience_bullet',
+    requireUnits: true,
+  });
+  if (!isAcceptableExperiencePresentationPurity(purity, locale)) {
+    return { description: '', recoveryKind: null, rejectionReason: 'same_entry_projection_locale_invalid' };
+  }
+  const fidelity = validateLocalizedExperienceBullets(candidate, factSet, {
+    locale,
+    gender,
+    experienceIndex: 0,
+    stage: 'same_entry_semantic_recovery',
+    isPresent: exp.isPresent,
+  });
+  if (!fidelity.valid) {
+    return { description: '', recoveryKind: null, rejectionReason: 'same_entry_projection_fact_invalid' };
+  }
+  return {
+    description: candidate,
+    recoveryKind: 'same_entry_semantic_recovery',
+    rejectionReason: null,
+  };
 }
 
 const HINDI_MONTHS: Record<string, string> = {
