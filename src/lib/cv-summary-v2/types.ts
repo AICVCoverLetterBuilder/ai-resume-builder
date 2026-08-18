@@ -84,6 +84,17 @@ export type SummaryV2FinalUnitOwnershipEvidence = {
   owningEntryId: string | null;
   owningEntryHash: string | null;
   priorOrdinal: number | null;
+  /** Every expressed role title in a role unit must resolve to that unit's owner. */
+  roleTitleOwnerEntryHash: string | null;
+  /** Every expressed employer in a role unit must resolve to that unit's owner. */
+  employerOwnerEntryHash: string | null;
+  /** Explicit start-date/current-status evidence, when present, is entry-owned. */
+  dateStatusOwnerEntryHash: string | null;
+  /** Source entries whose duty authority is represented by this role unit. */
+  dutyFactOwnerEntryHashes: string[];
+  /** Relational ownership is stricter than aggregate fact coverage. */
+  relationalOwnershipPassed: boolean;
+  relationalOwnershipFailureReasons: string[];
 };
 
 export type SummaryV2FactUnitCoverageEvidence = {
@@ -182,6 +193,9 @@ export type SummaryV2SelectionManifest = {
   current: SummaryV2EntryOwned | null;
   /** Bounded prior entries (ownership preserved; no cross-entry merge). */
   priors: SummaryV2EntryOwned[];
+  /** Immutable snapshot entries, including unselected roles. They remain
+   * authority for rejecting cross-entry role/employer/date contamination. */
+  allEntries?: SummaryV2EntryOwned[];
   requiredCurrentFacts: SummaryV2EntryFact[];
   requiredPriorFacts: SummaryV2EntryFact[];
   maxDutiesPerEntry: number;
@@ -258,6 +272,8 @@ export type SummaryV2ValidationResult = {
   materialAuthority: SummaryV2MaterialAuthorityResult;
   unitOwnershipValidationPassed: boolean;
   unitOwnershipFailureReason: string | null;
+  relationalOwnershipValidationPassed: boolean;
+  relationalOwnershipFailureReasons: string[];
   finalUnitOwnership: SummaryV2FinalUnitOwnershipEvidence[];
   factUnitCoverageEvidence: SummaryV2FactUnitCoverageEvidence[];
   factUnitOwnershipValidationPassed: boolean;

@@ -34,14 +34,32 @@ function containsExactSurface(unit: string, surface: string): boolean {
 }
 
 export function splitSummaryV2FinalUnits(text: string): string[] {
-  return (text || '')
+  const split = (text || '')
     .split(/(?<=[.!?。؟।])\s+/u)
     .map((unit) => unit.trim())
     .filter(Boolean);
+  // Keep the historical sentence boundaries unchanged except for a date
+  // continuation that the base splitter separates at `2023. godine`. It is a
+  // modifier of the same Serbian/Croatian role unit, never a second Summary
+  // unit. Other locale sentence segmentation retains its established hashes.
+  const merged: string[] = [];
+  for (const unit of split) {
+    const previous = merged[merged.length - 1] || '';
+    if (/\b20\d{2}\.$/u.test(previous) && /^(?:godine|godina)\b/iu.test(unit)) {
+      merged[merged.length - 1] = `${previous} ${unit}`;
+    } else {
+      merged.push(unit);
+    }
+  }
+  return merged;
 }
 
 function selectedEntries(manifest: SummaryV2SelectionManifest): SummaryV2EntryOwned[] {
   return [...(manifest.current ? [manifest.current] : []), ...manifest.priors];
+}
+
+function authorityEntries(manifest: SummaryV2SelectionManifest): SummaryV2EntryOwned[] {
+  return manifest.allEntries?.length ? manifest.allEntries : selectedEntries(manifest);
 }
 
 function currentMarker(unit: string): boolean {
@@ -78,7 +96,188 @@ function evidenceFor(options: {
     owningEntryId: options.entry?.entryId || null,
     owningEntryHash: options.entry ? fingerprintText(options.entry.entryId) : null,
     priorOrdinal: priorIndex >= 0 ? priorIndex + 1 : null,
+    roleTitleOwnerEntryHash: options.entry ? fingerprintText(options.entry.entryId) : null,
+    employerOwnerEntryHash: options.entry ? fingerprintText(options.entry.entryId) : null,
+    dateStatusOwnerEntryHash: null,
+    dutyFactOwnerEntryHashes: options.entry ? [fingerprintText(options.entry.entryId)] : [],
+    relationalOwnershipPassed: true,
+    relationalOwnershipFailureReasons: [],
   };
+}
+
+const MONTH_SURFACES: readonly string[][] = [
+  ['january', 'januar', 'januara', 'januar', 'janvier', 'gennaio', 'enero', 'janeiro', 'январ', 'يناير', 'जनवरी', '1'],
+  ['february', 'februar', 'februara', 'février', 'fevrier', 'febbraio', 'febrero', 'fevereiro', 'феврал', 'فبراير', 'फरवरी', '2'],
+  ['march', 'märz', 'maerz', 'marta', 'ožujak', 'ozujak', 'mars', 'marzo', 'março', 'marco', 'март', 'مارس', 'मार्च', '3'],
+  ['april', 'aprila', 'travanj', 'avril', 'aprile', 'abril', 'апрел', 'أبريل', 'अप्रैल', '4'],
+  ['may', 'mai', 'maja', 'svibanj', 'maggio', 'mayo', 'maio', 'май', 'مايو', 'मई', '5'],
+  ['june', 'juni', 'juna', 'lipanj', 'juin', 'giugno', 'junio', 'junho', 'июн', 'يونيو', 'जून', '6'],
+  ['july', 'juli', 'jula', 'srpanj', 'juillet', 'luglio', 'julio', 'julho', 'июл', 'يوليو', 'जुलाई', '7'],
+  ['august', 'avgust', 'kolovoz', 'août', 'aout', 'agosto', 'август', 'أغسطس', 'अगस्त', '8'],
+  ['september', 'septembar', 'rujan', 'septembre', 'settembre', 'septiembre', 'setembro', 'сентябр', 'سبتمبر', 'सितंबर', '9'],
+  ['october', 'oktober', 'listopad', 'octobre', 'ottobre', 'octubre', 'outubro', 'октябр', 'أكتوبر', 'अक्टूबर', '10'],
+  ['november', 'novembar', 'studeni', 'novembre', 'noviembre', 'novembro', 'ноябр', 'نوفمبر', 'नवंबर', '11'],
+  ['december', 'decembar', 'prosinac', 'décembre', 'decembre', 'dicembre', 'diciembre', 'dezembro', 'декабр', 'ديسمبر', 'दिसंबर', '12'],
+];
+
+function explicitStartDatePresent(unit: string, entry: SummaryV2EntryOwned): boolean {
+  const match = /^(\d{4})-(\d{2})(?:-\d{2})?$/u.exec((entry.startDate || '').trim());
+  if (!match) return false;
+  const [, year, monthRaw] = match;
+  const month = Number(monthRaw);
+  const normalized = unit.normalize('NFKC').toLocaleLowerCase();
+  if (new RegExp(`\\b${year}-${monthRaw}\\b|\\b${monthRaw}[./-]${year}\\b`, 'u').test(normalized)) {
+    return true;
+  }
+  const monthSurfaces = MONTH_SURFACES[month - 1] || [];
+  return monthSurfaces.some((surface) => {
+    if (!surface || surface.length < 2) return false;
+    return normalized.includes(surface.toLocaleLowerCase())
+      && normalized.includes(year);
+  });
+}
+
+function normalizedSurface(value: string): string {
+  return (value || '').normalize('NFKC').toLocaleLowerCase().trim();
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+}
+
+function standaloneSurfaceOccurrenceCount(text: string, surface: string): number {
+  const haystack = normalizedSurface(text);
+  const needle = normalizedSurface(surface);
+  if (!needle) return 0;
+  // Employer ownership needs a lexical entity surface, not a substring of an
+  // unrelated title (for example "RadWerk" inside "Fahrradwerkstatt").
+  // Keep punctuation and multi-word employers intact while requiring that the
+  // surrounding characters are not letters or digits.
+  const matcher = new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRegex(needle)}(?=$|[^\\p{L}\\p{N}])`, 'giu');
+  return [...haystack.matchAll(matcher)].length;
+}
+
+function foreignEmployerAttached(unit: string, ownerEmployer: string, foreignEmployer: string): boolean {
+  if (standaloneSurfaceOccurrenceCount(unit, foreignEmployer) === 0) return false;
+  const owner = normalizedSurface(ownerEmployer);
+  const foreign = normalizedSurface(foreignEmployer);
+  // A distinct historic employer can be a lexical prefix of the selected
+  // employer (for example “Rewitu” / “Rewitu Current Test”). One embedded
+  // occurrence is then owned by the selected employer; a second is a splice.
+  return !owner.includes(foreign)
+    || standaloneSurfaceOccurrenceCount(unit, foreignEmployer)
+      > standaloneSurfaceOccurrenceCount(ownerEmployer, foreignEmployer);
+}
+
+function sameFactSurface(a: string, b: string): boolean {
+  return normalizedSurface(a).replace(/[.!?。؟।]+$/u, '')
+    === normalizedSurface(b).replace(/[.!?。؟।]+$/u, '');
+}
+
+function foreignFactSurfaceAttached(
+  unit: string,
+  foreignFact: SummaryV2EntryOwned['facts'][number],
+  ownerFacts: SummaryV2EntryOwned['facts'],
+): boolean {
+  // Identical responsibilities at two employers are semantically equivalent,
+  // not a cross-entry claim. A unique foreign fact must have actual surface
+  // evidence; the broad aggregate coverage matcher is deliberately too loose
+  // for this relational assertion.
+  if (ownerFacts.some((ownFact) => (
+    ownFact.sourceFactHash === foreignFact.sourceFactHash
+    || sameFactSurface(ownFact.bulletText, foreignFact.bulletText)
+  ))) return false;
+  const raw = normalizedSurface(foreignFact.presentationText || foreignFact.bulletText)
+    .replace(/[.!?。؟।]+$/u, '');
+  if (raw.length >= 8 && normalizedSurface(unit).includes(raw)) return true;
+  // Do not use the generic fact-coverage matcher here: its intentional
+  // predicate/paraphrase tolerance can confuse shared verbs across different
+  // entries. Relational rejection requires an explicit immutable fact clause
+  // from the other entry (or its validated target presentation) in this unit.
+  return false;
+}
+
+/**
+ * A role unit is valid only when every expressed employer/date/duty relation
+ * has the same entry owner as its role slot.  Aggregate fact coverage is not
+ * sufficient: two valid entries may otherwise be grammatically spliced.
+ */
+function relationalEvidenceFor(options: {
+  evidence: SummaryV2FinalUnitOwnershipEvidence;
+  unit: string;
+  entry: SummaryV2EntryOwned | null;
+  manifest: SummaryV2SelectionManifest;
+}): SummaryV2FinalUnitOwnershipEvidence {
+  const { evidence, unit, entry, manifest } = options;
+  if (!entry) return evidence;
+  const ownerHash = fingerprintText(entry.entryId);
+  const entries = authorityEntries(manifest);
+  const failures: string[] = [];
+  const ownDatePresent = explicitStartDatePresent(unit, entry);
+
+  for (const other of entries) {
+    if (other.entryId === entry.entryId) continue;
+    if (other.employer && foreignEmployerAttached(unit, entry.employer, other.employer)) {
+      failures.push('foreign_employer_attached_to_role_unit');
+    }
+    // A different role title is evidence of an entry splice. Identical titles
+    // remain intentionally ambiguous and are disambiguated by employer/date.
+    if (
+      other.role
+      && other.role.normalize('NFKC').toLocaleLowerCase()
+        !== entry.role.normalize('NFKC').toLocaleLowerCase()
+      && standaloneSurfaceOccurrenceCount(unit, other.role) > 0
+    ) {
+      failures.push('foreign_role_title_attached_to_role_unit');
+    }
+    // A role unit may contain its own date only.  A second, foreign date is
+    // still a splice even if the owner date was also retained.
+    if (other.startDate !== entry.startDate && explicitStartDatePresent(unit, other)) {
+      failures.push('foreign_start_date_attached_to_role_unit');
+    }
+    for (const foreignFact of other.facts) {
+      if (foreignFactSurfaceAttached(
+        unit,
+        foreignFact,
+        entry.facts,
+      )) {
+        failures.push('foreign_duty_fact_attached_to_role_unit');
+      }
+    }
+  }
+
+  return {
+    ...evidence,
+    roleTitleOwnerEntryHash: ownerHash,
+    employerOwnerEntryHash: ownerHash,
+    dateStatusOwnerEntryHash: ownDatePresent ? ownerHash : null,
+    dutyFactOwnerEntryHashes: [ownerHash],
+    relationalOwnershipPassed: failures.length === 0,
+    relationalOwnershipFailureReasons: [...new Set(failures)],
+  };
+}
+
+function withRelationalOwnership(
+  result: SummaryV2UnitOwnershipResult,
+  manifest: SummaryV2SelectionManifest,
+): SummaryV2UnitOwnershipResult {
+  const evidence = result.evidence.map((item) => relationalEvidenceFor({
+    evidence: item,
+    unit: result.units[item.unitIndex] || '',
+    entry: item.owningEntryId
+      ? selectedEntries(manifest).find((entry) => entry.entryId === item.owningEntryId) || null
+      : null,
+    manifest,
+  }));
+  const failed = evidence.find((item) => !item.relationalOwnershipPassed);
+  return failed
+    ? {
+      passed: false,
+      reason: failed.relationalOwnershipFailureReasons[0] || 'relational_ownership_failed',
+      units: result.units,
+      evidence,
+    }
+    : { ...result, evidence };
 }
 
 function unitCandidateScore(
@@ -141,7 +340,7 @@ export function analyzeSummaryV2FinalUnitOwnership(
       }
       evidence.push(evidenceFor({ unit, unitIndex, entry, manifest }));
     }
-    return { passed: true, reason: null, units, evidence };
+    return withRelationalOwnership({ passed: true, reason: null, units, evidence }, manifest);
   }
 
   const assignedEntryIds = new Set<string>();
@@ -183,5 +382,5 @@ export function analyzeSummaryV2FinalUnitOwnership(
     return { passed: false, reason: 'selected_entry_final_unit_missing', units, evidence };
   }
   evidence.sort((a, b) => a.unitIndex - b.unitIndex);
-  return { passed: true, reason: null, units, evidence };
+  return withRelationalOwnership({ passed: true, reason: null, units, evidence }, manifest);
 }

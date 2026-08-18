@@ -827,8 +827,16 @@ export function projectLocalizedSummaryV2Manifest(options: {
   const current = options.manifest.current ? projectEntry(options.manifest.current) : null;
   const priors = options.manifest.priors.map(projectEntry);
   if ((options.manifest.current && !current) || priors.some((entry) => !entry)) return null;
-  const all = [...(current ? [current] : []), ...(priors as SummaryV2EntryOwned[])];
-  const byId = new Map(all.map((entry) => [entry.entryId, entry]));
+  const selected = [...(current ? [current] : []), ...(priors as SummaryV2EntryOwned[])];
+  const byId = new Map(selected.map((entry) => [entry.entryId, entry]));
+  // The full immutable snapshot remains relational authority, but selected
+  // entries must carry the exact target-native role/fact surfaces that this
+  // localized manifest just validated. Retaining their source-language copies
+  // here makes a valid cross-locale final Summary appear to contain a foreign
+  // role title during ownership validation.
+  const allEntries = options.manifest.allEntries?.map((entry) => (
+    byId.get(entry.entryId) || entry
+  ));
   const requiredCurrentFacts = options.manifest.requiredCurrentFacts.map((fact) => (
     byId.get(fact.entryId)?.facts.find((candidate) => candidate.factId === fact.factId)
   )).filter(Boolean) as SummaryV2SelectionManifest['requiredCurrentFacts'];
@@ -839,7 +847,14 @@ export function projectLocalizedSummaryV2Manifest(options: {
     requiredCurrentFacts.length !== options.manifest.requiredCurrentFacts.length
     || requiredPriorFacts.length !== options.manifest.requiredPriorFacts.length
   ) return null;
-  return { ...options.manifest, current, priors: priors as SummaryV2EntryOwned[], requiredCurrentFacts, requiredPriorFacts };
+  return {
+    ...options.manifest,
+    current,
+    priors: priors as SummaryV2EntryOwned[],
+    ...(allEntries ? { allEntries } : {}),
+    requiredCurrentFacts,
+    requiredPriorFacts,
+  };
 }
 
 export type SummaryV2ProviderExperienceEntry = {

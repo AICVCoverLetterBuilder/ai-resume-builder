@@ -163,6 +163,26 @@ export type CvExportDiagnosticTrace = {
   summaryVisibleTextValidationReason?: string;
   summaryForeignProfessionalPrefixRejected?: boolean;
   summaryStaleReboundLocaleGuardRevision?: string;
+  /** V2 entry-owned Summary authority for generated/repaired/fallback output. */
+  summarySelectedEntryHashes?: string[];
+  summaryOmittedEntryHashes?: string[];
+  summaryRequiredFactHashes?: Array<{ owningEntryHash: string; factHash: string }>;
+  summaryValidationAuthoritySource?: string;
+  summarySavedProvenance?: string;
+  summarySavedSummaryReboundRevalidated?: boolean;
+  summaryRelationalOwnershipPassed?: boolean | null;
+  summaryRelationalOwnershipFailureReasons?: string[];
+  summaryFinalUnitOwnership?: Array<{
+    unitHash: string;
+    roleSlot: string;
+    owningEntryHash: string | null;
+    roleTitleOwnerEntryHash: string | null;
+    employerOwnerEntryHash: string | null;
+    dateStatusOwnerEntryHash: string | null;
+    dutyFactOwnerEntryHashes: string[];
+    relationalOwnershipPassed: boolean;
+    relationalOwnershipFailureReasons: string[];
+  }>;
   stages: CvExportStageDiag[];
   initialValidationReason?: string;
   deterministicRecoveryReason?: string;
@@ -827,6 +847,17 @@ export function buildAndStoreCvExportDiagnostic(input: BuildCvExportTraceInput):
       diag?.summaryForeignProfessionalPrefixRejected,
     summaryStaleReboundLocaleGuardRevision:
       diag?.summaryStaleReboundLocaleGuardRevision,
+    summarySelectedEntryHashes: diag?.summarySelectedEntryHashes,
+    summaryOmittedEntryHashes: diag?.summaryOmittedEntryHashes,
+    summaryRequiredFactHashes: diag?.summaryRequiredFactHashes,
+    summaryValidationAuthoritySource: diag?.summaryValidationAuthoritySource,
+    summarySavedProvenance: diag?.summarySavedProvenance,
+    summarySavedSummaryReboundRevalidated:
+      diag?.summarySavedSummaryReboundRevalidated,
+    summaryRelationalOwnershipPassed: diag?.summaryRelationalOwnershipPassed,
+    summaryRelationalOwnershipFailureReasons:
+      diag?.summaryRelationalOwnershipFailureReasons,
+    summaryFinalUnitOwnership: diag?.summaryFinalUnitOwnership,
     stages,
     initialValidationReason: diag?.summaryInitialReason,
     deterministicRecoveryReason: diag?.summaryRecoveryReason,

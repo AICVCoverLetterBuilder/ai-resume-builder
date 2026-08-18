@@ -298,6 +298,11 @@ export function validateSummaryV2AgainstManifest(
   ).length;
   const factUnitOwnershipValidationPassed = ownership.passed
     && factUnitCoverageEvidence.every((evidence) => evidence.ownershipPassed);
+  const relationalOwnershipFailureReasons = [...new Set(
+    ownership.evidence.flatMap((evidence) => evidence.relationalOwnershipFailureReasons),
+  )];
+  const relationalOwnershipValidationPassed = ownership.passed
+    && ownership.evidence.every((evidence) => evidence.relationalOwnershipPassed);
   const currentUnitText = current ? unitTextForEntry(current.entryId) : '';
   const currentRolePresent = Boolean(
     current?.role
@@ -464,6 +469,8 @@ export function validateSummaryV2AgainstManifest(
     reason = 'missing_current_role_intro';
   } else if (prior && (!priorRolePresent || !priorEmployerPresent || !priorStateExpressed)) {
     reason = 'missing_prior_role_intro';
+  } else if (relationalOwnershipFailureReasons.length > 0) {
+    reason = relationalOwnershipFailureReasons[0];
   } else if (!ownership.passed) {
     reason = ownership.reason || 'final_unit_ownership_failed';
   } else if (manifest.totalDurationMonths <= 0 && durationExpressionCount > 0) {
@@ -522,6 +529,8 @@ export function validateSummaryV2AgainstManifest(
     materialAuthority,
     unitOwnershipValidationPassed: ownership.passed,
     unitOwnershipFailureReason: ownership.reason,
+    relationalOwnershipValidationPassed,
+    relationalOwnershipFailureReasons,
     finalUnitOwnership: ownership.evidence,
     factUnitCoverageEvidence,
     factUnitOwnershipValidationPassed,

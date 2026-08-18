@@ -78,6 +78,9 @@ import {
 import { captureSummaryV2Snapshot } from './cv-summary-v2/snapshot';
 import { buildSummaryV2SelectionManifest } from './cv-summary-v2/manifest';
 import { hashSummaryV2Text } from './cv-summary-v2/facts';
+import { buildSummaryV2DeterministicText } from './cv-summary-v2/builder';
+import { validateSummaryV2AgainstManifest } from './cv-summary-v2/validator';
+import type { SummaryV2ValidationResult } from './cv-summary-v2/types';
 
 function classifyMaterialBulletScript(bullet: string): 'hi' | 'en' | 'mixed' | 'empty' {
   const t = (bullet || '').trim();
@@ -128,7 +131,7 @@ export type ExportReadyDiagnostics = {
   summarySemanticDutyKeys: SemanticDutyKey[];
   summaryInitialValid?: boolean;
   summaryInitialReason?: string;
-  summaryRecoverySource?: 'saved_summary' | 'bounded_saved_summary' | 'deterministic_semantic_facts' | 'occupation_generic_fallback';
+  summaryRecoverySource?: 'saved_summary' | 'bounded_saved_summary' | 'deterministic_semantic_facts' | 'deterministic_v2_manifest' | 'occupation_generic_fallback';
   summaryRecoveryReason?: string;
   summaryWordCountBefore?: number;
   summaryWordCountAfter?: number;
@@ -153,6 +156,23 @@ export type ExportReadyDiagnostics = {
   summarySelectedEntryHashes?: string[];
   summaryOmittedEntryHashes?: string[];
   summaryRequiredFactHashes?: Array<{ owningEntryHash: string; factHash: string }>;
+  /** App-owned summaries are rebound to the current immutable V2 selection manifest. */
+  summaryValidationAuthoritySource?: 'manual_saved_summary' | 'app_owned_v2_manifest' | 'app_owned_unstructured_legacy';
+  summarySavedProvenance?: string;
+  summarySavedSummaryReboundRevalidated?: boolean;
+  summaryRelationalOwnershipPassed?: boolean | null;
+  summaryRelationalOwnershipFailureReasons?: string[];
+  summaryFinalUnitOwnership?: Array<{
+    unitHash: string;
+    roleSlot: 'duration' | 'current_role' | 'prior_role';
+    owningEntryHash: string | null;
+    roleTitleOwnerEntryHash: string | null;
+    employerOwnerEntryHash: string | null;
+    dateStatusOwnerEntryHash: string | null;
+    dutyFactOwnerEntryHashes: string[];
+    relationalOwnershipPassed: boolean;
+    relationalOwnershipFailureReasons: string[];
+  }>;
   /** Same entry-owned presentation snapshot contract consumed by preview/PDF/DOCX. */
   experiencePresentation?: ExperiencePresentationRecord[];
   /** Non-PII identity of the exact terminal Experience presentation snapshot. */
@@ -877,6 +897,61 @@ export function prepareExportReadyCv(
     owningEntryHash: hashSummaryV2Text(fact.entryId),
     factHash: fact.sourceFactHash,
   }));
+  const savedSummaryHasSelectedStructuredSurface = selectedSummaryEntries.some((entry) => {
+    const visible = (cv.summary || '').normalize('NFKC').toLocaleLowerCase();
+    const surfaces = [entry.role, entry.employer]
+      .map((surface) => (surface || '').normalize('NFKC').toLocaleLowerCase().trim())
+      .filter(Boolean);
+    return surfaces.some((surface) => visible.includes(surface));
+  });
+  // Only route stored app-owned Summary prose through the V2 rebuild when the
+  // shared relational validator has actually found a role/employer/date/fact
+  // owner conflict. Older deterministic summaries legitimately carry the same
+  // origin enum but retain their established bounded legacy recovery path.
+  const savedAppOwnedStructuredSummary = cv.summaryOrigin !== 'user'
+    && selectedSummaryEntries.length > 0
+    && savedSummaryHasSelectedStructuredSurface;
+  const savedAppOwnedV2Validation = savedAppOwnedStructuredSummary
+    ? validateSummaryV2AgainstManifest(cv.summary || '', summaryManifest, {
+      candidateSource: 'final_selected',
+    })
+    : null;
+  const appOwnedSummaryRequiresV2Authority = Boolean(
+    savedAppOwnedV2Validation
+    && savedAppOwnedV2Validation.relationalOwnershipFailureReasons.length > 0,
+  );
+  const summaryValidationAuthoritySource: NonNullable<ExportReadyDiagnostics['summaryValidationAuthoritySource']> =
+    appOwnedSummaryRequiresV2Authority
+      ? 'app_owned_v2_manifest'
+      : cv.summaryOrigin === 'user'
+        ? 'manual_saved_summary'
+        : 'app_owned_unstructured_legacy';
+  let summaryV2ValidationForDiagnostics: SummaryV2ValidationResult | null =
+    appOwnedSummaryRequiresV2Authority ? savedAppOwnedV2Validation : null;
+  const assignSummaryV2Diagnostics = (diagnostics: ExportReadyDiagnostics) => {
+    diagnostics.summaryValidationAuthoritySource = summaryValidationAuthoritySource;
+    diagnostics.summarySavedProvenance = rawCv.summaryOrigin || 'user';
+    diagnostics.summarySavedSummaryReboundRevalidated = appOwnedSummaryRequiresV2Authority;
+    diagnostics.summaryRelationalOwnershipPassed = summaryV2ValidationForDiagnostics
+      ? summaryV2ValidationForDiagnostics.relationalOwnershipValidationPassed
+      : null;
+    diagnostics.summaryRelationalOwnershipFailureReasons = summaryV2ValidationForDiagnostics
+      ? summaryV2ValidationForDiagnostics.relationalOwnershipFailureReasons
+      : [];
+    diagnostics.summaryFinalUnitOwnership = summaryV2ValidationForDiagnostics
+      ? summaryV2ValidationForDiagnostics.finalUnitOwnership.map((evidence) => ({
+        unitHash: evidence.unitHash,
+        roleSlot: evidence.roleSlot,
+        owningEntryHash: evidence.owningEntryHash,
+        roleTitleOwnerEntryHash: evidence.roleTitleOwnerEntryHash,
+        employerOwnerEntryHash: evidence.employerOwnerEntryHash,
+        dateStatusOwnerEntryHash: evidence.dateStatusOwnerEntryHash,
+        dutyFactOwnerEntryHashes: evidence.dutyFactOwnerEntryHashes,
+        relationalOwnershipPassed: evidence.relationalOwnershipPassed,
+        relationalOwnershipFailureReasons: evidence.relationalOwnershipFailureReasons,
+      }))
+      : [];
+  };
   const { factSet, source: factSourceRaw, keys: summaryKeys } = buildSemanticSummaryFactSet(
     cv,
     groundingById,
@@ -891,6 +966,7 @@ export function prepareExportReadyCv(
     diagnostics.summarySelectedEntryHashes = summarySelectedEntryHashes;
     diagnostics.summaryOmittedEntryHashes = summaryOmittedEntryHashes;
     diagnostics.summaryRequiredFactHashes = summaryRequiredFactHashes;
+    assignSummaryV2Diagnostics(diagnostics);
   };
   if (
     hadDisplay
@@ -913,7 +989,14 @@ export function prepareExportReadyCv(
     options?.referenceDate ?? new Date(),
   );
 
-  const primaryExp = (cv.experience || []).find((e) => e.isPresent) || (cv.experience || [])[0];
+  // The V2 resolver, not array order, owns every current Summary context
+  // field. A second older current job may never lend its employer/date to the
+  // selected current role.
+  const primaryExp = (summaryManifest.current
+    ? (cv.experience || []).find((entry) => entry.id === summaryManifest.current!.entryId)
+    : undefined)
+    || (cv.experience || []).find((e) => e.isPresent)
+    || (cv.experience || [])[0];
   const primaryJobCtx = jobContextForExport(primaryExp?.position || cv.personal?.jobTitle);
   const summaryContextMatch = Boolean(
     cv.summaryGenerationContextKey
@@ -952,7 +1035,7 @@ export function prepareExportReadyCv(
       },
     );
   }
-  const visibleSummaryValidation = validateSummaryExportCandidate(
+  const visibleSummaryExportValidation = validateSummaryExportCandidate(
     cv.summary || '',
     factSet,
     requestedLocale,
@@ -962,6 +1045,23 @@ export function prepareExportReadyCv(
     cv,
     durationSnapshot.total,
   );
+  summaryV2ValidationForDiagnostics = appOwnedSummaryRequiresV2Authority
+    ? savedAppOwnedV2Validation
+    : null;
+  const visibleSummaryValidation = !visibleSummaryExportValidation.valid
+    ? visibleSummaryExportValidation
+    : (summaryV2ValidationForDiagnostics && !summaryV2ValidationForDiagnostics.ok
+      ? {
+        valid: false,
+        reason: summaryV2ValidationForDiagnostics.reason
+          || 'summary_relational_ownership_failed',
+        violations: [
+          summaryV2ValidationForDiagnostics.reason
+            || 'summary_relational_ownership_failed',
+          ...summaryV2ValidationForDiagnostics.relationalOwnershipFailureReasons,
+        ],
+      }
+      : visibleSummaryExportValidation);
   const summaryCurrentTextAuthority = resolveSummaryCurrentTextAuthority({
     staleMetadataDetected: summaryStaleMetadataDetected,
     occupationalContentConflict: summaryOccupationalContentConflict,
@@ -1010,7 +1110,7 @@ export function prepareExportReadyCv(
     const bulletCount = factSet.facts.filter((f) => f.type === 'experience_bullet').length;
     const onlyWordBudgetViolation = initialSummaryValidation.violations.length > 0
       && initialSummaryValidation.violations.every((violation) => violation.startsWith('summary_too_long'));
-    if (!effectiveSummaryStale && onlyWordBudgetViolation) {
+    if (!appOwnedSummaryRequiresV2Authority && !effectiveSummaryStale && onlyWordBudgetViolation) {
       const compacted = compactSavedSummaryNearWordBudget({
         summary: cv.summary || '',
         locale: requestedLocale,
@@ -1039,8 +1139,17 @@ export function prepareExportReadyCv(
         durationCompositionSource = 'saved_summary_word_budget_compaction';
       }
     }
-    // Universal: recover from authoritative Experience bullets even when no
-    // catalogue SemanticDutyKey matched (unknown free-text titles).
+    // App-owned Summary text is reconstructed from the same selected-entry
+    // manifest used for final/visible validation. This retains all selected
+    // current/prior units and prevents an older current entry from lending its
+    // employer or date to the resolved current role.
+    if (appOwnedSummaryRequiresV2Authority) {
+      recovered = buildSummaryV2DeterministicText(summaryManifest);
+      summaryRecoverySource = 'deterministic_v2_manifest';
+      durationCompositionSource = 'deterministic_v2_manifest';
+    }
+    // Universal manual/legacy recovery from authoritative Experience bullets
+    // even when no catalogue SemanticDutyKey matched (unknown free-text titles).
     if (!recovered && !effectiveSummaryStale && (summaryKeys.length > 0 || bulletCount > 0)) {
       recovered = deterministicLocalizedSummaryFromCanonical(
         factSet,
@@ -1059,8 +1168,8 @@ export function prepareExportReadyCv(
     // Occupation-generic only when there are no source duty bullets to preserve,
     // or when cooking shells leaked into a non-food role / stale context.
     if (
-      effectiveSummaryStale
-      || cookingOccupationMismatch
+      (!appOwnedSummaryRequiresV2Authority && effectiveSummaryStale)
+      || (!appOwnedSummaryRequiresV2Authority && cookingOccupationMismatch)
       || (!recovered.trim() && bulletCount === 0)
       || (!recovered.trim() && summaryKeys.length === 0 && bulletCount === 0)
     ) {
@@ -1068,7 +1177,7 @@ export function prepareExportReadyCv(
       summaryRecoverySource = 'occupation_generic_fallback';
       occupationGenericFallbackUsed = true;
       factSource = 'occupation_generic';
-    } else if (!recovered.trim() && bulletCount > 0) {
+    } else if (!recovered.trim() && bulletCount > 0 && !appOwnedSummaryRequiresV2Authority) {
       // Last resort: still try grounded builder once more (should be rare).
       recovered = deterministicLocalizedSummaryFromCanonical(
         factSet,
@@ -1108,6 +1217,15 @@ export function prepareExportReadyCv(
       cv,
       durationSnapshot.total,
     );
+    const recoveryV2Validation = appOwnedSummaryRequiresV2Authority
+      ? validateSummaryV2AgainstManifest(recovered, summaryManifest, {
+        candidateSource: 'deterministic',
+        preserveConstructionOrder: true,
+        trustedConstructionAuthority: true,
+      })
+      : null;
+    summaryV2ValidationForDiagnostics = recoveryV2Validation
+      || summaryV2ValidationForDiagnostics;
     if (summaryHasUnsupportedDomainClaims(recovered, experienceBlobForSummary)) {
       return fail(
         'summary_unsupported_domain_claims',
@@ -1119,14 +1237,27 @@ export function prepareExportReadyCv(
         },
       );
     }
-    summaryRecoveryReason = recoveryValidation.reason;
+    summaryRecoveryReason = recoveryV2Validation && !recoveryV2Validation.ok
+      ? (recoveryV2Validation.reason || 'summary_relational_ownership_failed')
+      : recoveryValidation.reason;
+    // The bounded legacy export budget is not a semantic authority. An
+    // app-owned V2 rebuild that preserves every required selected fact may be
+    // longer than that historic UI target; reject any other legacy violation,
+    // but do not discard entry-owned authority solely to shorten it.
+    const recoveryOnlyExceedsLegacyWordBudget = !recoveryValidation.valid
+      && recoveryValidation.violations.length > 0
+      && recoveryValidation.violations.every((violation) => violation.startsWith('summary_too_long'));
     // Occupation-generic rebuild is authoritative after context change even when
     // semantic validator is strict about missing duty shells.
     const acceptOccupationGeneric = summaryRecoverySource === 'occupation_generic_fallback'
+      && !appOwnedSummaryRequiresV2Authority
       && Boolean(recovered.trim())
       && !textLooksLikeCookingDuties(recovered)
       && textMatchesRequestedFieldLocale(recovered, requestedLocale, 'summary', structuredExemptions(cv));
-    if ((recovered && recoveryValidation.valid) || acceptOccupationGeneric) {
+    if ((recovered
+      && (recoveryValidation.valid
+        || (appOwnedSummaryRequiresV2Authority && recoveryOnlyExceedsLegacyWordBudget))
+      && (!recoveryV2Validation || recoveryV2Validation.ok)) || acceptOccupationGeneric) {
       cv = {
         ...cv,
         summary: recovered,
@@ -1184,6 +1315,12 @@ export function prepareExportReadyCv(
     };
   }
 
+  // V2 is the app-owned Summary's final semantic and surface authority. The
+  // generic quality fallback is allowed to project Experience/title fields,
+  // but must not replace a selected-entry V2 Summary with a generic duration
+  // shell after it has already passed the shared V2 finalizer.
+  const appOwnedSummaryBeforeQuality = cv.summary || '';
+  const appOwnedSummaryOriginBeforeQuality = cv.summaryOrigin;
   const quality = applyCvContentQuality(cv, requestedLocale, {
     gender,
     durationSnapshot,
@@ -1192,8 +1329,40 @@ export function prepareExportReadyCv(
   });
   cv = {
     ...quality.cv,
-    summary: scrubOrphanDurationFragments(quality.cv.summary || ''),
+    summary: appOwnedSummaryRequiresV2Authority
+      ? appOwnedSummaryBeforeQuality
+      : scrubOrphanDurationFragments(quality.cv.summary || ''),
+    ...(appOwnedSummaryRequiresV2Authority
+      ? { summaryOrigin: appOwnedSummaryOriginBeforeQuality }
+      : {}),
   };
+
+  // Post-quality is the visible/exported Summary authority. Re-read the exact
+  // rewritten text instead of inheriting a pre-quality pass value.
+  if (appOwnedSummaryRequiresV2Authority) {
+    const postQualityV2 = validateSummaryV2AgainstManifest(cv.summary || '', summaryManifest, {
+      candidateSource: 'final_selected',
+    });
+    summaryV2ValidationForDiagnostics = postQualityV2;
+    if (!postQualityV2.ok) {
+      const diagnostics = baseDiagnostics();
+      diagnostics.recoveryInvoked = recoveryInvoked;
+      diagnostics.runtimeMigrationVersion = cv.runtimeMigrationVersion;
+      diagnostics.experienceProvenance = buildProvenanceRows(cv, groundingById);
+      diagnostics.summaryFactSetSource = factSource;
+      diagnostics.summarySemanticDutyKeys = summaryKeys;
+      diagnostics.summaryInitialValid = initialSummaryValidation.valid;
+      diagnostics.summaryInitialReason = initialSummaryValidation.reason;
+      diagnostics.summaryRecoverySource = summaryRecoverySource;
+      diagnostics.summaryRecoveryReason = postQualityV2.reason || undefined;
+      assignSummaryOwnershipDiagnostics(diagnostics);
+      return fail(
+        postQualityV2.reason || 'summary_relational_ownership_failed',
+        'validate_summary',
+        diagnostics,
+      );
+    }
+  }
 
   // Enforce: quality must not restore English padding over projected display.
   cv = {
@@ -1410,6 +1579,28 @@ export function prepareExportReadyCv(
     summarySelectedEntryHashes,
     summaryOmittedEntryHashes,
     summaryRequiredFactHashes,
+    summaryValidationAuthoritySource,
+    summarySavedProvenance: rawCv.summaryOrigin || 'user',
+    summarySavedSummaryReboundRevalidated: appOwnedSummaryRequiresV2Authority,
+    summaryRelationalOwnershipPassed: summaryV2ValidationForDiagnostics
+      ? summaryV2ValidationForDiagnostics.relationalOwnershipValidationPassed
+      : null,
+    summaryRelationalOwnershipFailureReasons: summaryV2ValidationForDiagnostics
+      ? summaryV2ValidationForDiagnostics.relationalOwnershipFailureReasons
+      : [],
+    summaryFinalUnitOwnership: summaryV2ValidationForDiagnostics
+      ? summaryV2ValidationForDiagnostics.finalUnitOwnership.map((evidence) => ({
+        unitHash: evidence.unitHash,
+        roleSlot: evidence.roleSlot,
+        owningEntryHash: evidence.owningEntryHash,
+        roleTitleOwnerEntryHash: evidence.roleTitleOwnerEntryHash,
+        employerOwnerEntryHash: evidence.employerOwnerEntryHash,
+        dateStatusOwnerEntryHash: evidence.dateStatusOwnerEntryHash,
+        dutyFactOwnerEntryHashes: evidence.dutyFactOwnerEntryHashes,
+        relationalOwnershipPassed: evidence.relationalOwnershipPassed,
+        relationalOwnershipFailureReasons: evidence.relationalOwnershipFailureReasons,
+      }))
+      : [],
     experiencePresentation: presentationSnapshot.records,
     experiencePresentationSnapshotId: presentationSnapshot.presentationSnapshotId,
     occupationGenericFallbackUsed,

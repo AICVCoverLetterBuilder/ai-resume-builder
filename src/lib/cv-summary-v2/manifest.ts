@@ -72,6 +72,7 @@ export function buildSummaryV2SelectionManifest(
     styleHintUsed: Boolean(snapshot.styleHintSummary),
     current,
     priors: selectedPriors,
+    allEntries: entries,
     requiredCurrentFacts,
     requiredPriorFacts,
     maxDutiesPerEntry: SUMMARY_V2_MAX_DUTIES_PER_ENTRY,
