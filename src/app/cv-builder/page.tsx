@@ -179,6 +179,7 @@ import {
 import { prepareCreativeArtisticExport } from '@/lib/cv-export-integrity';
 import { prepareCorporateNavyExport } from '@/lib/corporate-navy-export-integrity';
 import {
+  applyAppOwnedSummaryPreviewTerminalSnapshot,
   prepareExportReadyCv,
   type PrepareExportReadyResult,
 } from '@/lib/prepare-export-ready-cv';
@@ -1135,16 +1136,8 @@ export default function CVBuilderPage() {
           gender: migratedCv.personal?.gender,
         })
         : null;
-      const previewRequiresV2Recovery = previewPrepared?.diagnostics
-        .summaryValidationAuthoritySource === 'app_owned_v2_manifest';
-      const summaryTerminalCv = previewRequiresV2Recovery
-        ? {
-          ...terminalPresentationCv,
-          summary: previewPrepared?.ok ? previewPrepared.cv.summary : '',
-          summaryOrigin: previewPrepared?.ok
-            ? previewPrepared.cv.summaryOrigin
-            : terminalPresentationCv.summaryOrigin,
-        }
+      const summaryTerminalCv = previewPrepared
+        ? applyAppOwnedSummaryPreviewTerminalSnapshot(terminalPresentationCv, previewPrepared)
         : terminalPresentationCv;
       const localeSafeCv = omitInvalidLocalizedFieldsForPreview(summaryTerminalCv, locale);
       const base = {

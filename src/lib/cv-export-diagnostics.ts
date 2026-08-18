@@ -181,6 +181,15 @@ export type CvExportDiagnosticTrace = {
   recoveryCandidateRejectionReasons?: string[];
   recoveryDetectedLocaleByUnit?: Array<string | null>;
   recoveryDetectedScriptByUnit?: string[];
+  recoveryFactPresentation?: Array<{
+    owningEntryHash: string;
+    factIdHash: string;
+    immutableAuthorityHash: string;
+    presentationSurfaceHash: string | null;
+    presentationSurfaceAuthority: string;
+    detectedTargetLocale: string | null;
+    detectedTargetScript: string | null;
+  }>;
   selectedFinalSummaryHash?: string;
   selectedFinalSource?: string | null;
   visiblePreviewSummaryHash?: string | null;
@@ -880,6 +889,7 @@ export function buildAndStoreCvExportDiagnostic(input: BuildCvExportTraceInput):
     recoveryCandidateRejectionReasons: diag?.recoveryCandidateRejectionReasons,
     recoveryDetectedLocaleByUnit: diag?.recoveryDetectedLocaleByUnit,
     recoveryDetectedScriptByUnit: diag?.recoveryDetectedScriptByUnit,
+    recoveryFactPresentation: diag?.recoveryFactPresentation,
     selectedFinalSummaryHash: diag?.selectedFinalSummaryHash,
     selectedFinalSource: diag?.selectedFinalSource,
     visiblePreviewSummaryHash: diag?.visiblePreviewSummaryHash,

@@ -18,7 +18,11 @@ import {
   localizeCanonicalBulletLine,
   buildSourcePreservingExperienceBullets,
 } from './cv-localized-fallback';
-import { buildCrossLocaleExperienceFallback } from './cv-cross-locale-experience';
+import {
+  buildCrossLocaleExperienceFallback,
+  validateCrossLocaleSemanticCoverage,
+} from './cv-cross-locale-experience';
+import { extractExperienceSemanticArgumentKinds } from './cv-experience-unsupported-claims';
 import { buildSummaryCompositionDiagnostics } from './cv-summary-grounding';
 import {
   compactSavedSummaryNearWordBudget,
@@ -77,7 +81,7 @@ import {
 } from './cv-summary-current-text-authority';
 import { captureSummaryV2Snapshot } from './cv-summary-v2/snapshot';
 import { buildSummaryV2SelectionManifest } from './cv-summary-v2/manifest';
-import { hashSummaryV2Text } from './cv-summary-v2/facts';
+import { dutyTokenStems, hashSummaryV2Text } from './cv-summary-v2/facts';
 import { buildSummaryV2DeterministicText } from './cv-summary-v2/builder';
 import { validateSummaryV2AgainstManifest } from './cv-summary-v2/validator';
 import type {
@@ -105,10 +109,161 @@ function classifyMaterialBulletScript(bullet: string): 'hi' | 'en' | 'mixed' | '
  * identity, entry binding and the unselected-entry authority set remain
  * untouched for the V2 validator.
  */
-function projectDeterministicRecoveryRoleSurfaces(
+type SummaryRecoveryFactPresentationAuthority =
+  | 'target_native_immutable_surface'
+  | 'validated_current_target_experience'
+  | 'deterministic_target_projector'
+  | 'unresolved';
+
+type SummaryRecoveryFactPresentationEvidence = {
+  owningEntryHash: string;
+  factIdHash: string;
+  immutableAuthorityHash: string;
+  presentationSurfaceHash: string | null;
+  presentationSurfaceAuthority: SummaryRecoveryFactPresentationAuthority;
+  detectedTargetLocale: string | null;
+  detectedTargetScript: string | null;
+};
+
+type DeterministicRecoveryProjection = {
+  manifest: SummaryV2SelectionManifest;
+  factPresentation: SummaryRecoveryFactPresentationEvidence[];
+};
+
+/**
+ * Binds a target Experience presentation to immutable Summary facts without
+ * relying on the editor's bullet order.  Aggregate 3/3 coverage is necessary
+ * but insufficient here: a concept/criterion duty must never inherit the
+ * material surface of a neighboring fact merely because both are present.
+ *
+ * Only relation-bearing facts are eligible for this deterministic bridge. A
+ * sparse or ambiguous free-text set falls through to the existing provider or
+ * fails closed rather than inventing fact lineage.
+ */
+function bindTargetPresentationFacts(
+  facts: SummaryV2EntryOwned['facts'],
+  targetBullets: string[],
+): Map<number, string> | null {
+  const sourceSignatures = facts.map((fact) => (
+    [...new Set(extractExperienceSemanticArgumentKinds(fact.bulletText))]
+      .sort()
+      .join('|')
+  ));
+  const targetSignatures = targetBullets.map((bullet) => (
+    [...new Set(extractExperienceSemanticArgumentKinds(bullet))]
+      .sort()
+      .join('|')
+  ));
+  if (
+    sourceSignatures.length !== facts.length
+    || targetSignatures.length !== targetBullets.length
+    || sourceSignatures.some((signature) => !signature)
+  ) {
+    return null;
+  }
+
+  const bound = new Map<number, string>();
+  const usedTargets = new Set<number>();
+  for (let sourceIndex = 0; sourceIndex < sourceSignatures.length; sourceIndex += 1) {
+    const signature = sourceSignatures[sourceIndex]!;
+    const candidateIndexes = targetSignatures
+      .map((targetSignature, candidateIndex) => ({ targetSignature, candidateIndex }))
+      .filter(({ targetSignature, candidateIndex }) => (
+        !usedTargets.has(candidateIndex) && targetSignature === signature
+      ));
+    if (candidateIndexes.length !== 1) return null;
+    const candidateIndex = candidateIndexes[0]!.candidateIndex;
+    usedTargets.add(candidateIndex);
+    bound.set(sourceIndex, targetBullets[candidateIndex]!);
+  }
+  return bound.size === facts.length && usedTargets.size === targetBullets.length
+    ? bound
+    : null;
+}
+
+/**
+ * The V2 manifest deliberately retains immutable source facts for ownership.
+ * Recovery prose must instead materialize one target-language surface for each
+ * selected immutable fact before it enters the native builder.  Do not pair a
+ * visible Experience bullet by index: a current target-language textarea has
+ * no per-fact authority unless another source-bound presentation record has
+ * already established that binding. The deterministic projector first creates
+ * a complete target-language projection from the immutable same-entry fact
+ * set, then attaches each resulting surface only through the typed semantic
+ * bridge. A validated current target Experience surface takes precedence when
+ * the same bridge proves a one-to-one fact binding. Neither route trusts an
+ * editor bullet index.
+ */
+function projectDeterministicRecoveryPresentationSurfaces(
   manifest: SummaryV2SelectionManifest,
-): SummaryV2SelectionManifest {
+): DeterministicRecoveryProjection {
+  const factPresentation: SummaryRecoveryFactPresentationEvidence[] = [];
   const projectEntry = (entry: SummaryV2EntryOwned): SummaryV2EntryOwned => {
+    const immutableSource = entry.facts.map((fact) => fact.bulletText).join('\n');
+    // `textMatchesRequestedFieldLocale` is intentionally permissive for form
+    // fields. A recovery fact surface needs the stricter unit-level purity
+    // decision: otherwise a Devanagari immutable duty can be mislabeled as a
+    // Serbian presentation merely because it is an Experience field.
+    const sourceAlreadyTarget = entry.facts.every((fact) => {
+      const purity = validateAiUnitLocalePurity(fact.bulletText, manifest.locale, {
+        kind: 'experience_bullet',
+        requireUnits: true,
+      });
+      return purity.targetLocalePurityPassed && purity.mixedLanguageUnitCount === 0;
+    });
+    const currentTargetPresentation = entry.facts
+      .map((fact) => fact.presentationText?.trim() || '')
+      .filter(Boolean)
+      .join('\n');
+    const currentPresentationIsTrusted = entry.facts.every((fact) => (
+      fact.presentationTrusted === true
+      && fact.presentationLocale === manifest.locale
+    ));
+    const currentPresentationPurity = currentTargetPresentation
+      ? validateAiUnitLocalePurity(currentTargetPresentation, manifest.locale, {
+        kind: 'experience_bullet',
+        requireUnits: true,
+      })
+      : null;
+    const currentPresentationCoverage = currentTargetPresentation
+      ? validateCrossLocaleSemanticCoverage(immutableSource, currentTargetPresentation)
+      : null;
+    const currentPresentationBindings = currentTargetPresentation
+      ? bindTargetPresentationFacts(entry.facts, splitExperienceBullets(currentTargetPresentation))
+      : null;
+    const hasBoundCurrentTargetPresentation = Boolean(
+      !sourceAlreadyTarget
+      && currentPresentationIsTrusted
+      && currentPresentationPurity?.targetLocalePurityPassed
+      && currentPresentationPurity.mixedLanguageUnitCount === 0
+      && currentPresentationCoverage?.ok
+      && currentPresentationBindings?.size === entry.facts.length,
+    );
+    const projectedDescription = sourceAlreadyTarget
+      ? immutableSource
+      : (hasBoundCurrentTargetPresentation
+        ? currentTargetPresentation
+        : buildCrossLocaleExperienceFallback({
+          sourceDescription: immutableSource,
+          sourceLocale: entry.sourceLocale,
+          targetLocale: manifest.locale,
+          gender: manifest.gender,
+          isPresent: entry.isPresent,
+          position: entry.sourceRoleTitle || entry.role,
+        }));
+    const projectedBullets = splitExperienceBullets(projectedDescription);
+    const projectedCoverage = sourceAlreadyTarget
+      ? null
+      : validateCrossLocaleSemanticCoverage(immutableSource, projectedDescription);
+    const boundProjectedByFactIndex = (sourceAlreadyTarget
+      ? new Map(entry.facts.map((fact, factIndex) => [factIndex, fact.bulletText]))
+      : (hasBoundCurrentTargetPresentation
+        ? currentPresentationBindings
+        : (projectedCoverage?.ok
+          ? bindTargetPresentationFacts(entry.facts, projectedBullets)
+          : null))) || new Map<number, string>();
+    const completeBoundProjection = boundProjectedByFactIndex.size === entry.facts.length
+      && new Set(boundProjectedByFactIndex.values()).size === entry.facts.length;
     const localized = resolveLocalizedSummaryRole({
       role: entry.sourceRoleTitle || entry.role,
       sourceLocale: entry.roleSourceLocale || entry.sourceLocale,
@@ -116,16 +271,56 @@ function projectDeterministicRecoveryRoleSurfaces(
       gender: manifest.gender,
       entryId: entry.entryId,
     });
-    if (!localized.localizationValidationPassed || !localized.localizedTargetRoleLabel) {
-      // Unknown free-text titles are not guessed. The shared final locale gate
-      // still rejects a genuinely foreign surface rather than accepting it.
-      return entry;
-    }
+    const facts = entry.facts.map((fact, factIndex) => {
+      const projected = completeBoundProjection
+        ? (boundProjectedByFactIndex.get(factIndex) || '')
+        : '';
+    const purity = projected.trim()
+      ? validateAiUnitLocalePurity(projected, manifest.locale, {
+        kind: 'experience_bullet',
+        requireUnits: true,
+      })
+      : null;
+    const accepted = Boolean(
+      projected.trim()
+      && purity?.targetLocalePurityPassed
+      && purity.mixedLanguageUnitCount === 0,
+    );
+    factPresentation.push({
+      owningEntryHash: hashSummaryV2Text(entry.entryId),
+      factIdHash: hashSummaryV2Text(fact.factId),
+      immutableAuthorityHash: fact.sourceFactHash,
+      presentationSurfaceHash: accepted ? hashSummaryV2Text(projected) : null,
+      presentationSurfaceAuthority: accepted
+        ? (sourceAlreadyTarget
+          ? 'target_native_immutable_surface'
+          : (hasBoundCurrentTargetPresentation
+            ? 'validated_current_target_experience'
+            : 'deterministic_target_projector'))
+        : 'unresolved',
+      detectedTargetLocale: accepted ? (purity?.detectedLocaleByUnit[0] || manifest.locale) : null,
+      detectedTargetScript: accepted ? (purity?.detectedScriptByUnit[0] || null) : null,
+    });
+    if (!accepted) return fact;
+    return {
+      ...fact,
+      bulletText: projected.trim(),
+      tokenStems: dutyTokenStems(projected),
+    };
+    });
     return {
       ...entry,
-      role: localized.localizedTargetRoleLabel,
+      // Unknown free-text titles are not guessed. The shared final locale gate
+      // still rejects a genuinely foreign role surface, while known immutable
+      // duties can still be independently projected and diagnosed.
+      role: localized.localizationValidationPassed && localized.localizedTargetRoleLabel
+        ? localized.localizedTargetRoleLabel
+        : entry.role,
       sourceRoleTitle: entry.sourceRoleTitle || entry.role,
-      roleTitleLocalizationSource: `deterministic:${localized.localizationSource}`,
+      roleTitleLocalizationSource: localized.localizationValidationPassed
+        ? `deterministic:${localized.localizationSource}`
+        : entry.roleTitleLocalizationSource,
+      facts,
     };
   };
   const current = manifest.current ? projectEntry(manifest.current) : null;
@@ -141,12 +336,15 @@ function projectDeterministicRecoveryRoleSurfaces(
     selectedById.get(fact.entryId)?.facts.find((candidate) => candidate.factId === fact.factId) || fact
   ));
   return {
+    factPresentation,
+    manifest: {
     ...manifest,
     current,
     priors,
     ...(allEntries ? { allEntries } : {}),
     requiredCurrentFacts: currentFacts,
     requiredPriorFacts: priorFacts,
+    },
   };
 }
 
@@ -230,6 +428,8 @@ export type ExportReadyDiagnostics = {
   recoveryCandidateRejectionReasons?: string[];
   recoveryDetectedLocaleByUnit?: Array<string | null>;
   recoveryDetectedScriptByUnit?: string[];
+  /** Per-fact target presentation lineage for a selected V2 deterministic recovery. */
+  recoveryFactPresentation?: SummaryRecoveryFactPresentationEvidence[];
   /** Terminal presentation identity; Preview/PDF/DOCX must agree when unchanged. */
   selectedFinalSummaryHash?: string;
   selectedFinalSource?: string | null;
@@ -281,6 +481,32 @@ export type PrepareExportReadyResult =
     stage: ExportReadyStage;
     diagnostics: ExportReadyDiagnostics;
   };
+
+/**
+ * Preview is a synchronous consumer of the export terminalizer.  For an
+ * app-owned Summary whose saved surface has failed V2 ownership, there is no
+ * safe fallback to the stale textarea: use the selected recovery verbatim, or
+ * expose an unresolved (blank) Summary.  The caller deliberately excludes
+ * user-authored summaries from this helper.
+ */
+export function applyAppOwnedSummaryPreviewTerminalSnapshot(
+  cv: CVData,
+  prepared: PrepareExportReadyResult,
+): CVData {
+  const terminalRequired = prepared.diagnostics.summaryValidationAuthoritySource
+    === 'app_owned_v2_manifest'
+    || prepared.diagnostics.savedSummaryOwnershipPassed === false;
+  if (!terminalRequired) return cv;
+  if (!prepared.ok) {
+    return { ...cv, summary: '' };
+  }
+  return {
+    ...cv,
+    summary: prepared.cv.summary,
+    summaryOrigin: prepared.cv.summaryOrigin,
+    summaryGeneratedLocale: prepared.cv.summaryGeneratedLocale,
+  };
+}
 
 function fail(
   reason: string,
@@ -1010,6 +1236,7 @@ export function prepareExportReadyCv(
   let recoveryV2ValidationForDiagnostics: SummaryV2ValidationResult | null = null;
   let recoveryLocalePurityForDiagnostics: ReturnType<typeof validateAiUnitLocalePurity> | null = null;
   let recoveryCandidateHashForDiagnostics: string | null = null;
+  let recoveryFactPresentationForDiagnostics: SummaryRecoveryFactPresentationEvidence[] = [];
   let selectedFinalSummaryHashForDiagnostics: string | null = null;
   let selectedFinalSourceForDiagnostics: string | null = null;
   const assignSummaryV2Diagnostics = (diagnostics: ExportReadyDiagnostics) => {
@@ -1052,20 +1279,28 @@ export function prepareExportReadyCv(
     diagnostics.recoveryDetectedScriptByUnit = recoveryLocalePurityForDiagnostics
       ? recoveryLocalePurityForDiagnostics.detectedScriptByUnit
       : [];
+    diagnostics.recoveryFactPresentation = recoveryFactPresentationForDiagnostics;
     diagnostics.selectedFinalSummaryHash = selectedFinalSummaryHashForDiagnostics || undefined;
     diagnostics.selectedFinalSource = selectedFinalSourceForDiagnostics;
     diagnostics.visiblePreviewSummaryHash = selectedFinalSourceForDiagnostics === 'deterministic_v2_manifest'
       ? selectedFinalSummaryHashForDiagnostics
       : null;
     diagnostics.exportSummaryHash = selectedFinalSummaryHashForDiagnostics;
-    diagnostics.summaryRelationalOwnershipPassed = summaryV2ValidationForDiagnostics
-      ? summaryV2ValidationForDiagnostics.relationalOwnershipValidationPassed
+    // Terminal ownership describes the selected final Summary only. A rejected
+    // recovery candidate may have independently passed ownership before it
+    // failed locale/native validation; serializing that `true` at top level
+    // would falsely suggest an accepted final surface exists.
+    const selectedFinalV2Validation = selectedFinalSourceForDiagnostics
+      ? summaryV2ValidationForDiagnostics
       : null;
-    diagnostics.summaryRelationalOwnershipFailureReasons = summaryV2ValidationForDiagnostics
-      ? summaryV2ValidationForDiagnostics.relationalOwnershipFailureReasons
+    diagnostics.summaryRelationalOwnershipPassed = selectedFinalV2Validation
+      ? selectedFinalV2Validation.relationalOwnershipValidationPassed
+      : null;
+    diagnostics.summaryRelationalOwnershipFailureReasons = selectedFinalV2Validation
+      ? selectedFinalV2Validation.relationalOwnershipFailureReasons
       : [];
-    diagnostics.summaryFinalUnitOwnership = summaryV2ValidationForDiagnostics
-      ? summaryV2ValidationForDiagnostics.finalUnitOwnership.map((evidence) => ({
+    diagnostics.summaryFinalUnitOwnership = selectedFinalV2Validation
+      ? selectedFinalV2Validation.finalUnitOwnership.map((evidence) => ({
         unitHash: evidence.unitHash,
         roleSlot: evidence.roleSlot,
         owningEntryHash: evidence.owningEntryHash,
@@ -1274,7 +1509,9 @@ export function prepareExportReadyCv(
       // The immutable manifest intentionally retains source role labels. Build
       // the recovery from the target-native *presentation* labels first, then
       // run the unchanged V2 ownership/locale gate over that projection.
-      recoveryManifest = projectDeterministicRecoveryRoleSurfaces(summaryManifest);
+      const projection = projectDeterministicRecoveryPresentationSurfaces(summaryManifest);
+      recoveryManifest = projection.manifest;
+      recoveryFactPresentationForDiagnostics = projection.factPresentation;
       finalSummaryManifest = recoveryManifest;
       recovered = buildSummaryV2DeterministicText(recoveryManifest);
       summaryRecoverySource = 'deterministic_v2_manifest';
