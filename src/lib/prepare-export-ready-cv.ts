@@ -503,6 +503,9 @@ export type PreviewSummaryRenderEvidence = {
   selectedFinalSummaryHash: string | null;
   /** Identity of the visible/raw CV state from which Preview was terminalized. */
   previewSnapshotId?: string;
+  /** Hash of the saved/editor Summary before terminal recovery. */
+  previewSourceSummaryHash?: string;
+  /** Hash of the terminal Summary on the exact object supplied to the template. */
   previewInputSummaryHash?: string;
   /** Hash of the Summary on the exact data object committed to the template. */
   templatePreviewSummaryHash?: string;
@@ -589,14 +592,20 @@ export function describePreviewSummaryRender(
   appOwnedSummary: boolean,
   options?: {
     previewSnapshotId?: string;
+    previewSourceSummaryHash?: string;
     previewInputSummaryHash?: string;
+    selectedFinalSummaryHash?: string | null;
   },
 ): PreviewSummaryRenderEvidence {
   const rendered = hashSummaryV2Text(renderedCv.summary || '');
-  const selected = prepared?.diagnostics.selectedFinalSummaryHash || null;
+  const selected = options?.selectedFinalSummaryHash
+    || prepared?.diagnostics.selectedFinalSummaryHash
+    || null;
   const snapshotFields = options?.previewSnapshotId
     ? {
       previewSnapshotId: options.previewSnapshotId,
+      previewSourceSummaryHash: options.previewSourceSummaryHash
+        || hashSummaryV2Text(renderedCv.summary || ''),
       previewInputSummaryHash: options.previewInputSummaryHash
         || hashSummaryV2Text(renderedCv.summary || ''),
       templatePreviewSummaryHash: rendered,
@@ -612,7 +621,9 @@ export function describePreviewSummaryRender(
       ...snapshotFields,
     };
   }
-  if (!prepared?.ok || !selected || !(renderedCv.summary || '').trim()) {
+  if ((!prepared?.ok && !options?.selectedFinalSummaryHash)
+    || !selected
+    || !(renderedCv.summary || '').trim()) {
     return {
       previewRenderedSummaryHash: rendered,
       previewRenderAuthority: 'unresolved',

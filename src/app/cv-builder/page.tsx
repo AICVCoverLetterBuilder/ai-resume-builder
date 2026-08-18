@@ -180,7 +180,6 @@ import {
 import { prepareCreativeArtisticExport } from '@/lib/cv-export-integrity';
 import { prepareCorporateNavyExport } from '@/lib/corporate-navy-export-integrity';
 import {
-  applyAppOwnedSummaryPreviewTerminalSnapshot,
   buildPreviewSummarySnapshotId,
   commitPreviewSummaryLeafEvidence,
   describePreviewSummaryRender,
@@ -489,6 +488,18 @@ export default function CVBuilderPage() {
   const lastExportRawCvRef = useRef<CVData | null>(null);
   /** Exact Summary surface last committed to a Preview template render. */
   const lastPreviewSummaryRenderRef = useRef<PreviewSummaryRenderEvidence | null>(null);
+  /** Presentation-only result of the complete locale-safe PDF/DOCX pipeline. */
+  const [terminalPreviewPresentation, setTerminalPreviewPresentation] = useState<{
+    snapshotId: string;
+    status: 'ready' | 'failed';
+    cv: CVData | null;
+    selectedFinalSummaryHash: string | null;
+  } | null>(null);
+  const terminalPreviewRequestRef = useRef(0);
+  const prepareFinalLocaleSafeCvRef = useRef<((
+    sourceCv: CVData,
+    options?: { purpose?: 'export' | 'preview' },
+  ) => Promise<CVData>) | null>(null);
   const lastExperienceLocalizationRef = useRef<ExperienceLocalizationDiagnostics | null>(null);
   const experienceLocalizationAbortRef = useRef<AbortController | null>(null);
   const exportInFlightRef = useRef(false);
@@ -1134,13 +1145,27 @@ export default function CVBuilderPage() {
     locale,
     previewPrepareOptions,
   );
+  const matchingTerminalPreview = terminalPreviewPresentation?.snapshotId === previewInputSnapshotId
+    ? terminalPreviewPresentation
+    : null;
+  const previewDerivationInputCv = matchingTerminalPreview?.status === 'ready'
+    && matchingTerminalPreview.cv
+    ? matchingTerminalPreview.cv
+    : previewInputCv;
+  const previewSourceRuntimeCv = normalizeLegacyCvRuntime(previewInputCv, locale);
+  const previewSourceIsAppOwned = previewSourceRuntimeCv.summaryOrigin === 'deterministic_fallback'
+    || previewSourceRuntimeCv.summaryOrigin === 'ai_generated'
+    || previewSourceRuntimeCv.summaryOrigin === 'ai_repaired';
+  const terminalPreviewReady = Boolean(
+    matchingTerminalPreview?.status === 'ready' && matchingTerminalPreview.cv,
+  );
 
   const localizedPreviewPresentation = useMemo<{
     cv: CVData;
     summaryRender: PreviewSummaryRenderEvidence;
   }>(
     () => {
-      const migratedCv = normalizeLegacyCvRuntime(previewInputCv, locale);
+      const migratedCv = normalizeLegacyCvRuntime(previewDerivationInputCv, locale);
       const appOwnedPreviewSummary = migratedCv.summaryOrigin === 'deterministic_fallback'
         || migratedCv.summaryOrigin === 'ai_generated'
         || migratedCv.summaryOrigin === 'ai_repaired';
@@ -1170,29 +1195,22 @@ export default function CVBuilderPage() {
         qualityCv,
         presentation,
       );
-      // An app-owned V2 Summary that no longer binds to the current selected
-      // entries is not a usable Preview authority. Reuse the synchronous
-      // export terminalizer: it either returns the same safe deterministic V2
-      // snapshot used by PDF/DOCX or leaves this Summary explicitly unresolved.
-      // User-authored Summary prose never enters this recovery rule.
-      const synchronousPrepared = appOwnedPreviewSummary
-        ? prepareExportReadyCv(
-          terminalExperienceCv,
-          locale,
-          terminalExperienceCv.templateId,
-          previewPrepareOptions,
-        )
-        : null;
-      const previewPrepared = synchronousPrepared?.ok ? synchronousPrepared : null;
-      const summaryTerminalCv = previewPrepared
-        ? applyAppOwnedSummaryPreviewTerminalSnapshot(terminalPresentationCv, previewPrepared, {
-          // Provenance alone is enough to require a terminal result.  Do not
-          // let incomplete older diagnostics restore the stale saved textarea.
-          forceAppOwnedTerminal: appOwnedPreviewSummary,
-        })
-        : appOwnedPreviewSummary
-          ? { ...terminalPresentationCv, summary: '' }
-          : terminalPresentationCv;
+      // The async locale-safe pipeline has already established the selected
+      // final Summary. Content-quality may normalize other Preview fields, but
+      // it must not re-run Summary recovery against that post-final CV or
+      // replace its selected surface. User-authored Summary prose remains on
+      // the ordinary synchronous path.
+      const terminalSelectedSummaryHash = matchingTerminalPreview?.selectedFinalSummaryHash || null;
+      const summaryTerminalCv = appOwnedPreviewSummary
+        ? terminalPreviewReady && terminalSelectedSummaryHash
+          ? {
+            ...terminalPresentationCv,
+            summary: migratedCv.summary,
+            summaryOrigin: migratedCv.summaryOrigin,
+            summaryGeneratedLocale: migratedCv.summaryGeneratedLocale,
+          }
+          : { ...terminalPresentationCv, summary: '' }
+        : terminalPresentationCv;
       const localeSafeCv = omitInvalidLocalizedFieldsForPreview(summaryTerminalCv, locale);
       const base = {
         ...localeSafeCv,
@@ -1208,11 +1226,13 @@ export default function CVBuilderPage() {
         // it cannot be a pre-render selected-candidate surrogate.
         summaryRender: describePreviewSummaryRender(
           previewCv,
-          previewPrepared,
+          null,
           appOwnedPreviewSummary,
           {
             previewSnapshotId: previewInputSnapshotId,
-            previewInputSummaryHash: hashSummaryV2Text(migratedCv.summary || ''),
+            previewInputSummaryHash: hashSummaryV2Text(previewCv.summary || ''),
+            previewSourceSummaryHash: hashSummaryV2Text(previewSourceRuntimeCv.summary || ''),
+            selectedFinalSummaryHash: terminalSelectedSummaryHash,
           },
         ),
       });
@@ -1239,13 +1259,15 @@ export default function CVBuilderPage() {
     },
     [
       cv,
-      previewInputCv,
+      previewDerivationInputCv,
+      previewSourceRuntimeCv.summary,
       locale,
       circularPhotoDataUrl,
       rectangularPhotoDataUrl,
       validatedElegantFormalFallbackPhoto,
       previewInputSnapshotId,
-      previewPrepareOptions,
+      terminalPreviewReady,
+      matchingTerminalPreview?.selectedFinalSummaryHash,
     ],
   );
 
@@ -4039,7 +4061,10 @@ export default function CVBuilderPage() {
       setExportDiagTick((n) => n + 1);
     };
 
-    const prepareFinalLocaleSafeCv = async (sourceCv: CVData): Promise<CVData> => {
+    const prepareFinalLocaleSafeCv = async (
+      sourceCv: CVData,
+      options?: { purpose?: 'export' | 'preview' },
+    ): Promise<CVData> => {
       const editorSourceCv = sourceCv;
       lastExportRawCvRef.current = sourceCv;
       lastExportPrepareRef.current = null;
@@ -4156,6 +4181,12 @@ export default function CVBuilderPage() {
             if (!currentSnapshot.ok || currentSnapshot.snapshotId !== expectedSnapshotId) {
               return false;
             }
+            if ((options?.purpose || 'export') === 'preview') {
+              // Preview preparation may consume the validated in-memory
+              // projection returned by this operation, but it must not mutate
+              // the editor draft or its persisted localization caches.
+              return true;
+            }
             const safeNext = buildPersistableCvAfterExportPreparation(cvRef.current, nextCv);
             if (!exportDraftVisibleContentPreserved(cvRef.current, safeNext)) return false;
             const persisted = persistCurrentCvTransactionally(safeNext);
@@ -4216,12 +4247,23 @@ export default function CVBuilderPage() {
           computeExperienceLocalizationOperationDeadline(Date.now());
         const titleRepairContextByBatchKey = new Map<string, unknown>();
         const titleTransportDiagnostics: Partial<ExperienceLocalizationDiagnostics> = {};
+        const previewSelectedEntryIds = (options?.purpose || 'export') === 'preview'
+          ? new Set(
+            (sourceCv.experience || [])
+              .filter((entry) => (
+                prepared.diagnostics.summarySelectedEntryHashes || []
+              ).includes(hashSummaryV2Text(entry.id)))
+              .map((entry) => entry.id),
+          )
+          : undefined;
         const titleLocalization = await prepareExportLocalizedTitles({
           sourceCv,
           exportCv: recoveredCv,
           targetLocale: locale,
           gender: sourceCv.personal?.gender,
           getCurrentCv: () => cvRef.current,
+          experienceIds: previewSelectedEntryIds,
+          includePersonalTitle: (options?.purpose || 'export') === 'export',
           adapter: async (request: ExportTitleLocalizationTransportInput) => {
             const aiGate = getAiGate();
             if (aiGate.status !== 'ready') {
@@ -4401,12 +4443,34 @@ export default function CVBuilderPage() {
         // Title projection can increase Summary length or change role-context
         // metadata. Re-run the same canonical export validator on the complete
         // localized projection before any renderer or DOCX branch receives it.
-        const postTitlePrepared = prepareExportReadyCv(
-          titleLocalization.exportCv,
-          locale,
-          titleLocalization.exportCv.templateId,
-          prepareOptions,
+        const titleKey = (value: string) => value
+          .normalize('NFKC')
+          .replace(/\s+/gu, ' ')
+          .trim()
+          .toLocaleLowerCase();
+        const recoveredPositions = new Map(
+          (recoveredCv.experience || []).map((entry) => [entry.id, entry.position || '']),
         );
+        const titleProjectionChanged = (
+          (options?.purpose || 'export') === 'export'
+          && titleKey(titleLocalization.exportCv.personal?.jobTitle || '')
+            !== titleKey(recoveredCv.personal?.jobTitle || '')
+        )
+          || (titleLocalization.exportCv.experience || []).some(
+            (entry) => (!previewSelectedEntryIds || previewSelectedEntryIds.has(entry.id))
+              && titleKey(recoveredPositions.get(entry.id) || '')
+                !== titleKey(entry.position || ''),
+          )
+          || hashSummaryV2Text(titleLocalization.exportCv.summary || '')
+            !== hashSummaryV2Text(recoveredCv.summary || '');
+        const postTitlePrepared = titleProjectionChanged
+          ? prepareExportReadyCv(
+            titleLocalization.exportCv,
+            locale,
+            titleLocalization.exportCv.templateId,
+            prepareOptions,
+          )
+          : prepared;
         lastExportPrepareRef.current = postTitlePrepared;
         lastExperienceLocalizationRef.current = {
           ...(lastExperienceLocalizationRef.current || localization.diagnostics),
@@ -4421,7 +4485,7 @@ export default function CVBuilderPage() {
             `${postTitlePrepared.reason} @ title_post_projection_validation`,
           );
         }
-        if (sameSnapshotPreviewParityFailure({
+        if ((options?.purpose || 'export') === 'export' && sameSnapshotPreviewParityFailure({
           evidence: lastPreviewSummaryRenderRef.current,
           sourceCv: editorSourceCv,
           locale,
@@ -4460,9 +4524,11 @@ export default function CVBuilderPage() {
             'export-only content attempted to mutate the editor draft',
           );
         }
-        cvRef.current = groundingPersisted;
-        setCv(groundingPersisted);
-        setCurrentCv(groundingPersisted);
+        if ((options?.purpose || 'export') === 'export') {
+          cvRef.current = groundingPersisted;
+          setCv(groundingPersisted);
+          setCurrentCv(groundingPersisted);
+        }
 
         if (exportCv.templateId === 'creative-artistic') {
           return prepareCreativeArtisticExport(exportCv, locale, {
@@ -4479,6 +4545,58 @@ export default function CVBuilderPage() {
         throw wrapCvExportFailure(err, 'legacy_export_recovery_not_invoked');
       }
     };
+
+    prepareFinalLocaleSafeCvRef.current = prepareFinalLocaleSafeCv;
+
+    useEffect(() => {
+      const previewVisible = showPreview || step === steps.length - 1;
+      if (!previewVisible || !previewSourceIsAppOwned || matchingTerminalPreview) return;
+
+      const requestRevision = terminalPreviewRequestRef.current + 1;
+      terminalPreviewRequestRef.current = requestRevision;
+      const sourceSnapshotId = previewInputSnapshotId;
+      const sourceCv = resolveCvExportSourceAuthority(cvRef.current, cv.templateId);
+      const prepare = prepareFinalLocaleSafeCvRef.current;
+      if (!prepare) return;
+
+      void prepare(sourceCv, { purpose: 'preview' }).then((terminalCv) => {
+        if (terminalPreviewRequestRef.current !== requestRevision) return;
+        const currentSource = resolveCvExportSourceAuthority(cvRef.current, cv.templateId);
+        const currentSnapshotId = buildPreviewSummarySnapshotId(
+          currentSource,
+          locale,
+          previewPrepareOptions,
+        );
+        if (currentSnapshotId !== sourceSnapshotId) return;
+        setTerminalPreviewPresentation({
+          snapshotId: sourceSnapshotId,
+          status: 'ready',
+          cv: terminalCv,
+          selectedFinalSummaryHash: hashSummaryV2Text(terminalCv.summary || ''),
+        });
+      }).catch((error) => {
+        if (process.env.NODE_ENV !== 'production') {
+          console.warn('[CV Preview] terminal preparation failed', error);
+        }
+        if (terminalPreviewRequestRef.current !== requestRevision) return;
+        setTerminalPreviewPresentation({
+          snapshotId: sourceSnapshotId,
+          status: 'failed',
+          cv: null,
+          selectedFinalSummaryHash: null,
+        });
+      });
+    }, [
+      cv.templateId,
+      locale,
+      matchingTerminalPreview,
+      previewInputSnapshotId,
+      previewPrepareOptions,
+      previewSourceIsAppOwned,
+      showPreview,
+      step,
+      steps.length,
+    ]);
 
     const handleDOCXDownload = async () => {
       if (!canDownload('cv')) {

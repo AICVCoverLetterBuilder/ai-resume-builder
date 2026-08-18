@@ -179,10 +179,14 @@ function validLocalizedTitle(options: {
     || detected === null;
 }
 
-function fieldRefs(cv: CVData, targetLocale: Locale): TitleFieldRef[] {
+function fieldRefs(
+  cv: CVData,
+  targetLocale: Locale,
+  options?: { experienceIds?: ReadonlySet<string>; includePersonalTitle?: boolean },
+): TitleFieldRef[] {
   const refs: TitleFieldRef[] = [];
   const header = canonical(cv.personal?.jobTitle || '');
-  if (header) {
+  if (header && options?.includePersonalTitle !== false) {
     const current = (cv.experience || []).find((exp) => exp.isPresent)
       || (cv.experience || [])[0];
     refs.push({
@@ -195,6 +199,7 @@ function fieldRefs(cv: CVData, targetLocale: Locale): TitleFieldRef[] {
     });
   }
   for (const exp of cv.experience || []) {
+    if (options?.experienceIds && !options.experienceIds.has(exp.id)) continue;
     const title = canonical(exp.position || '');
     if (!title) continue;
     refs.push({
@@ -418,17 +423,24 @@ export async function prepareExportLocalizedTitles(options: {
   gender?: string;
   adapter: ExportTitleLocalizationAdapter;
   getCurrentCv?: () => CVData;
+  experienceIds?: ReadonlySet<string>;
+  includePersonalTitle?: boolean;
 }): Promise<PrepareExportLocalizedTitlesResult> {
   const gender = String(options.gender || '');
-  const refs = fieldRefs(options.sourceCv, options.targetLocale);
+  const refs = fieldRefs(options.sourceCv, options.targetLocale, {
+    experienceIds: options.experienceIds,
+    includePersonalTitle: options.includePersonalTitle,
+  });
   const units = buildUnits(refs, options.targetLocale, gender);
   const store = usableStore(options.sourceCv);
   const activeSourceHashes = new Set(units.map((unit) => hashText(unit.sourceTitle)));
-  const nextSurfaces = Object.fromEntries(
-    Object.entries(store.surfaces).filter(([, surface]) => (
-      activeSourceHashes.has(surface.sourceTitleHash)
-    )),
-  );
+  const nextSurfaces = options.experienceIds
+    ? { ...store.surfaces }
+    : Object.fromEntries(
+      Object.entries(store.surfaces).filter(([, surface]) => (
+        activeSourceHashes.has(surface.sourceTitleHash)
+      )),
+    );
   const localizedByUnit = new Map<string, string>();
   const sourceLocaleByField = Object.fromEntries(refs.map((ref) => [ref.fieldKey, ref.sourceLocale]));
   let sameLocaleCount = 0;

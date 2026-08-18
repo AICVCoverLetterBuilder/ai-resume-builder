@@ -205,6 +205,7 @@ export type CvExportDiagnosticTrace = {
   /** A selected-final Preview witness must equal this export's selected final. */
   previewSelectedFinalParityPassed?: boolean | null;
   previewSnapshotId?: string | null;
+  previewSourceSummaryHash?: string | null;
   previewInputSummaryHash?: string | null;
   templatePreviewSummaryHash?: string | null;
   templateLeafSummaryHash?: string | null;
@@ -366,7 +367,7 @@ export function resolveCvExportToastMappingKey(
   if (/summary_title_localization_conflict|forced-conflicting-title|invalid_occupational_title|duty_family_mismatch/i.test(reason)) {
     return 'TITLE_CONFLICT';
   }
-  if (/legacy_export_recovery_not_invoked|legacy_export_recovery_snapshot_overwritten|legacy_recovered_snapshot_overwritten|modern_minimal_stale_snapshot|modern_minimal_used_stale_snapshot|localized_display_projection_incomplete/i.test(reason)) {
+  if (/preview_render_mismatch|legacy_export_recovery_not_invoked|legacy_export_recovery_snapshot_overwritten|legacy_recovered_snapshot_overwritten|modern_minimal_stale_snapshot|modern_minimal_used_stale_snapshot|localized_display_projection_incomplete/i.test(reason)) {
     return 'LEGACY_SNAPSHOT_REVIEW';
   }
   if (/legacy_export_recovery_no_safe_duties|legacy_grounding_source_missing|legacy_grounding_recovery_failed|legacy_grounding_recovery_empty|semantic_duty_fact_set_empty|legacy_user_origin_recovery_|experience_localization_/i.test(reason)) {
@@ -656,6 +657,7 @@ export type BuildCvExportTraceInput = {
     previewRenderAuthority: 'selected_final' | 'manual_saved' | 'unresolved' | 'render_mismatch';
     selectedFinalSummaryHash: string | null;
     previewSnapshotId?: string;
+    previewSourceSummaryHash?: string;
     previewInputSummaryHash?: string;
     templatePreviewSummaryHash?: string;
     templateLeafSummaryHash?: string | null;
@@ -938,6 +940,7 @@ export function buildAndStoreCvExportDiagnostic(input: BuildCvExportTraceInput):
       : input.previewSummaryRender?.previewRenderAuthority ?? null,
     previewSelectedFinalParityPassed,
     previewSnapshotId: input.previewSummaryRender?.previewSnapshotId ?? null,
+    previewSourceSummaryHash: input.previewSummaryRender?.previewSourceSummaryHash ?? null,
     previewInputSummaryHash: input.previewSummaryRender?.previewInputSummaryHash ?? null,
     templatePreviewSummaryHash: input.previewSummaryRender?.templatePreviewSummaryHash ?? null,
     templateLeafSummaryHash: input.previewSummaryRender?.templateLeafSummaryHash ?? null,

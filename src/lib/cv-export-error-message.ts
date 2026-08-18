@@ -145,7 +145,7 @@ function isTitleConflictReason(reason: string): boolean {
 }
 
 function isExportWiringReason(reason: string): boolean {
-  return /legacy_export_recovery_not_invoked|legacy_export_recovery_snapshot_overwritten|modern_minimal_stale_snapshot|modern_minimal_used_stale_snapshot|localized_display_projection_incomplete|summary_fact_set_used_stale_experience/i.test(reason);
+  return /preview_render_mismatch|legacy_export_recovery_not_invoked|legacy_export_recovery_snapshot_overwritten|modern_minimal_stale_snapshot|modern_minimal_used_stale_snapshot|localized_display_projection_incomplete|summary_fact_set_used_stale_experience/i.test(reason);
 }
 
 function isSummaryFactsReason(reason: string): boolean {
