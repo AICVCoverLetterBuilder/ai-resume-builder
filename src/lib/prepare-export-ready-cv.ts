@@ -65,9 +65,11 @@ import {
 } from './cv-material-duty-coverage';
 import { validateSourceFactIdentityCoverage } from './cv-source-fact-identity';
 import {
+  canUseLegacyExperienceDisplayProjection,
   projectExperienceFromLocalizedSurfaces,
   resolveExperiencePresentationSnapshot,
   type ExperiencePresentationRecord,
+  type ExperiencePresentationSnapshot,
 } from './cv-experience-localized-surfaces';
 import {
   resolveSummaryCurrentTextAuthority,
@@ -153,6 +155,8 @@ export type ExportReadyDiagnostics = {
   summaryRequiredFactHashes?: Array<{ owningEntryHash: string; factHash: string }>;
   /** Same entry-owned presentation snapshot contract consumed by preview/PDF/DOCX. */
   experiencePresentation?: ExperiencePresentationRecord[];
+  /** Non-PII identity of the exact terminal Experience presentation snapshot. */
+  experiencePresentationSnapshotId?: string;
   occupationGenericFallbackUsed?: boolean;
   unsupportedRoleSpecificClaimReason?: string;
   durationCompositionSource?: string;
@@ -533,6 +537,10 @@ export function prepareExportReadyCv(
     level: exportLevel,
   });
   let stage: ExportReadyStage = 'normalize_runtime';
+  // Once selected, this terminal per-entry decision must survive every later
+  // Summary/export failure diagnostic. A later gate may fail the export, but
+  // it must not erase the already-evaluated presentation truth.
+  let terminalExperiencePresentation: ExperiencePresentationSnapshot | null = null;
 
   const baseDiagnostics = (): ExportReadyDiagnostics => ({
     selectedTemplateId,
@@ -545,6 +553,10 @@ export function prepareExportReadyCv(
     summarySemanticDutyKeys: [],
     summaryWordBudgetCompactionRevision: SUMMARY_EXPORT_WORD_BUDGET_COMPACTION_REVISION,
     summaryCurrentTextAuthorityRevision: SUMMARY_CURRENT_TEXT_AUTHORITY_REVISION,
+    ...(terminalExperiencePresentation ? {
+      experiencePresentation: terminalExperiencePresentation.records,
+      experiencePresentationSnapshotId: terminalExperiencePresentation.presentationSnapshotId,
+    } : {}),
     stage,
   });
 
@@ -783,6 +795,13 @@ export function prepareExportReadyCv(
   cv = {
     ...cv,
     experience: (cv.experience || []).map((exp) => {
+      // Immutable AI/deterministic display surfaces are resolved exclusively
+      // by the shared terminal presentation contract below.  The legacy
+      // formatter is retained for user/manual paths, but must never synthesize
+      // a target-looking value that hides a missing source-bound projection.
+      if (!canUseLegacyExperienceDisplayProjection(exp)) {
+        return exp;
+      }
       const grounding = groundingById.get(exp.id) || { source: 'none' as const, duties: [] };
       const projected = projectExperienceDisplayFromSemanticDuties(
         exp,
@@ -802,12 +821,14 @@ export function prepareExportReadyCv(
     cv,
     targetLocale: requestedLocale,
   });
+  terminalExperiencePresentation = presentationSnapshot;
   if (!presentationSnapshot.ok) {
     const diagnostics = baseDiagnostics();
     diagnostics.recoveryInvoked = recoveryInvoked;
     diagnostics.runtimeMigrationVersion = cv.runtimeMigrationVersion;
     diagnostics.experienceProvenance = buildProvenanceRows(cv, groundingById);
     diagnostics.experiencePresentation = presentationSnapshot.records;
+    diagnostics.experiencePresentationSnapshotId = presentationSnapshot.presentationSnapshotId;
     diagnostics.summarySemanticDutyKeys = [...new Set(allKeys)];
     return fail('localized_display_projection_incomplete', stage, diagnostics);
   }
@@ -1390,6 +1411,7 @@ export function prepareExportReadyCv(
     summaryOmittedEntryHashes,
     summaryRequiredFactHashes,
     experiencePresentation: presentationSnapshot.records,
+    experiencePresentationSnapshotId: presentationSnapshot.presentationSnapshotId,
     occupationGenericFallbackUsed,
     unsupportedRoleSpecificClaimReason,
     durationCompositionSource,

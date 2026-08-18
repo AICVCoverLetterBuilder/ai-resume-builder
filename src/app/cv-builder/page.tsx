@@ -201,6 +201,7 @@ import { loadCvDraft } from '@/lib/draft-storage';
 import { terminalizeAiDiagnosticSession } from '@/lib/cv-ai-diagnostics-terminalize';
 import {
   EXPERIENCE_LOCALIZATION_MAX_SOURCE_TEXT_CHARS,
+  applyTerminalExperiencePresentationSnapshot,
   buildExperienceLocalizationSnapshot,
   experienceDescriptionLocalizationLimitViolation,
   prepareExperienceLocalizedSurfaces,
@@ -1113,7 +1114,15 @@ export default function CVBuilderPage() {
         gender: migratedCv.personal?.gender,
         summaryOrigin: migratedCv.summaryOrigin,
       }).cv;
-      const localeSafeCv = omitInvalidLocalizedFieldsForPreview(qualityCv, locale);
+      // The shared presentation snapshot is terminal for Experience display.
+      // Content-quality normalization is allowed to improve other fields, but
+      // must never reconstruct a source-language description after that entry
+      // was intentionally unresolved by the target-aware presentation contract.
+      const terminalPresentationCv = applyTerminalExperiencePresentationSnapshot(
+        qualityCv,
+        presentation,
+      );
+      const localeSafeCv = omitInvalidLocalizedFieldsForPreview(terminalPresentationCv, locale);
       const base = {
         ...localeSafeCv,
         skills: localeSafeCv.skills.map((skill) => getLocalizedCvSkillName(skill, locale)),

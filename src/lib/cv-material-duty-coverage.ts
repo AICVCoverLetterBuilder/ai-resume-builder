@@ -1445,7 +1445,7 @@ const EXTRA_DUTY_CLAIMS: Array<{ label: string; claim: RegExp; support: RegExp }
   {
     label: 'quality_claim',
     claim: /(?:provjer\w*|prover\w*|pregled\w*|kontrola?|check(?:s|ing)?|inspect(?:s|ion|ing)?).{0,24}(?:kvalitet|quality)|(?:kvalitet|quality).{0,24}(?:provjer|prover|pregled|kontrol|check|inspect)|(?:kontrola?\s+kvalitet|quality\s+(?:control|inspection|assurance)|provjer\w*\s+kvalitet|prover\w*\s+kvalitet)/iu,
-    support: /(?:kvalitet|quality\s+(?:control|inspection|assurance|check)|kontrola?\s+kvalitet|qc\b|गुणवत्ता|परिणाम)/iu,
+    support: /(?:kvalitet|quality\s+(?:control|inspection|assurance|check)|kontrola?\s+kvalitet|qc\b|गुणवत्ता|परिणाम|جودة|مخرجات|نتائج\s+نهائية)/iu,
   },
   {
     label: 'standards_compliance_claim',
@@ -1461,7 +1461,7 @@ const EXTRA_DUTY_CLAIMS: Array<{ label: string; claim: RegExp; support: RegExp }
     label: 'organization_responsibility_claim',
     // Verb stems only — do not treat adjective "organizirano" as escalation.
     claim: /\b(?:organizira(?:la|lo|li|ju)?|organizuje|organizovala|organizovao|organises?|organizes?)\b/iu,
-    support: /\b(?:organizira(?:la|lo|li|ju|ti)?|organizuje(?:m|š|mo|te|ju)?|organizovala|organizovao|organise[ds]?|organizes?|organising|organizing)\b/iu,
+    support: /(?:\b(?:organizira(?:la|lo|li|ju|ti)?|organizuje(?:m|š|mo|te|ju)?|organizovala|organizovao|organise[ds]?|organizes?|organising|organizing)\b|نظم(?:ت|تُ|تْ|ين|وا)?)/iu,
   },
   {
     label: 'leadership_claim',

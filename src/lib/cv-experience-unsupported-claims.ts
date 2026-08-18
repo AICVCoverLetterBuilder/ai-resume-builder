@@ -68,7 +68,7 @@ function norm(text: string): string {
 }
 
 function hasQualitySupport(source: string): boolean {
-  return /(?:kvalitet|Qualität|qualit(?:y|ät)|quality\s+(?:control|inspection|assurance|check)|kontrola?\s+kvalitet|qc\b|Qualitäts(?:kontrolle|prüfung|sicherung)|गुणवत्ता|परिणाम)/iu
+  return /(?:kvalitet|Qualität|qualit(?:y|ät)|quality\s+(?:control|inspection|assurance|check)|kontrola?\s+kvalitet|qc\b|Qualitäts(?:kontrolle|prüfung|sicherung)|गुणवत्ता|परिणाम|جودة|مخرجات|نتائج\s+نهائية)/iu
     .test(source);
 }
 
@@ -151,7 +151,7 @@ export function extractExperienceSemanticArgumentKinds(
 
 function hasOrganizationVerbSupport(source: string): boolean {
   // Verb stems only — adjective "organiziran(o)" is not ownership escalation.
-  return /\b(?:organizira(?:la|lo|li|ju|ti)?|organizuje(?:m|š|mo|te|ju)?|organizovala|organizovao|organizz\w*|organise[ds]?|organizes?|organising|organizing|verantwortlich\s+für|Steuerung|Überwachung)\b/iu
+  return /(?:\b(?:organizira(?:la|lo|li|ju|ti)?|organizuje(?:m|š|mo|te|ju)?|organizovala|organizovao|organizz\w*|organise[ds]?|organizes?|organising|organizing|verantwortlich\s+für|Steuerung|Überwachung)\b|نظم(?:ت|تُ|تْ|ين|وا)?)/iu
     .test(source);
 }
 

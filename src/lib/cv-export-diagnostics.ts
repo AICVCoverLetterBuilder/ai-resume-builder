@@ -87,29 +87,40 @@ export type CvExportExperienceDiag = {
   recoveredDutyCount: number;
   visibleLocalizedBulletCount: number;
   canonicalShellCount: number;
-  finalProjectedBulletCount: number;
-  finalBulletScripts: string[];
+  finalProjectedBulletCount: number | null;
+  /** Immutable fact-authority script evidence, separate from rendered target bullets. */
+  sourceBulletScripts: string[] | null;
+  /** Script evidence for the exact final target-presentation bullets. */
+  finalPresentationBulletScripts: string[] | null;
+  /** @deprecated Alias retained for readers that expect final presentation scripts. */
+  finalBulletScripts: string[] | null;
   /** Target-locale projection evidence, stored as metadata/hashes only. */
+  presentationSnapshotId: string | null;
   owningEntryHash: string;
   currentVisibleDescriptionHash: string;
+  /** Immutable same-entry source/fact locale. */
   sourceLocale: string | null;
-  projectionRequired: boolean;
-  presentationAuthority: 'current_visible' | 'validated_target_projection' | 'same_entry_semantic_recovery' | 'unresolved';
-  recoveryAttempted: boolean;
+  /** Explicit immutable fact-authority locale; `sourceLocale` remains its legacy alias. */
+  immutableGroundingLocale: string | null;
+  /** Locale of the most recent current/generated display surface. */
+  currentPresentationLocale: string | null;
+  projectionRequired: boolean | null;
+  presentationAuthority: 'current_visible' | 'validated_target_projection' | 'same_entry_semantic_recovery' | 'unresolved' | null;
+  recoveryAttempted: boolean | null;
   recoveryKind: 'same_entry_semantic_recovery' | 'validated_target_projection' | null;
   presentationRejectionReason: string | null;
-  presentationTargetLocale: string;
-  presentationHash: string;
-  finalPresentationHash: string;
+  presentationTargetLocale: string | null;
+  presentationHash: string | null;
+  finalPresentationHash: string | null;
   presentationRequiredFactCount: number | null;
   presentationCoveredFactCount: number | null;
   presentationMissingFactCount: number | null;
   presentationFactCoveragePassed: boolean | null;
-  immutableFactAuthorityHash: string;
+  immutableFactAuthorityHash: string | null;
   finalBulletDetectedLocales: Array<string | null>;
-  sourceLanguageLeakageDetected: boolean;
-  crossEntryOwnershipPassed: boolean;
-  renderDutyProjectionUsed: boolean;
+  sourceLanguageLeakageDetected: boolean | null;
+  crossEntryOwnershipPassed: boolean | null;
+  renderDutyProjectionUsed: boolean | null;
   renderDutyProjectionRevision?: string;
 };
 
@@ -167,6 +178,8 @@ export type CvExportDiagnosticTrace = {
   androidSaveReached: boolean;
   saveResult: SaveFileResult['result'] | null;
   exportReadySnapshotId: string;
+  /** Exact target-aware Experience terminal snapshot shared by Preview/PDF/DOCX when prepared. */
+  experiencePresentationSnapshotId?: string;
   /** Source-bound Experience localization metadata only; contains no CV prose or raw entry IDs. */
   experienceLocalization?: ExperienceLocalizationDiagnostics & { usageDelta: 0 };
   ok: boolean;
@@ -358,16 +371,17 @@ function experienceDiag(
   const original = (exp.originalUserDescription || '').trim();
   const canonical = (exp.canonicalDescription || '').trim();
   const displayForCount = visible || generated;
-  const renderDescription = getExperienceExportRenderDescription(exp, locale);
-  const finalBullets = splitExperienceBullets(renderDescription);
-  // Successful prepared exports carry the authoritative per-bullet locale
-  // evidence in `presentation`; failure snapshots intentionally expose null
-  // evidence rather than re-running a validator after the terminal phase.
-  const targetPurity = {
-    detectedLocaleByUnit: finalBullets.map(() => null as string | null),
-    sourceLanguageLeakageDetected: false,
-  };
-  const renderDutyProjectionUsed = renderDescription !== String(exp.description || '');
+  // A final presentation does not exist until the shared terminal snapshot
+  // exists. Do not derive final hashes/scripts/counts from raw/editor text on
+  // an earlier failure path: that would falsely label foreign source prose as
+  // a selected target presentation. Successful prepared exports carry both
+  // source and final script evidence directly from that one snapshot.
+  const renderDescription = presentation
+    ? getExperienceExportRenderDescription(exp, locale)
+    : '';
+  const renderDutyProjectionUsed = presentation
+    ? renderDescription !== String(exp.description || '')
+    : null;
   return {
     index,
     hasOriginalUserDescription: Boolean(original),
@@ -393,31 +407,33 @@ function experienceDiag(
     recoveredDutyCount: recoveredKeys.length,
     visibleLocalizedBulletCount: shellCount(displayForCount),
     canonicalShellCount: shellCount(original || canonical),
-    finalProjectedBulletCount: finalBullets.length,
-    finalBulletScripts: finalBullets.map((bullet) => classifyBulletScript(bullet, locale)),
+    finalProjectedBulletCount: presentation?.finalPresentationBulletCount ?? null,
+    sourceBulletScripts: presentation?.sourceBulletScripts || null,
+    finalPresentationBulletScripts: presentation?.finalPresentationBulletScripts || null,
+    finalBulletScripts: presentation?.finalPresentationBulletScripts || null,
+    presentationSnapshotId: presentation?.presentationSnapshotId || null,
     owningEntryHash: presentation?.owningEntryHash || fingerprintText(exp.id),
     currentVisibleDescriptionHash: presentation?.currentVisibleDescriptionHash
       || fingerprintText(visible),
     sourceLocale: presentation?.sourceLocale || null,
-    projectionRequired: presentation?.projectionRequired || false,
-    presentationAuthority: presentation?.presentationAuthority || 'current_visible',
-    recoveryAttempted: presentation?.recoveryAttempted || false,
+    immutableGroundingLocale: presentation?.immutableGroundingLocale || null,
+    currentPresentationLocale: presentation?.currentPresentationLocale || null,
+    projectionRequired: presentation?.projectionRequired ?? null,
+    presentationAuthority: presentation?.presentationAuthority ?? null,
+    recoveryAttempted: presentation?.recoveryAttempted ?? null,
     recoveryKind: presentation?.recoveryKind || null,
     presentationRejectionReason: presentation?.rejectionReason || null,
-    presentationTargetLocale: presentation?.targetLocale || locale,
-    presentationHash: presentation?.selectedPresentationHash || fingerprintText(renderDescription),
-    finalPresentationHash: presentation?.finalPresentationHash || fingerprintText(renderDescription),
+    presentationTargetLocale: presentation?.targetLocale ?? null,
+    presentationHash: presentation?.selectedPresentationHash ?? null,
+    finalPresentationHash: presentation?.finalPresentationHash ?? null,
     presentationRequiredFactCount: presentation?.requiredFactCount ?? null,
     presentationCoveredFactCount: presentation?.coveredFactCount ?? null,
     presentationMissingFactCount: presentation?.missingFactCount ?? null,
     presentationFactCoveragePassed: presentation?.factCoveragePassed ?? null,
-    immutableFactAuthorityHash: presentation?.immutableFactSetHash
-      || fingerprintText(original || canonical),
-    finalBulletDetectedLocales: presentation?.detectedLocaleByBullet
-      || targetPurity.detectedLocaleByUnit,
-    sourceLanguageLeakageDetected: presentation?.sourceLanguageLeakageDetected
-      ?? targetPurity.sourceLanguageLeakageDetected,
-    crossEntryOwnershipPassed: presentation?.crossEntryOwnershipPassed ?? true,
+    immutableFactAuthorityHash: presentation?.immutableFactSetHash ?? null,
+    finalBulletDetectedLocales: presentation?.detectedLocaleByBullet || [],
+    sourceLanguageLeakageDetected: presentation?.sourceLanguageLeakageDetected ?? null,
+    crossEntryOwnershipPassed: presentation?.crossEntryOwnershipPassed ?? null,
     renderDutyProjectionUsed,
     renderDutyProjectionRevision: renderDutyProjectionUsed
       ? CV_EXPORT_RENDER_DUTY_PROJECTION_REVISION
@@ -825,6 +841,7 @@ export function buildAndStoreCvExportDiagnostic(input: BuildCvExportTraceInput):
     androidSaveReached: Boolean(input.androidSaveReached),
     saveResult: input.saveResult?.result ?? null,
     exportReadySnapshotId: snapshotId,
+    experiencePresentationSnapshotId: diag?.experiencePresentationSnapshotId,
     experienceLocalization: localization
       ? { ...localization, usageDelta: 0 }
       : undefined,

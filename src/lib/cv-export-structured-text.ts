@@ -1,7 +1,7 @@
 import type { CVData, WorkExperience } from './types';
 import type { Locale } from './i18n/translations';
 import { localesEquivalent } from './cv-content-locale';
-import { formatExperienceBullets } from './cv-canonical-facts';
+import { formatExperienceBullets, splitExperienceBullets } from './cv-canonical-facts';
 
 export const CV_EXPORT_STRUCTURED_TEXT_REVISION =
   'cv-export-structured-text-405-v1' as const;
@@ -116,7 +116,27 @@ function exactRecoveredUserOriginClauses(entry: WorkExperience, locale: Locale):
   if (locales.length > 1) return null;
   const sourceLocale = locales[0] || String(entry.descriptionSourceLocale || '').trim();
   if (!sourceLocale || !localesEquivalent(sourceLocale, locale)) return null;
-  return duties.map((duty) => String(duty.sourceClause || '').trim()).filter(Boolean);
+  const recoveredClauses = duties
+    .map((duty) => String(duty.sourceClause || '').trim())
+    .filter(Boolean);
+  const visibleClauses = splitExperienceBullets(entry.description || '');
+  const normalizeClause = (value: string) => value.normalize('NFKC').replace(/\s+/g, ' ').trim();
+  const visibleMatchesRecoveredUnits = (
+    visibleClauses.length !== recoveredClauses.length
+      ? false
+      : visibleClauses.every((clause, index) => (
+      normalizeClause(clause) === normalizeClause(recoveredClauses[index] || '')
+    ))
+  );
+  // Legacy prose stored exact source clauses as one space-separated textarea
+  // even though renderers need the same clauses as bullets. Preserve that
+  // established projection while still refusing a materially edited surface.
+  const visibleMatchesRecoveredProse = normalizeClause(entry.description || '')
+    === normalizeClause(recoveredClauses.join(' '));
+  if (!visibleMatchesRecoveredUnits && !visibleMatchesRecoveredProse) {
+    return null;
+  }
+  return recoveredClauses;
 }
 
 /**

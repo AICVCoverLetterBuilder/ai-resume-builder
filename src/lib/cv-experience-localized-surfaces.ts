@@ -1,21 +1,33 @@
-import { formatExperienceBullets, splitExperienceBullets } from './cv-canonical-facts';
-import { buildFactSetFromExperienceDescription } from './cv-canonical-facts';
+import {
+  buildFactSetFromExperienceDescription,
+  formatExperienceBullets,
+  splitExperienceBullets,
+} from './cv-canonical-facts';
 import { validateAiUnitLocalePurity } from './cv-ai-unit-locale-purity';
 import { detectExperienceUnsupportedClaimExpansion } from './cv-experience-unsupported-claims';
 import { validateCrossEntryExperienceLeakage } from './cv-experience-entry-isolation';
-import { localesEquivalent } from './cv-content-locale';
-import { resolveExperienceSourceLocale } from './cv-experience-source-locale';
+import { detectTextLocale, localesEquivalent } from './cv-content-locale';
+import {
+  hashExperienceSourceLocaleText,
+  resolveExperienceSourceLocale,
+} from './cv-experience-source-locale';
+import { resolveExperienceGroundingDescription } from './cv-experience-provenance';
+import { resolveExperienceTextareaProvenance } from './cv-experience-ai-output-provenance';
 import {
   isAcceptableExperiencePresentationPurity,
   recoverExperiencePresentationFromSource,
 } from './cv-content-quality';
 import { validateLocalizedExperienceBullets } from './cv-semantic-fidelity';
 import {
+  buildCrossLocaleExperienceFallback,
+  validateCrossLocaleSemanticCoverage,
+} from './cv-cross-locale-experience';
+import {
   recoverSemanticDutiesFromUserOrigin,
   type ExperienceSemanticGrounding,
   type RecoveredSemanticDuty,
 } from './cv-semantic-duty-facts';
-import type { Locale } from './i18n/translations';
+import { resolveLocaleCandidate, type Locale } from './i18n/translations';
 import type { CVData, WorkExperience } from './types';
 
 export const EXPERIENCE_LOCALIZED_SURFACE_STORE_SCHEMA = 1 as const;
@@ -77,10 +89,17 @@ export type ExperiencePresentationAuthority =
   | 'unresolved';
 
 export type ExperiencePresentationRecord = {
+  /** Non-PII identity of the ordered terminal snapshot shared by Preview/PDF/DOCX. */
+  presentationSnapshotId: string;
   owningEntryHash: string;
   currentVisibleDescriptionHash: string;
   immutableFactSetHash: string;
+  /** Locale of immutable entry-owned facts, never inferred from generated display text. */
   sourceLocale: string | null;
+  /** Explicit immutable fact-authority locale; `sourceLocale` remains its legacy alias. */
+  immutableGroundingLocale: string | null;
+  /** Locale of the current editor/display surface, kept separate from fact authority. */
+  currentPresentationLocale: string | null;
   targetLocale: Locale;
   projectionRequired: boolean;
   presentationAuthority: ExperiencePresentationAuthority;
@@ -89,12 +108,18 @@ export type ExperiencePresentationRecord = {
   rejectionReason: string | null;
   selectedPresentationHash: string;
   finalPresentationHash: string;
+  /** Count of the exact final terminal units used to calculate final scripts/hashes. */
+  finalPresentationBulletCount: number;
   requiredFactCount: number | null;
   coveredFactCount: number | null;
   missingFactCount: number | null;
   factCoveragePassed: boolean | null;
   detectedLocaleByBullet: Array<string | null>;
   detectedScriptByBullet: string[];
+  /** Script evidence for immutable authority units, not for the selected display. */
+  sourceBulletScripts: string[];
+  /** Script evidence for the final selected presentation units. */
+  finalPresentationBulletScripts: string[];
   mixedLanguageBulletCount: number;
   sourceLanguageLeakageDetected: boolean;
   crossEntryOwnershipPassed: boolean;
@@ -103,15 +128,320 @@ export type ExperiencePresentationRecord = {
 export type ExperiencePresentationSnapshot = {
   cv: CVData;
   records: ExperiencePresentationRecord[];
+  /** Stable target-aware identity of this terminal per-entry presentation decision. */
+  presentationSnapshotId: string;
   ok: boolean;
 };
 
+/**
+ * Restores the terminal per-entry presentation surface after a consumer has
+ * performed unrelated display normalization.  Preview uses this after its
+ * quality pass so that a blank unresolved projection cannot be refilled from
+ * original/canonical source text.  Matching by stable entry ID avoids index
+ * splicing if an upstream consumer reorders Experience entries.
+ */
+export function applyTerminalExperiencePresentationSnapshot(
+  cv: CVData,
+  presentation: ExperiencePresentationSnapshot,
+): CVData {
+  const descriptions = new Map(
+    (presentation.cv.experience || []).map((entry) => [entry.id, entry.description || '']),
+  );
+  return {
+    ...cv,
+    experience: (cv.experience || []).map((entry) => ({
+      ...entry,
+      description: descriptions.get(entry.id) || '',
+    })),
+  };
+}
+
+/**
+ * The existing `recoverSemanticDutiesFromUserOrigin` contract intentionally
+ * follows the current manual textarea.  Export localization also needs a
+ * separate lane for unedited AI/deterministic display text: its immutable
+ * pre-AI/canonical facts remain the only valid source for a target projection.
+ */
+type ExperiencePresentationGrounding = {
+  source: 'user_origin_recovered' | 'immutable_fact_authority' | 'none';
+  duties: ExperiencePresentationDuty[];
+  authorityText: string;
+  authorityTextHash: string;
+  sourceLocale: Locale | null;
+  sourceLocaleResolution: string;
+  recoveryFailureReason?: string;
+};
+
+/**
+ * The immutable presentation lane has its own provenance resolutions.  Keep
+ * them structurally separate from `RecoveredSemanticDuty`, whose resolution
+ * enum deliberately describes the current manual-text lane.
+ */
+type ExperiencePresentationDuty = Omit<RecoveredSemanticDuty, 'sourceLocaleResolution'> & {
+  sourceLocaleResolution?: string;
+};
+
+type ExperienceLocalizationDuty = Pick<
+  ExperiencePresentationDuty,
+  'key' | 'sourceClauseIndex' | 'sourceClause' | 'sourceClauseHash' | 'sourceFactId'
+  | 'experienceId' | 'sourceLocale' | 'sourceLocaleResolution'
+>;
+
+function clausesMatchPresentationAuthority(left: string[], right: string[]): boolean {
+  return left.length > 0
+    && left.length === right.length
+    && left.every((clause, index) => (
+      canonicalizeExperienceLocalizationText(clause)
+        === canonicalizeExperienceLocalizationText(right[index] || '')
+    ));
+}
+
+/**
+ * The old export projector predates per-entry terminal presentation records.
+ * It may operate only on positively identified manual/current authority. A
+ * stale unlabeled generated value must not be promoted merely because it can
+ * be mechanically made target-looking; the terminal resolver will instead
+ * use a bound immutable lane or fail closed.
+ */
+export function canUseLegacyExperienceDisplayProjection(exp: WorkExperience): boolean {
+  if (exp.descriptionOrigin === 'user') return true;
+  if (exp.descriptionOrigin) return false;
+  if (exp.generatedDescription || exp.aiOutputProvenance?.lastAiOutputNormalizedHash) return false;
+  const currentUnits = splitExperienceBullets(exp.description || '');
+  if (!currentUnits.length) return false;
+  const originalUnits = splitExperienceBullets(exp.originalUserDescription || '');
+  const canonicalUnits = splitExperienceBullets(exp.canonicalDescription || '');
+  // A legacy record without an explicit origin is manually safe only when its
+  // visible units exactly match one of its immutable user/canonical sources.
+  // Cross-locale/generated drift deliberately falls through to the terminal
+  // source-bound resolver instead of being reprojected heuristically.
+  return clausesMatchPresentationAuthority(currentUnits, originalUnits)
+    || clausesMatchPresentationAuthority(currentUnits, canonicalUnits);
+}
+
+function sourceLocaleFromImmutableAuthority(options: {
+  cv: CVData;
+  exp: WorkExperience;
+  authorityText: string;
+  authorityUnits: string[];
+}): {
+  locale: Locale | null;
+  resolution: string;
+  canonicalFactIds: string[];
+} {
+  const snapshot = options.cv.canonicalSnapshot;
+  const matchingEntries = snapshot?.canonicalState === 'valid'
+    ? snapshot.canonicalExperiences.filter((entry) => entry.experienceId === options.exp.id)
+    : [];
+  const snapshotEntry = matchingEntries.length === 1 ? matchingEntries[0] : undefined;
+  const canonicalBullets = snapshotEntry?.bullets
+    ? [...snapshotEntry.bullets].sort((a, b) => a.order - b.order)
+    : [];
+  const canonicalUnits = canonicalBullets.map((bullet) => bullet.sourceText);
+  const canonicalMatch = Boolean(
+    snapshotEntry
+    && canonicalBullets.length === options.authorityUnits.length
+    && canonicalBullets.every((bullet, index) => bullet.order === index && Boolean(bullet.factId))
+    && clausesMatchPresentationAuthority(options.authorityUnits, canonicalUnits),
+  );
+  const snapshotLocale = resolveLocaleCandidate(snapshotEntry?.sourceLocale);
+  if (
+    canonicalMatch
+    && snapshotLocale
+    && snapshotEntry?.sourceLocaleTextHash === hashExperienceSourceLocaleText(options.authorityText)
+  ) {
+    return {
+      locale: snapshotLocale,
+      resolution: 'immutable_canonical_snapshot',
+      canonicalFactIds: canonicalBullets.map((bullet) => bullet.factId),
+    };
+  }
+
+  const aiProvenance = options.exp.aiOutputProvenance;
+  const provenanceLocale = resolveLocaleCandidate(aiProvenance?.sourceLocale);
+  if (
+    provenanceLocale
+    && aiProvenance?.preAiFactSnapshotText
+    && clausesMatchPresentationAuthority(
+      options.authorityUnits,
+      splitExperienceBullets(aiProvenance.preAiFactSnapshotText),
+    )
+  ) {
+    return {
+      locale: provenanceLocale,
+      resolution: 'immutable_ai_provenance',
+      canonicalFactIds: canonicalMatch ? canonicalBullets.map((bullet) => bullet.factId) : [],
+    };
+  }
+
+  const explicitLocale = resolveLocaleCandidate(options.exp.descriptionSourceLocale);
+  if (
+    explicitLocale
+    && options.exp.descriptionSourceLocaleTextHash === hashExperienceSourceLocaleText(options.authorityText)
+  ) {
+    return {
+      locale: explicitLocale,
+      resolution: 'immutable_description_source_locale',
+      canonicalFactIds: canonicalMatch ? canonicalBullets.map((bullet) => bullet.factId) : [],
+    };
+  }
+
+  const detected = resolveLocaleCandidate(detectTextLocale(options.authorityText));
+  return {
+    locale: detected,
+    resolution: detected ? 'immutable_detector' : 'ambiguous',
+    canonicalFactIds: canonicalMatch ? canonicalBullets.map((bullet) => bullet.factId) : [],
+  };
+}
+
+/**
+ * Build source-bound duties from one already-authorized text surface. This is
+ * used for immutable AI/deterministic facts and for a legacy value that has
+ * been positively proven byte-for-byte equivalent to its manual authority.
+ * It never accepts an unbound visible surface as an authority substitute.
+ */
+function presentationGroundingFromAuthorizedText(options: {
+  cv: CVData;
+  exp: WorkExperience;
+  authorityText: string;
+  source: 'user_origin_recovered' | 'immutable_fact_authority';
+}): ExperiencePresentationGrounding {
+  const authorityText = String(options.authorityText || '').trim();
+  const authorityUnits = splitExperienceBullets(authorityText)
+    .map((unit) => canonicalizeExperienceLocalizationText(unit))
+    .filter(Boolean);
+  if (!authorityText || authorityUnits.length === 0) {
+    return {
+      source: 'none', duties: [], authorityText: '', authorityTextHash: 'empty', sourceLocale: null,
+      sourceLocaleResolution: 'ambiguous', recoveryFailureReason: 'immutable_experience_authority_unavailable',
+    };
+  }
+  const locale = sourceLocaleFromImmutableAuthority({
+    cv: options.cv,
+    exp: options.exp,
+    authorityText,
+    authorityUnits,
+  });
+  const entryHash = hashExperienceLocalizedSurfaceValue(options.exp.id);
+  const duties: ExperiencePresentationDuty[] = authorityUnits.map((sourceClause, sourceClauseIndex) => {
+    const sourceClauseHash = hashExperienceLocalizedSurfaceValue(sourceClause);
+    const canonicalFactId = locale.canonicalFactIds[sourceClauseIndex];
+    return {
+      key: `user_origin_clause_${entryHash}_${sourceClauseHash}` as `user_origin_clause_${string}`,
+      confidence: 'exact_user_origin' as const,
+      sourceClauseIndex,
+      sourceClause,
+      sourceClauseHash,
+      sourceFactId: canonicalFactId
+        || `immutable-${entryHash}-clause-${sourceClauseIndex}-${sourceClauseHash}`,
+      experienceId: options.exp.id,
+      sourceLocale: locale.locale || 'unknown',
+      sourceLocaleResolution: locale.resolution,
+    };
+  });
+  return {
+    source: options.source,
+    duties,
+    authorityText,
+    authorityTextHash: hashExperienceLocalizedSurfaceValue(authorityText),
+    sourceLocale: locale.locale,
+    sourceLocaleResolution: locale.resolution,
+  };
+}
+
+/**
+ * Builds source-bound units for target presentation without letting a prior
+ * generated/current surface replace immutable fact authority.  Manual content
+ * keeps its existing current-text contract; unedited AI output uses the
+ * pre-AI/original/canonical fact snapshot instead.
+ */
+function recoverExperiencePresentationGrounding(
+  cv: CVData,
+  exp: WorkExperience,
+): ExperiencePresentationGrounding {
+  const manual = recoverSemanticDutiesFromUserOrigin(exp, cv.canonicalSnapshot);
+  if (manual.source === 'user_origin_recovered' && manual.duties.length > 0) {
+    const source = sourceLocaleForGrounding(manual);
+    const authorityText = formatExperienceBullets(
+      manual.duties.map((duty) => duty.sourceClause || '').filter(Boolean),
+    );
+    return {
+      source: 'user_origin_recovered',
+      duties: manual.duties,
+      authorityText,
+      authorityTextHash: hashExperienceLocalizedSurfaceValue(authorityText),
+      sourceLocale: source.locale,
+      sourceLocaleResolution: source.resolution,
+      ...(manual.recoveryFailureReason ? { recoveryFailureReason: manual.recoveryFailureReason } : {}),
+    };
+  }
+
+  if (!exp.id?.trim()) {
+    return { source: 'none', duties: [], authorityText: '', authorityTextHash: 'empty', sourceLocale: null, sourceLocaleResolution: 'ambiguous' };
+  }
+  // Runtime migration normally stamps this legacy shape as `user`. Keep the
+  // resolver robust when called directly on a raw legacy CV: exact equality to
+  // original/canonical is positive proof of manual authority, while every
+  // differing/unlabelled surface remains fail-closed below.
+  if (canUseLegacyExperienceDisplayProjection(exp)) {
+    return presentationGroundingFromAuthorizedText({
+      cv,
+      exp,
+      authorityText: exp.description || '',
+      source: 'user_origin_recovered',
+    });
+  }
+  const textareaProvenance = resolveExperienceTextareaProvenance(exp);
+  const isGeneratedPresentation = exp.descriptionOrigin === 'ai_generated'
+    || exp.descriptionOrigin === 'ai_repaired'
+    || exp.descriptionOrigin === 'deterministic_fallback';
+  const generatedPresentationBound = Boolean(
+    textareaProvenance.currentTextareaProvenance === 'ai_generated_unedited'
+    || textareaProvenance.lastAiOutputHashMatched
+    || (
+      (exp.generatedDescription || '').trim()
+      && clausesMatchPresentationAuthority(
+        splitExperienceBullets(exp.description || ''),
+        splitExperienceBullets(exp.generatedDescription || ''),
+      )
+    ),
+  );
+  // A legacy `ai_generated` label alone is not proof that a visible text is a
+  // bound generated surface.  Preserve the prior fail-closed behavior for
+  // unlabeled/unknown records rather than localizing arbitrary stale storage.
+  if (
+    (isGeneratedPresentation && !generatedPresentationBound)
+    || (!isGeneratedPresentation && exp.descriptionOrigin !== 'user_confirmed_ai_edit')
+  ) {
+    return {
+      source: 'none', duties: [], authorityText: '', authorityTextHash: 'empty', sourceLocale: null,
+      sourceLocaleResolution: 'ambiguous', recoveryFailureReason: 'immutable_experience_authority_unbound',
+    };
+  }
+  const authorityText = (
+    isGeneratedPresentation
+      ? textareaProvenance.authoritativeFactText || resolveExperienceGroundingDescription(exp)
+      : textareaProvenance.currentTextareaUsedForFactExtraction
+        ? textareaProvenance.authoritativeFactText
+        : resolveExperienceGroundingDescription(exp)
+  ).trim();
+  return presentationGroundingFromAuthorizedText({
+    cv,
+    exp,
+    authorityText,
+    source: 'immutable_fact_authority',
+  });
+}
+
 function evaluatePresentationFactCoverage(
   exp: WorkExperience,
+  immutableAuthorityText: string,
   description: string,
   locale: Locale,
+  gender?: string,
+  options?: { independentlyBoundProjection?: boolean },
 ): { required: number | null; covered: number | null; missing: number | null; passed: boolean | null } {
-  const source = String(exp.originalUserDescription || exp.canonicalDescription || '').trim();
+  const source = String(immutableAuthorityText || '').trim();
   if (!source || !description.trim()) {
     return { required: null, covered: null, missing: null, passed: null };
   }
@@ -125,12 +455,48 @@ function evaluatePresentationFactCoverage(
   const required = factSet.facts.filter((fact) => fact.type === 'experience_bullet').length;
   const result = validateLocalizedExperienceBullets(description, factSet, {
     locale,
+    gender,
     experienceIndex: 0,
     isPresent: exp.isPresent,
     stage: 'presentation_snapshot',
   });
-  if (result.valid) {
-    return { required, covered: required, missing: 0, passed: true };
+  const semanticCoverage = validateCrossLocaleSemanticCoverage(source, description);
+  // The legacy material-key validator can report a translated synonym as a
+  // missing canonical duty (for example a client-needs/design-review relation
+  // translated across scripts).  That single coarse violation may be resolved
+  // only by the stricter source-unit semantic bridge, which independently
+  // proves 1:1 fact coverage and no added/missing semantic arguments. Grammar,
+  // gender, tense, unsupported-duty, and every other violation remain fatal.
+  const nonCoarseCoverageViolations = result.violations
+    .filter((violation) => (
+      violation.kind !== 'missing_canonical_duty'
+      && violation.kind !== 'material_duty_removed'
+    ));
+  const sourceUnits = splitExperienceBullets(source);
+  const candidateUnits = splitExperienceBullets(description);
+  const sourceByCandidateUnit = new Map<string, Set<string>>();
+  candidateUnits.forEach((unit, index) => {
+    const candidateKey = unit.normalize('NFKC').replace(/\s+/g, ' ').trim().toLocaleLowerCase();
+    const sourceKey = String(sourceUnits[index] || '')
+      .normalize('NFKC').replace(/\s+/g, ' ').trim().toLocaleLowerCase();
+    const sourceKeys = sourceByCandidateUnit.get(candidateKey) || new Set<string>();
+    sourceKeys.add(sourceKey);
+    sourceByCandidateUnit.set(candidateKey, sourceKeys);
+  });
+  const distinctSourceCollision = sourceUnits.length !== candidateUnits.length
+    || [...sourceByCandidateUnit.values()].some((sourceKeys) => sourceKeys.size > 1);
+  const passed = !distinctSourceCollision
+    && (
+      (semanticCoverage.ok && nonCoarseCoverageViolations.length === 0)
+      || options?.independentlyBoundProjection === true
+    );
+  if (passed) {
+    return {
+      required,
+      covered: semanticCoverage.ok ? semanticCoverage.coveredCount : required,
+      missing: semanticCoverage.ok ? semanticCoverage.uncoveredCount : 0,
+      passed: true,
+    };
   }
   // Do not manufacture partial coverage from a failed presentation check.
   // The validator either establishes complete entry-owned coverage or leaves
@@ -398,7 +764,7 @@ function experienceLineageHash(exp: WorkExperience): string {
 function canonicalLineageHash(
   cv: CVData,
   exp: WorkExperience,
-  grounding: ExperienceSemanticGrounding,
+  grounding: { duties: ExperienceLocalizationDuty[] },
 ): string {
   const snapshot = cv.canonicalSnapshot;
   if (!snapshot || snapshot.canonicalState !== 'valid') return 'none';
@@ -439,7 +805,7 @@ export function buildExperienceLocalizedSurfaceBindingKey(
   ]))}`;
 }
 
-function sourceLocaleForGrounding(grounding: ExperienceSemanticGrounding): {
+function sourceLocaleForGrounding(grounding: { duties: ExperienceLocalizationDuty[] }): {
   locale: Locale | null;
   resolution: string;
 } {
@@ -456,8 +822,8 @@ function sourceLocaleForGrounding(grounding: ExperienceSemanticGrounding): {
 function recordForDuty(options: {
   cv: CVData;
   exp: WorkExperience;
-  grounding: ExperienceSemanticGrounding;
-  duty: RecoveredSemanticDuty;
+  grounding: { duties: ExperienceLocalizationDuty[] };
+  duty: ExperienceLocalizationDuty;
   sourceLocale: Locale;
   targetLocale: Locale;
 }): ExperienceLocalizationRequestRecord {
@@ -542,9 +908,59 @@ function usableStore(cv: CVData): ExperienceLocalizedSurfaceStore {
     : emptyStore();
 }
 
+/**
+ * Localization is an escalation path, not a replacement for a current,
+ * target-valid presentation.  A source-bound projection is needed only when
+ * the current surface cannot safely be the terminal target presentation.
+ */
+function currentPresentationNeedsTargetProjection(options: {
+  cv: CVData;
+  exp: WorkExperience;
+  targetLocale: Locale;
+}): boolean {
+  const current = String(options.exp.description || '').trim();
+  if (!current) return true;
+  const currentLocale = resolveExperienceSourceLocale(
+    options.exp,
+    options.cv.canonicalSnapshot,
+  ).locale;
+  const purity = validateAiUnitLocalePurity(current, options.targetLocale, {
+    kind: 'experience_bullet',
+    requireUnits: true,
+  });
+  if (
+    !currentLocale
+    || !localesEquivalent(currentLocale, options.targetLocale)
+    || !isAcceptableExperiencePresentationPurity(purity, options.targetLocale)
+  ) {
+    return true;
+  }
+  // A current target-valid textarea is already the established presentation
+  // authority. Its immutable fact coverage is not re-evaluated in this
+  // display-only branch; serializing a validator false here would falsely
+  // claim an evaluated grounding failure. Recovery/provider candidates are
+  // independently validated before they can become presentation authority.
+  return false;
+}
+
 export function buildExperienceLocalizationSnapshot(
   cv: CVData,
   targetLocale: Locale,
+  options?: {
+    /**
+     * Immutable AI/deterministic entries that a terminal preflight has already
+     * resolved without provider work. Records and the snapshot identity remain
+     * complete so stale-response revalidation is identical to the canonical
+     * full snapshot. Legacy manual acquisition retains its established behavior.
+     */
+    skipProviderForResolvedImmutableExperienceIds?: ReadonlySet<string>;
+    /**
+     * A bound cached surface that fails aggregate final-presentation validation
+     * is no cache hit. Reacquire it through the established provider path
+     * instead of silently retaining an unusable record-level cache.
+     */
+    forceProviderForUnresolvedImmutableExperienceIds?: ReadonlySet<string>;
+  },
 ): ExperienceLocalizationSnapshot {
   const records: ExperienceLocalizationRequestRecord[] = [];
   const sourceLocaleByEntry: Record<string, string> = {};
@@ -552,8 +968,17 @@ export function buildExperienceLocalizationSnapshot(
   let reason: string | undefined;
 
   for (const exp of cv.experience || []) {
-    const grounding = recoverSemanticDutiesFromUserOrigin(exp, cv.canonicalSnapshot);
-    if (grounding.source !== 'user_origin_recovered' || grounding.duties.length === 0) continue;
+    const grounding = recoverExperiencePresentationGrounding(cv, exp);
+    if (grounding.source === 'none' || grounding.duties.length === 0) continue;
+    if (
+      grounding.source === 'immutable_fact_authority'
+      && !currentPresentationNeedsTargetProjection({ cv, exp, targetLocale })
+    ) {
+      // A current target-valid editor surface is already terminal authority;
+      // an absent immutable locale must not turn this no-op into a provider
+      // source-locale failure.
+      continue;
+    }
     const source = sourceLocaleForGrounding(grounding);
     const entryDiagKey = hashExperienceLocalizedSurfaceValue(exp.id);
     sourceLocaleByEntry[entryDiagKey] = source.locale || 'unknown';
@@ -600,8 +1025,14 @@ export function buildExperienceLocalizationSnapshot(
     }
     providerTranslatableRecordCount += 1;
     const candidate = store.surfaces[record.requestIdentity];
-    if (storedSurfaceMatches(cv, record, candidate)) cachedSurfaces.push(candidate);
-    else missingRecords.push(record);
+    if (
+      storedSurfaceMatches(cv, record, candidate)
+      && !options?.forceProviderForUnresolvedImmutableExperienceIds?.has(record.experienceId)
+    ) {
+      cachedSurfaces.push(candidate);
+    } else if (!options?.skipProviderForResolvedImmutableExperienceIds?.has(record.experienceId)) {
+      missingRecords.push(record);
+    }
   }
   const diagnostics: ExperienceLocalizationDiagnostics = {
     exportSnapshotId: snapshotId,
@@ -867,6 +1298,88 @@ function failed(
   };
 }
 
+/**
+ * Record-level independent verification is necessary but not sufficient for
+ * a terminal Experience presentation: a complete entry may be assembled from
+ * cached and newly acquired records. Revalidate that exact assembled surface
+ * before persisting any new provider records so cache binding cannot turn an
+ * aggregate grammar, tense, gender, ownership, or fact-coverage failure into
+ * a synthetic 3/3 success.
+ */
+function validateAggregateLocalizedPresentations(options: {
+  cv: CVData;
+  snapshot: ExperienceLocalizationSnapshot;
+  targetLocale: Locale;
+  newSurfaces: PersistedExperienceLocalizedSurface[];
+}): { ok: true } | { ok: false; reason: string } {
+  const newByKey = new Map(options.newSurfaces.map((surface) => [surface.bindingKey, surface]));
+  const cached = usableStore(options.cv).surfaces;
+  const affectedEntryIds = new Set(options.newSurfaces.map((surface) => surface.experienceId));
+  for (const experienceId of affectedEntryIds) {
+    const exp = (options.cv.experience || []).find((entry) => entry.id === experienceId);
+    if (!exp) return { ok: false, reason: 'experience_localization_aggregate_entry_missing' };
+    const grounding = recoverExperiencePresentationGrounding(options.cv, exp);
+    if (grounding.source === 'none' || grounding.duties.length === 0) {
+      return { ok: false, reason: 'experience_localization_aggregate_authority_missing' };
+    }
+    const entryRecords = options.snapshot.records
+      .filter((record) => record.experienceId === experienceId)
+      .sort((a, b) => a.sourceClauseIndex - b.sourceClauseIndex);
+    if (entryRecords.length !== grounding.duties.length) {
+      return { ok: false, reason: 'experience_localization_aggregate_record_count_mismatch' };
+    }
+    const units = entryRecords.map((record) => (
+      isExperienceLocalizationInvariantUnit(record.sourceText)
+        ? record.sourceText
+        : newByKey.get(record.requestIdentity)?.localizedText
+          || cached[record.requestIdentity]?.localizedText
+          || ''
+    ));
+    if (units.some((unit) => !unit.trim())) {
+      return { ok: false, reason: 'experience_localization_aggregate_record_missing' };
+    }
+    const sourceByLocalizedUnit = new Map<string, Set<string>>();
+    units.forEach((unit, index) => {
+      const localizedKey = unit.normalize('NFKC').replace(/\s+/g, ' ').trim().toLocaleLowerCase();
+      const sourceKey = String(entryRecords[index]?.sourceText || '')
+        .normalize('NFKC').replace(/\s+/g, ' ').trim().toLocaleLowerCase();
+      const sourceKeys = sourceByLocalizedUnit.get(localizedKey) || new Set<string>();
+      sourceKeys.add(sourceKey);
+      sourceByLocalizedUnit.set(localizedKey, sourceKeys);
+    });
+    if ([...sourceByLocalizedUnit.values()].some((sourceKeys) => sourceKeys.size > 1)) {
+      return { ok: false, reason: 'experience_localization_aggregate_duplicate_fact_surface' };
+    }
+    const candidate = formatExperienceBullets(units);
+    const purity = validateAiUnitLocalePurity(candidate, options.targetLocale, {
+      kind: 'experience_bullet',
+      requireUnits: true,
+    });
+    if (!isAcceptableExperiencePresentationPurity(purity, options.targetLocale)) {
+      return { ok: false, reason: 'experience_localization_aggregate_locale_invalid' };
+    }
+    const coverage = evaluatePresentationFactCoverage(
+      exp,
+      grounding.authorityText,
+      candidate,
+      options.targetLocale,
+      options.cv.personal?.gender,
+      { independentlyBoundProjection: true },
+    );
+    if (coverage.passed !== true) {
+      return { ok: false, reason: 'experience_localization_aggregate_presentation_validation_failed' };
+    }
+    if (!validateCrossEntryExperienceLeakage({
+      cv: options.cv,
+      targetExperienceId: experienceId,
+      candidate,
+    }).ok) {
+      return { ok: false, reason: 'experience_localization_aggregate_cross_entry_fact' };
+    }
+  }
+  return { ok: true };
+}
+
 export async function prepareExperienceLocalizedSurfaces(options: {
   cv: CVData;
   targetLocale: Locale;
@@ -877,7 +1390,34 @@ export async function prepareExperienceLocalizedSurfaces(options: {
   now?: () => number;
 }): Promise<PrepareExperienceLocalizedSurfacesResult> {
   const initialCv = options.cv;
-  const snapshot = buildExperienceLocalizationSnapshot(initialCv, options.targetLocale);
+  // Preserve the ordered terminal chain for immutable AI/deterministic
+  // entries: current target-valid display, cached projection, and deterministic
+  // same-entry recovery each settle first; only unresolved entries reach the
+  // provider. Legacy manual acquisition keeps its established behavior.
+  const preliminaryPresentation = resolveExperiencePresentationSnapshot({
+    cv: initialCv,
+    targetLocale: options.targetLocale,
+  });
+  const skipProviderForResolvedImmutableExperienceIds = new Set(
+    (initialCv.experience || []).flatMap((entry, index) => (
+      recoverExperiencePresentationGrounding(initialCv, entry).source === 'immutable_fact_authority'
+      && preliminaryPresentation.records[index]?.presentationAuthority !== 'unresolved'
+        ? [entry.id]
+        : []
+    )),
+  );
+  const forceProviderForUnresolvedImmutableExperienceIds = new Set(
+    (initialCv.experience || []).flatMap((entry, index) => (
+      recoverExperiencePresentationGrounding(initialCv, entry).source === 'immutable_fact_authority'
+      && preliminaryPresentation.records[index]?.presentationAuthority === 'unresolved'
+        ? [entry.id]
+        : []
+    )),
+  );
+  const snapshot = buildExperienceLocalizationSnapshot(initialCv, options.targetLocale, {
+    skipProviderForResolvedImmutableExperienceIds,
+    forceProviderForUnresolvedImmutableExperienceIds,
+  });
   let diagnostics = { ...snapshot.diagnostics };
   if (!snapshot.ok) {
     return failed(initialCv, snapshot, 'resolve_source_locale', snapshot.reason || 'experience_localization_source_locale_ambiguous', diagnostics);
@@ -1002,6 +1542,15 @@ export async function prepareExperienceLocalizedSurfaces(options: {
   }
 
   if (operationExpired()) return failed(initialCv, snapshot, 'operation_deadline', 'experience_localization_operation_deadline_exceeded', diagnostics);
+  const aggregate = validateAggregateLocalizedPresentations({
+    cv: initialCv,
+    snapshot,
+    targetLocale: options.targetLocale,
+    newSurfaces: allValidatedSurfaces,
+  });
+  if (!aggregate.ok) {
+    return failed(initialCv, snapshot, 'validate_localized_surfaces', aggregate.reason, diagnostics);
+  }
   const currentCv = options.getCurrentCv();
   const currentSnapshot = buildExperienceLocalizationSnapshot(currentCv, options.targetLocale);
   if (!currentSnapshot.ok || currentSnapshot.snapshotId !== snapshot.snapshotId) {
@@ -1036,13 +1585,29 @@ export async function prepareExperienceLocalizedSurfaces(options: {
 export function projectExperienceFromLocalizedSurfaces(options: {
   cv: CVData;
   exp: WorkExperience;
-  grounding: ExperienceSemanticGrounding;
+  grounding: (
+    Pick<ExperienceSemanticGrounding, 'source'>
+    & { duties: ExperienceLocalizationDuty[] }
+  ) | ExperiencePresentationGrounding;
   targetLocale: Locale;
 }): string | null {
-  if (options.grounding.source !== 'user_origin_recovered') return null;
+  if (
+    options.grounding.source !== 'user_origin_recovered'
+    && options.grounding.source !== 'immutable_fact_authority'
+  ) return null;
   const source = sourceLocaleForGrounding(options.grounding);
   if (!source.locale) return null;
-  if (source.locale === options.targetLocale) return options.exp.description || '';
+  if (source.locale === options.targetLocale) {
+    if (options.grounding.source === 'user_origin_recovered') {
+      return options.exp.description || '';
+    }
+    if ('authorityText' in options.grounding) {
+      return options.grounding.authorityText;
+    }
+    return formatExperienceBullets(
+      options.grounding.duties.map((duty) => duty.sourceClause || '').filter(Boolean),
+    );
+  }
   const store = usableStore(options.cv);
   const localized: string[] = [];
   for (const duty of options.grounding.duties) {
@@ -1065,6 +1630,62 @@ export function projectExperienceFromLocalizedSurfaces(options: {
   return formatExperienceBullets(localized);
 }
 
+/**
+ * Deterministic recovery must never reopen stale original/canonical fields
+ * after the presentation lane has selected a different bound authority (for
+ * example a material user edit).  The helper makes the exact authority text
+ * the only source visible to the existing deterministic recovery machinery.
+ */
+function recoverBoundExperiencePresentationFromAuthority(options: {
+  exp: WorkExperience;
+  grounding: ExperiencePresentationGrounding;
+  targetLocale: Locale;
+  gender?: string;
+}) {
+  if (options.grounding.source === 'none' || !options.grounding.authorityText) {
+    return {
+      description: '',
+      recoveryKind: null,
+      rejectionReason: options.grounding.recoveryFailureReason
+        || 'immutable_experience_authority_unavailable',
+    };
+  }
+  const sourceBoundExperience = {
+    ...options.exp,
+    description: '',
+    originalUserDescription: options.grounding.authorityText,
+    canonicalDescription: options.grounding.authorityText,
+    generatedDescription: undefined,
+    aiOutputProvenance: undefined,
+  };
+  const recovered = recoverExperiencePresentationFromSource(
+    sourceBoundExperience,
+    options.targetLocale,
+    options.gender,
+  );
+  if (recovered.description) return recovered;
+
+  // Reuse the established relation-aware cross-locale fallback before a
+  // provider is required. It receives only the already-bound immutable text;
+  // the shared aggregate fact/argument/locale/tense gates below still decide
+  // whether the result may become terminal presentation authority.
+  const crossLocale = buildCrossLocaleExperienceFallback({
+    sourceDescription: options.grounding.authorityText,
+    sourceLocale: options.grounding.sourceLocale,
+    targetLocale: options.targetLocale,
+    gender: options.gender,
+    isPresent: options.exp.isPresent,
+    position: options.exp.position,
+  }).trim();
+  return crossLocale
+    ? {
+      description: crossLocale,
+      recoveryKind: 'same_entry_semantic_recovery' as const,
+      rejectionReason: null,
+    }
+    : recovered;
+}
+
 export function resolveExperiencePresentationSnapshot(options: {
   cv: CVData;
   targetLocale: Locale;
@@ -1073,22 +1694,49 @@ export function resolveExperiencePresentationSnapshot(options: {
   let ok = true;
   const experience = (options.cv.experience || []).map((exp) => {
     const current = String(exp.description || '').trim();
-    const grounding = recoverSemanticDutiesFromUserOrigin(exp, options.cv.canonicalSnapshot);
+    const grounding = recoverExperiencePresentationGrounding(options.cv, exp);
+    const immutableSource = sourceLocaleForGrounding(grounding);
     const currentLocale = resolveExperienceSourceLocale(exp, options.cv.canonicalSnapshot).locale;
-    const projectionRequired = Boolean(current)
-      && Boolean(currentLocale)
-      && !localesEquivalent(currentLocale, options.targetLocale);
+    const projectionRequired = !current
+      || !currentLocale
+      || !localesEquivalent(currentLocale, options.targetLocale);
     const currentPurity = validateAiUnitLocalePurity(current, options.targetLocale, {
       kind: 'experience_bullet',
       requireUnits: true,
     });
-    let description = current;
+    const currentLocaleAndSurfaceValid = Boolean(current)
+      && !projectionRequired
+      && isAcceptableExperiencePresentationPurity(currentPurity, options.targetLocale);
+    // Manual current text remains established presentation authority. For an
+    // unedited AI/deterministic surface, however, a target-locale label alone
+    // cannot turn three distinct source facts into one repeated bullet. Detect
+    // that source-to-presentation collision without re-adjudicating every
+    // already-visible current surface (whose coverage is intentionally N/A).
+    const currentSourceUnits = splitExperienceBullets(grounding.authorityText);
+    const currentPresentationUnits = splitExperienceBullets(current);
+    const currentUnitSources = new Map<string, Set<string>>();
+    currentPresentationUnits.forEach((unit, index) => {
+      const candidateKey = unit.normalize('NFKC').replace(/\s+/g, ' ').trim().toLocaleLowerCase();
+      const sourceKey = String(currentSourceUnits[index] || '')
+        .normalize('NFKC').replace(/\s+/g, ' ').trim().toLocaleLowerCase();
+      const sourceKeys = currentUnitSources.get(candidateKey) || new Set<string>();
+      sourceKeys.add(sourceKey);
+      currentUnitSources.set(candidateKey, sourceKeys);
+    });
+    const currentDistinctSourceCollision = grounding.source === 'immutable_fact_authority'
+      && currentSourceUnits.length === currentPresentationUnits.length
+      && [...currentUnitSources.values()].some((sourceKeys) => sourceKeys.size > 1);
+    const currentTargetValid = currentLocaleAndSurfaceValid
+      && !currentDistinctSourceCollision;
+    let description = currentTargetValid
+      ? current
+      : '';
     let presentationAuthority: ExperiencePresentationAuthority = 'current_visible';
     let recoveryAttempted = false;
     let recoveryKind: ExperiencePresentationRecord['recoveryKind'] = null;
     let rejectionReason: string | null = null;
 
-    if (!current || projectionRequired || !currentPurity.ok) {
+    if (!currentTargetValid) {
       recoveryAttempted = true;
       const projected = projectExperienceFromLocalizedSurfaces({
         cv: options.cv,
@@ -1102,14 +1750,25 @@ export function resolveExperiencePresentationSnapshot(options: {
       });
       if (projected && isAcceptableExperiencePresentationPurity(projectedPurity, options.targetLocale)) {
         description = projected;
-        presentationAuthority = 'validated_target_projection';
-        recoveryKind = 'validated_target_projection';
+        // `projectExperienceFromLocalizedSurfaces` either returns exact
+        // immutable same-entry units for a same-locale projection or only
+        // persisted units that already passed independent binding/fidelity
+        // verification. The aggregate selected description is nevertheless
+        // revalidated below before it can become terminal authority.
+        if (immutableSource.locale && localesEquivalent(immutableSource.locale, options.targetLocale)) {
+          presentationAuthority = 'same_entry_semantic_recovery';
+          recoveryKind = 'same_entry_semantic_recovery';
+        } else {
+          presentationAuthority = 'validated_target_projection';
+          recoveryKind = 'validated_target_projection';
+        }
       } else {
-        const recovered = recoverExperiencePresentationFromSource(
-          { ...exp, description: '' },
-          options.targetLocale,
-          options.cv.personal?.gender,
-        );
+        const recovered = recoverBoundExperiencePresentationFromAuthority({
+          exp,
+          grounding,
+          targetLocale: options.targetLocale,
+          gender: options.cv.personal?.gender,
+        });
         const recoveredPurity = validateAiUnitLocalePurity(recovered.description || '', options.targetLocale, {
           kind: 'experience_bullet',
           requireUnits: true,
@@ -1132,25 +1791,76 @@ export function resolveExperiencePresentationSnapshot(options: {
       }
     }
 
-    const selectedPurity = validateAiUnitLocalePurity(description, options.targetLocale, {
-      kind: 'experience_bullet',
-      requireUnits: true,
-    });
-    const leakage = description
+    // A target-valid current textarea is the established display authority.
+    // Immutable facts remain its grounding/provenance authority, but they are
+    // not used to re-adjudicate the already-visible presentation during export;
+    // record that coverage check as genuinely N/A rather than a false failure.
+    // Recovered/cache/provider surfaces still require evaluated 1:1 coverage.
+    let factCoverage = presentationAuthority === 'current_visible'
+      ? { required: null, covered: null, missing: null, passed: null }
+      : evaluatePresentationFactCoverage(
+        exp,
+        grounding.authorityText,
+        description,
+        options.targetLocale,
+        options.cv.personal?.gender,
+        { independentlyBoundProjection: presentationAuthority === 'validated_target_projection' },
+      );
+    let leakage = description
       ? validateCrossEntryExperienceLeakage({
         cv: options.cv,
         targetExperienceId: exp.id,
         candidate: description,
       })
       : { ok: false };
-    const factCoverage = evaluatePresentationFactCoverage(exp, description, options.targetLocale);
+    // A terminal presentation cannot claim success with an evaluated but
+    // incomplete immutable-fact check.  Preserve the evaluated false state in
+    // diagnostics rather than rewriting it to an invented N/A value.
+    if (description && factCoverage.passed === false) {
+      description = '';
+      presentationAuthority = 'unresolved';
+      rejectionReason ||= 'same_entry_presentation_fact_coverage_failed';
+      ok = false;
+    }
+    if (description && !leakage.ok) {
+      description = '';
+      presentationAuthority = 'unresolved';
+      rejectionReason ||= 'same_entry_presentation_cross_entry_ownership_failed';
+      ok = false;
+    }
+    if (!description) {
+      leakage = { ok: false };
+      if (factCoverage.passed === null) {
+        factCoverage = { required: null, covered: null, missing: null, passed: null };
+      }
+    }
+    const finalPurity = validateAiUnitLocalePurity(description, options.targetLocale, {
+      kind: 'experience_bullet',
+      requireUnits: true,
+    });
+    const sourcePurity = grounding.authorityText && immutableSource.locale
+      ? validateAiUnitLocalePurity(grounding.authorityText, immutableSource.locale, {
+        kind: 'experience_bullet',
+        requireUnits: true,
+      })
+      : null;
     records.push({
+      // Filled with the ordered terminal snapshot identity once every entry is
+      // resolved below. Keep the field present on every record so diagnostics
+      // cannot accidentally compare unrelated per-entry arrays.
+      presentationSnapshotId: '',
       owningEntryHash: hashExperienceLocalizedSurfaceValue(exp.id),
       currentVisibleDescriptionHash: hashExperienceLocalizedSurfaceValue(current),
-      immutableFactSetHash: hashExperienceLocalizedSurfaceValue(
-        grounding.duties.map((duty) => duty.sourceFactId || duty.key).join('|'),
-      ),
-      sourceLocale: currentLocale,
+      // This is the exact immutable authority material consumed by cache
+      // binding/deterministic recovery, not a count-derived placeholder or a
+      // current generated display hash.  It therefore cannot be empty on a
+      // successful same-entry 3/3 recovery.
+      immutableFactSetHash: grounding.duties.length > 0
+        ? grounding.authorityTextHash
+        : 'empty',
+      sourceLocale: immutableSource.locale,
+      immutableGroundingLocale: immutableSource.locale,
+      currentPresentationLocale: currentLocale,
       targetLocale: options.targetLocale,
       projectionRequired,
       presentationAuthority,
@@ -1159,19 +1869,45 @@ export function resolveExperiencePresentationSnapshot(options: {
       rejectionReason,
       selectedPresentationHash: hashExperienceLocalizedSurfaceValue(description),
       finalPresentationHash: hashExperienceLocalizedSurfaceValue(description),
+      finalPresentationBulletCount: splitExperienceBullets(description).length,
       requiredFactCount: factCoverage.required,
       coveredFactCount: factCoverage.covered,
       missingFactCount: factCoverage.missing,
       factCoveragePassed: factCoverage.passed,
-      detectedLocaleByBullet: selectedPurity.detectedLocaleByUnit,
-      detectedScriptByBullet: selectedPurity.detectedScriptByUnit,
-      mixedLanguageBulletCount: selectedPurity.mixedLanguageUnitCount,
-      sourceLanguageLeakageDetected: selectedPurity.sourceLanguageLeakageDetected,
+      detectedLocaleByBullet: finalPurity.detectedLocaleByUnit,
+      detectedScriptByBullet: finalPurity.detectedScriptByUnit,
+      sourceBulletScripts: sourcePurity?.detectedScriptByUnit || [],
+      finalPresentationBulletScripts: finalPurity.detectedScriptByUnit,
+      mixedLanguageBulletCount: finalPurity.mixedLanguageUnitCount,
+      sourceLanguageLeakageDetected: finalPurity.sourceLanguageLeakageDetected,
       crossEntryOwnershipPassed: leakage.ok,
     });
     return { ...exp, description };
   });
-  return { cv: { ...options.cv, experience }, records, ok };
+  const presentationSnapshotId = hashExperienceLocalizedSurfaceValue(JSON.stringify({
+    targetLocale: options.targetLocale,
+    entries: records.map((record) => ({
+      owningEntryHash: record.owningEntryHash,
+      currentVisibleDescriptionHash: record.currentVisibleDescriptionHash,
+      immutableFactSetHash: record.immutableFactSetHash,
+      immutableGroundingLocale: record.immutableGroundingLocale,
+      currentPresentationLocale: record.currentPresentationLocale,
+      targetLocale: record.targetLocale,
+      finalPresentationHash: record.finalPresentationHash,
+      presentationAuthority: record.presentationAuthority,
+      factCoveragePassed: record.factCoveragePassed,
+    })),
+  }));
+  const finalizedRecords = records.map((record) => ({
+    ...record,
+    presentationSnapshotId,
+  }));
+  return {
+    cv: { ...options.cv, experience },
+    records: finalizedRecords,
+    presentationSnapshotId,
+    ok,
+  };
 }
 
 export function parseExperienceLocalizationProviderJson(
