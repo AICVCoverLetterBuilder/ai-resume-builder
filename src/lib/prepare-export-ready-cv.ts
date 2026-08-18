@@ -445,6 +445,8 @@ export type ExportReadyDiagnostics = {
   /** Actual Summary value supplied to the Preview renderer, never inferred. */
   previewRenderedSummaryHash?: string | null;
   previewRenderAuthority?: 'selected_final' | 'manual_saved' | 'unresolved' | 'render_mismatch' | null;
+  /** Required whenever Preview claims it rendered the selected terminal final. */
+  previewSelectedFinalParityPassed?: boolean | null;
   /** Deprecated intended-candidate field retained for existing consumers. */
   visiblePreviewSummaryHash?: string | null;
   exportSummaryHash?: string | null;

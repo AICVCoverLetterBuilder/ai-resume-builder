@@ -201,6 +201,8 @@ export type CvExportDiagnosticTrace = {
   /** Actual Summary value committed to the Preview template data prop. */
   previewRenderedSummaryHash?: string | null;
   previewRenderAuthority?: 'selected_final' | 'manual_saved' | 'unresolved' | 'render_mismatch' | null;
+  /** A selected-final Preview witness must equal this export's selected final. */
+  previewSelectedFinalParityPassed?: boolean | null;
   /** Legacy predicted field; null when no renderer witness exists. */
   visiblePreviewSummaryHash?: string | null;
   exportSummaryHash?: string | null;
@@ -839,8 +841,13 @@ export function buildAndStoreCvExportDiagnostic(input: BuildCvExportTraceInput):
     dutyKeys,
   });
 
+  const previewSelectedFinalParityPassed = input.previewSummaryRender?.previewRenderAuthority === 'selected_final'
+    ? input.previewSummaryRender.previewRenderedSummaryHash === diag?.selectedFinalSummaryHash
+      && input.previewSummaryRender.selectedFinalSummaryHash === diag?.selectedFinalSummaryHash
+    : null;
   const ok = Boolean(prepared?.ok)
     && !finalReason
+    && previewSelectedFinalParityPassed !== false
     && (input.saveResult?.result === 'saved' || input.blobProduced === true);
 
   const durationSnap = buildExperienceDurationSnapshot(
@@ -914,7 +921,10 @@ export function buildAndStoreCvExportDiagnostic(input: BuildCvExportTraceInput):
     selectedFinalSummaryHash: diag?.selectedFinalSummaryHash,
     selectedFinalSource: diag?.selectedFinalSource,
     previewRenderedSummaryHash: input.previewSummaryRender?.previewRenderedSummaryHash ?? null,
-    previewRenderAuthority: input.previewSummaryRender?.previewRenderAuthority ?? null,
+    previewRenderAuthority: previewSelectedFinalParityPassed === false
+      ? 'render_mismatch'
+      : input.previewSummaryRender?.previewRenderAuthority ?? null,
+    previewSelectedFinalParityPassed,
     // This former exporter-only prediction must never substitute for an
     // actual Preview witness.
     visiblePreviewSummaryHash: input.previewSummaryRender?.previewRenderedSummaryHash ?? null,

@@ -1118,7 +1118,16 @@ export default function CVBuilderPage() {
         cv: migratedCv,
         targetLocale: locale,
       });
-      const qualityCv = applyCvContentQuality(presentation.cv, locale, {
+      // Preserve the source-bound Experience terminal snapshot before any
+      // display-only content normalization.  In particular, an app-owned
+      // stale Summary must be validated against its saved ownership surface,
+      // not a quality-normalized fragment that can no longer expose the stale
+      // employer/date attachment.
+      const terminalExperienceCv = applyTerminalExperiencePresentationSnapshot(
+        presentation.cv,
+        presentation,
+      );
+      const qualityCv = applyCvContentQuality(terminalExperienceCv, locale, {
         gender: migratedCv.personal?.gender,
         summaryOrigin: migratedCv.summaryOrigin,
       }).cv;
@@ -1139,7 +1148,11 @@ export default function CVBuilderPage() {
         || migratedCv.summaryOrigin === 'ai_generated'
         || migratedCv.summaryOrigin === 'ai_repaired';
       const previewPrepared = appOwnedPreviewSummary
-        ? prepareExportReadyCv(migratedCv, locale, migratedCv.templateId, {
+        // Summary recovery must consume the same terminal per-entry Experience
+        // presentation snapshot that reaches the Preview template.  Using the
+        // pre-snapshot draft here could select a stale Summary while PDF/DOCX,
+        // which localize Experience first, selected a different final Summary.
+        ? prepareExportReadyCv(terminalExperienceCv, locale, terminalExperienceCv.templateId, {
           gender: migratedCv.personal?.gender,
         })
         : null;
