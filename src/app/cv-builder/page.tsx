@@ -1122,7 +1122,31 @@ export default function CVBuilderPage() {
         qualityCv,
         presentation,
       );
-      const localeSafeCv = omitInvalidLocalizedFieldsForPreview(terminalPresentationCv, locale);
+      // An app-owned V2 Summary that no longer binds to the current selected
+      // entries is not a usable Preview authority. Reuse the synchronous
+      // export terminalizer: it either returns the same safe deterministic V2
+      // snapshot used by PDF/DOCX or leaves this Summary explicitly unresolved.
+      // User-authored Summary prose never enters this recovery rule.
+      const appOwnedPreviewSummary = migratedCv.summaryOrigin === 'deterministic_fallback'
+        || migratedCv.summaryOrigin === 'ai_generated'
+        || migratedCv.summaryOrigin === 'ai_repaired';
+      const previewPrepared = appOwnedPreviewSummary
+        ? prepareExportReadyCv(migratedCv, locale, migratedCv.templateId, {
+          gender: migratedCv.personal?.gender,
+        })
+        : null;
+      const previewRequiresV2Recovery = previewPrepared?.diagnostics
+        .summaryValidationAuthoritySource === 'app_owned_v2_manifest';
+      const summaryTerminalCv = previewRequiresV2Recovery
+        ? {
+          ...terminalPresentationCv,
+          summary: previewPrepared?.ok ? previewPrepared.cv.summary : '',
+          summaryOrigin: previewPrepared?.ok
+            ? previewPrepared.cv.summaryOrigin
+            : terminalPresentationCv.summaryOrigin,
+        }
+        : terminalPresentationCv;
+      const localeSafeCv = omitInvalidLocalizedFieldsForPreview(summaryTerminalCv, locale);
       const base = {
         ...localeSafeCv,
         skills: localeSafeCv.skills.map((skill) => getLocalizedCvSkillName(skill, locale)),

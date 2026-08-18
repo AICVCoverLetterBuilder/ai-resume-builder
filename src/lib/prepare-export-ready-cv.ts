@@ -80,7 +80,12 @@ import { buildSummaryV2SelectionManifest } from './cv-summary-v2/manifest';
 import { hashSummaryV2Text } from './cv-summary-v2/facts';
 import { buildSummaryV2DeterministicText } from './cv-summary-v2/builder';
 import { validateSummaryV2AgainstManifest } from './cv-summary-v2/validator';
-import type { SummaryV2ValidationResult } from './cv-summary-v2/types';
+import type {
+  SummaryV2EntryOwned,
+  SummaryV2SelectionManifest,
+  SummaryV2ValidationResult,
+} from './cv-summary-v2/types';
+import { resolveLocalizedSummaryRole } from './cv-summary-structured-role-localization';
 
 function classifyMaterialBulletScript(bullet: string): 'hi' | 'en' | 'mixed' | 'empty' {
   const t = (bullet || '').trim();
@@ -91,6 +96,58 @@ function classifyMaterialBulletScript(bullet: string): 'hi' | 'en' | 'mixed' | '
   if (dev > 0) return 'hi';
   if (lat > 0) return 'en';
   return 'empty';
+}
+
+/**
+ * Recovery builds target-native prose, so it must not inherit a foreign role
+ * label merely because the immutable manifest intentionally retained that
+ * source label. This is a presentation-only projection: source role/fact
+ * identity, entry binding and the unselected-entry authority set remain
+ * untouched for the V2 validator.
+ */
+function projectDeterministicRecoveryRoleSurfaces(
+  manifest: SummaryV2SelectionManifest,
+): SummaryV2SelectionManifest {
+  const projectEntry = (entry: SummaryV2EntryOwned): SummaryV2EntryOwned => {
+    const localized = resolveLocalizedSummaryRole({
+      role: entry.sourceRoleTitle || entry.role,
+      sourceLocale: entry.roleSourceLocale || entry.sourceLocale,
+      targetLocale: manifest.locale,
+      gender: manifest.gender,
+      entryId: entry.entryId,
+    });
+    if (!localized.localizationValidationPassed || !localized.localizedTargetRoleLabel) {
+      // Unknown free-text titles are not guessed. The shared final locale gate
+      // still rejects a genuinely foreign surface rather than accepting it.
+      return entry;
+    }
+    return {
+      ...entry,
+      role: localized.localizedTargetRoleLabel,
+      sourceRoleTitle: entry.sourceRoleTitle || entry.role,
+      roleTitleLocalizationSource: `deterministic:${localized.localizationSource}`,
+    };
+  };
+  const current = manifest.current ? projectEntry(manifest.current) : null;
+  const priors = manifest.priors.map(projectEntry);
+  const selectedById = new Map(
+    [...(current ? [current] : []), ...priors].map((entry) => [entry.entryId, entry]),
+  );
+  const allEntries = manifest.allEntries?.map((entry) => selectedById.get(entry.entryId) || entry);
+  const currentFacts = manifest.requiredCurrentFacts.map((fact) => (
+    selectedById.get(fact.entryId)?.facts.find((candidate) => candidate.factId === fact.factId) || fact
+  ));
+  const priorFacts = manifest.requiredPriorFacts.map((fact) => (
+    selectedById.get(fact.entryId)?.facts.find((candidate) => candidate.factId === fact.factId) || fact
+  ));
+  return {
+    ...manifest,
+    current,
+    priors,
+    ...(allEntries ? { allEntries } : {}),
+    requiredCurrentFacts: currentFacts,
+    requiredPriorFacts: priorFacts,
+  };
 }
 
 export type ExportReadyStage =
@@ -127,7 +184,7 @@ export type ExportReadyDiagnostics = {
     groundingBulletCount: number;
     exportBulletCount: number;
   }>;
-  summaryFactSetSource: 'semantic_duties' | 'modern_provenance' | 'occupation_generic' | 'none';
+  summaryFactSetSource: 'semantic_duties' | 'modern_provenance' | 'occupation_generic' | 'app_owned_v2_manifest' | 'none';
   summarySemanticDutyKeys: SemanticDutyKey[];
   summaryInitialValid?: boolean;
   summaryInitialReason?: string;
@@ -160,6 +217,24 @@ export type ExportReadyDiagnostics = {
   summaryValidationAuthoritySource?: 'manual_saved_summary' | 'app_owned_v2_manifest' | 'app_owned_unstructured_legacy';
   summarySavedProvenance?: string;
   summarySavedSummaryReboundRevalidated?: boolean;
+  /** Saved app-owned candidate phase; never inferred from a later recovery. */
+  savedSummaryHash?: string;
+  savedSummaryOwnershipPassed?: boolean | null;
+  savedSummaryOwnershipFailureReasons?: string[];
+  savedSummaryJobContextPassed?: boolean | null;
+  /** Deterministic recovery phase, evaluated before selected-final acceptance. */
+  recoveryCandidateHash?: string;
+  recoveryCandidateLocaleValidationPassed?: boolean | null;
+  recoveryCandidateNativeSurfacePassed?: boolean | null;
+  recoveryCandidateOwnershipPassed?: boolean | null;
+  recoveryCandidateRejectionReasons?: string[];
+  recoveryDetectedLocaleByUnit?: Array<string | null>;
+  recoveryDetectedScriptByUnit?: string[];
+  /** Terminal presentation identity; Preview/PDF/DOCX must agree when unchanged. */
+  selectedFinalSummaryHash?: string;
+  selectedFinalSource?: string | null;
+  visiblePreviewSummaryHash?: string | null;
+  exportSummaryHash?: string | null;
   summaryRelationalOwnershipPassed?: boolean | null;
   summaryRelationalOwnershipFailureReasons?: string[];
   summaryFinalUnitOwnership?: Array<{
@@ -883,6 +958,10 @@ export function prepareExportReadyCv(
       : summaryReferenceDate.toISOString().slice(0, 10),
   });
   const summaryManifest = buildSummaryV2SelectionManifest(summarySnapshot);
+  // The immutable source manifest remains the ownership authority. A selected
+  // recovery may carry a target-native role presentation projection that must
+  // be used consistently by recovery, post-write and export validation.
+  let finalSummaryManifest = summaryManifest;
   const selectedSummaryEntries = [summaryManifest.current, ...summaryManifest.priors]
     .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
   const selectedSummaryIds = new Set(selectedSummaryEntries.map((entry) => entry.entryId));
@@ -928,10 +1007,57 @@ export function prepareExportReadyCv(
         : 'app_owned_unstructured_legacy';
   let summaryV2ValidationForDiagnostics: SummaryV2ValidationResult | null =
     appOwnedSummaryRequiresV2Authority ? savedAppOwnedV2Validation : null;
+  let recoveryV2ValidationForDiagnostics: SummaryV2ValidationResult | null = null;
+  let recoveryLocalePurityForDiagnostics: ReturnType<typeof validateAiUnitLocalePurity> | null = null;
+  let recoveryCandidateHashForDiagnostics: string | null = null;
+  let selectedFinalSummaryHashForDiagnostics: string | null = null;
+  let selectedFinalSourceForDiagnostics: string | null = null;
   const assignSummaryV2Diagnostics = (diagnostics: ExportReadyDiagnostics) => {
     diagnostics.summaryValidationAuthoritySource = summaryValidationAuthoritySource;
     diagnostics.summarySavedProvenance = rawCv.summaryOrigin || 'user';
     diagnostics.summarySavedSummaryReboundRevalidated = appOwnedSummaryRequiresV2Authority;
+    diagnostics.savedSummaryHash = hashSummaryV2Text(rawCv.summary || '');
+    diagnostics.savedSummaryOwnershipPassed = savedAppOwnedV2Validation
+      ? savedAppOwnedV2Validation.relationalOwnershipValidationPassed
+      : null;
+    diagnostics.savedSummaryOwnershipFailureReasons = savedAppOwnedV2Validation
+      ? savedAppOwnedV2Validation.relationalOwnershipFailureReasons
+      : [];
+    diagnostics.savedSummaryJobContextPassed = rawCv.summaryOrigin === 'user'
+      ? null
+      : Boolean(rawCv.summaryGenerationContextKey && summaryContextMatch);
+    diagnostics.recoveryCandidateHash = recoveryCandidateHashForDiagnostics || undefined;
+    diagnostics.recoveryCandidateLocaleValidationPassed = recoveryLocalePurityForDiagnostics
+      ? recoveryLocalePurityForDiagnostics.targetLocalePurityPassed
+      : null;
+    diagnostics.recoveryCandidateNativeSurfacePassed = recoveryV2ValidationForDiagnostics
+      ? recoveryV2ValidationForDiagnostics.ok
+      : null;
+    diagnostics.recoveryCandidateOwnershipPassed = recoveryV2ValidationForDiagnostics
+      ? recoveryV2ValidationForDiagnostics.relationalOwnershipValidationPassed
+      : null;
+    diagnostics.recoveryCandidateRejectionReasons = recoveryV2ValidationForDiagnostics
+      ? (recoveryV2ValidationForDiagnostics.ok
+        ? []
+        : [
+          ...(recoveryV2ValidationForDiagnostics.reason
+            ? [recoveryV2ValidationForDiagnostics.reason]
+            : []),
+          ...recoveryV2ValidationForDiagnostics.relationalOwnershipFailureReasons,
+        ])
+      : [];
+    diagnostics.recoveryDetectedLocaleByUnit = recoveryLocalePurityForDiagnostics
+      ? recoveryLocalePurityForDiagnostics.detectedLocaleByUnit
+      : [];
+    diagnostics.recoveryDetectedScriptByUnit = recoveryLocalePurityForDiagnostics
+      ? recoveryLocalePurityForDiagnostics.detectedScriptByUnit
+      : [];
+    diagnostics.selectedFinalSummaryHash = selectedFinalSummaryHashForDiagnostics || undefined;
+    diagnostics.selectedFinalSource = selectedFinalSourceForDiagnostics;
+    diagnostics.visiblePreviewSummaryHash = selectedFinalSourceForDiagnostics === 'deterministic_v2_manifest'
+      ? selectedFinalSummaryHashForDiagnostics
+      : null;
+    diagnostics.exportSummaryHash = selectedFinalSummaryHashForDiagnostics;
     diagnostics.summaryRelationalOwnershipPassed = summaryV2ValidationForDiagnostics
       ? summaryV2ValidationForDiagnostics.relationalOwnershipValidationPassed
       : null;
@@ -1143,10 +1269,17 @@ export function prepareExportReadyCv(
     // manifest used for final/visible validation. This retains all selected
     // current/prior units and prevents an older current entry from lending its
     // employer or date to the resolved current role.
+    let recoveryManifest = summaryManifest;
     if (appOwnedSummaryRequiresV2Authority) {
-      recovered = buildSummaryV2DeterministicText(summaryManifest);
+      // The immutable manifest intentionally retains source role labels. Build
+      // the recovery from the target-native *presentation* labels first, then
+      // run the unchanged V2 ownership/locale gate over that projection.
+      recoveryManifest = projectDeterministicRecoveryRoleSurfaces(summaryManifest);
+      finalSummaryManifest = recoveryManifest;
+      recovered = buildSummaryV2DeterministicText(recoveryManifest);
       summaryRecoverySource = 'deterministic_v2_manifest';
       durationCompositionSource = 'deterministic_v2_manifest';
+      factSource = 'app_owned_v2_manifest';
     }
     // Universal manual/legacy recovery from authoritative Experience bullets
     // even when no catalogue SemanticDutyKey matched (unknown free-text titles).
@@ -1217,13 +1350,23 @@ export function prepareExportReadyCv(
       cv,
       durationSnapshot.total,
     );
+    recoveryCandidateHashForDiagnostics = recovered.trim()
+      ? hashSummaryV2Text(recovered)
+      : null;
+    recoveryLocalePurityForDiagnostics = recovered.trim()
+      ? validateAiUnitLocalePurity(recovered, requestedLocale, {
+        kind: 'summary_sentence',
+        requireUnits: true,
+      })
+      : null;
     const recoveryV2Validation = appOwnedSummaryRequiresV2Authority
-      ? validateSummaryV2AgainstManifest(recovered, summaryManifest, {
+      ? validateSummaryV2AgainstManifest(recovered, recoveryManifest, {
         candidateSource: 'deterministic',
         preserveConstructionOrder: true,
         trustedConstructionAuthority: true,
       })
       : null;
+    recoveryV2ValidationForDiagnostics = recoveryV2Validation;
     summaryV2ValidationForDiagnostics = recoveryV2Validation
       || summaryV2ValidationForDiagnostics;
     if (summaryHasUnsupportedDomainClaims(recovered, experienceBlobForSummary)) {
@@ -1272,6 +1415,8 @@ export function prepareExportReadyCv(
           ? undefined
           : cv.canonicalSummary,
       };
+      selectedFinalSummaryHashForDiagnostics = hashSummaryV2Text(recovered);
+      selectedFinalSourceForDiagnostics = summaryRecoverySource;
     } else {
       const diagnostics = baseDiagnostics();
       diagnostics.recoveryInvoked = recoveryInvoked;
@@ -1340,7 +1485,7 @@ export function prepareExportReadyCv(
   // Post-quality is the visible/exported Summary authority. Re-read the exact
   // rewritten text instead of inheriting a pre-quality pass value.
   if (appOwnedSummaryRequiresV2Authority) {
-    const postQualityV2 = validateSummaryV2AgainstManifest(cv.summary || '', summaryManifest, {
+    const postQualityV2 = validateSummaryV2AgainstManifest(cv.summary || '', finalSummaryManifest, {
       candidateSource: 'final_selected',
     });
     summaryV2ValidationForDiagnostics = postQualityV2;
@@ -1529,6 +1674,8 @@ export function prepareExportReadyCv(
   }
 
   stage = 'complete';
+  selectedFinalSummaryHashForDiagnostics ||= hashSummaryV2Text(cv.summary || '');
+  selectedFinalSourceForDiagnostics ||= summaryRecoverySource;
   const summaryDiag = buildSummaryCompositionDiagnostics(factSet, cv.summary || '', {
     fallbackReason: summaryRecoverySource === 'saved_summary'
       ? undefined
@@ -1609,6 +1756,7 @@ export function prepareExportReadyCv(
     ...summaryDiag,
     stage,
   };
+  assignSummaryV2Diagnostics(diagnostics);
   void summaryContextMatch;
 
   // Non-mutating integrity audit — never rewrite; fail closed on mixed/cross-domain AI units.

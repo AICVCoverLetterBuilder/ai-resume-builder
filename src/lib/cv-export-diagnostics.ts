@@ -170,6 +170,21 @@ export type CvExportDiagnosticTrace = {
   summaryValidationAuthoritySource?: string;
   summarySavedProvenance?: string;
   summarySavedSummaryReboundRevalidated?: boolean;
+  savedSummaryHash?: string;
+  savedSummaryOwnershipPassed?: boolean | null;
+  savedSummaryOwnershipFailureReasons?: string[];
+  savedSummaryJobContextPassed?: boolean | null;
+  recoveryCandidateHash?: string;
+  recoveryCandidateLocaleValidationPassed?: boolean | null;
+  recoveryCandidateNativeSurfacePassed?: boolean | null;
+  recoveryCandidateOwnershipPassed?: boolean | null;
+  recoveryCandidateRejectionReasons?: string[];
+  recoveryDetectedLocaleByUnit?: Array<string | null>;
+  recoveryDetectedScriptByUnit?: string[];
+  selectedFinalSummaryHash?: string;
+  selectedFinalSource?: string | null;
+  visiblePreviewSummaryHash?: string | null;
+  exportSummaryHash?: string | null;
   summaryRelationalOwnershipPassed?: boolean | null;
   summaryRelationalOwnershipFailureReasons?: string[];
   summaryFinalUnitOwnership?: Array<{
@@ -854,6 +869,21 @@ export function buildAndStoreCvExportDiagnostic(input: BuildCvExportTraceInput):
     summarySavedProvenance: diag?.summarySavedProvenance,
     summarySavedSummaryReboundRevalidated:
       diag?.summarySavedSummaryReboundRevalidated,
+    savedSummaryHash: diag?.savedSummaryHash,
+    savedSummaryOwnershipPassed: diag?.savedSummaryOwnershipPassed,
+    savedSummaryOwnershipFailureReasons: diag?.savedSummaryOwnershipFailureReasons,
+    savedSummaryJobContextPassed: diag?.savedSummaryJobContextPassed,
+    recoveryCandidateHash: diag?.recoveryCandidateHash,
+    recoveryCandidateLocaleValidationPassed: diag?.recoveryCandidateLocaleValidationPassed,
+    recoveryCandidateNativeSurfacePassed: diag?.recoveryCandidateNativeSurfacePassed,
+    recoveryCandidateOwnershipPassed: diag?.recoveryCandidateOwnershipPassed,
+    recoveryCandidateRejectionReasons: diag?.recoveryCandidateRejectionReasons,
+    recoveryDetectedLocaleByUnit: diag?.recoveryDetectedLocaleByUnit,
+    recoveryDetectedScriptByUnit: diag?.recoveryDetectedScriptByUnit,
+    selectedFinalSummaryHash: diag?.selectedFinalSummaryHash,
+    selectedFinalSource: diag?.selectedFinalSource,
+    visiblePreviewSummaryHash: diag?.visiblePreviewSummaryHash,
+    exportSummaryHash: diag?.exportSummaryHash,
     summaryRelationalOwnershipPassed: diag?.summaryRelationalOwnershipPassed,
     summaryRelationalOwnershipFailureReasons:
       diag?.summaryRelationalOwnershipFailureReasons,
