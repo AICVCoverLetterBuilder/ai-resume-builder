@@ -43,6 +43,7 @@ export type CvExportDiagnosticStageName =
   | 'recover_summary'
   | 'validate_locale_integrity'
   | 'prepare_template'
+  | 'same_snapshot_preview_parity'
   | 'render_blob'
   | 'android_save';
 
@@ -203,6 +204,10 @@ export type CvExportDiagnosticTrace = {
   previewRenderAuthority?: 'selected_final' | 'manual_saved' | 'unresolved' | 'render_mismatch' | null;
   /** A selected-final Preview witness must equal this export's selected final. */
   previewSelectedFinalParityPassed?: boolean | null;
+  previewSnapshotId?: string | null;
+  previewInputSummaryHash?: string | null;
+  templatePreviewSummaryHash?: string | null;
+  templateLeafSummaryHash?: string | null;
   /** Legacy predicted field; null when no renderer witness exists. */
   visiblePreviewSummaryHash?: string | null;
   exportSummaryHash?: string | null;
@@ -650,6 +655,11 @@ export type BuildCvExportTraceInput = {
     previewRenderedSummaryHash: string;
     previewRenderAuthority: 'selected_final' | 'manual_saved' | 'unresolved' | 'render_mismatch';
     selectedFinalSummaryHash: string | null;
+    previewSnapshotId?: string;
+    previewInputSummaryHash?: string;
+    templatePreviewSummaryHash?: string;
+    templateLeafSummaryHash?: string | null;
+    previewSelectedFinalParityPassed?: boolean | null;
   } | null;
   extraStages?: CvExportStageDiag[];
   /** Optional non-PII PDF text-layer metrics from the export caller. */
@@ -841,10 +851,12 @@ export function buildAndStoreCvExportDiagnostic(input: BuildCvExportTraceInput):
     dutyKeys,
   });
 
-  const previewSelectedFinalParityPassed = input.previewSummaryRender?.previewRenderAuthority === 'selected_final'
-    ? input.previewSummaryRender.previewRenderedSummaryHash === diag?.selectedFinalSummaryHash
-      && input.previewSummaryRender.selectedFinalSummaryHash === diag?.selectedFinalSummaryHash
-    : null;
+  const previewSelectedFinalParityPassed = input.previewSummaryRender?.previewSelectedFinalParityPassed === false
+    ? false
+    : input.previewSummaryRender?.previewRenderAuthority === 'selected_final'
+      ? input.previewSummaryRender.previewRenderedSummaryHash === diag?.selectedFinalSummaryHash
+        && input.previewSummaryRender.selectedFinalSummaryHash === diag?.selectedFinalSummaryHash
+      : null;
   const ok = Boolean(prepared?.ok)
     && !finalReason
     && previewSelectedFinalParityPassed !== false
@@ -925,6 +937,10 @@ export function buildAndStoreCvExportDiagnostic(input: BuildCvExportTraceInput):
       ? 'render_mismatch'
       : input.previewSummaryRender?.previewRenderAuthority ?? null,
     previewSelectedFinalParityPassed,
+    previewSnapshotId: input.previewSummaryRender?.previewSnapshotId ?? null,
+    previewInputSummaryHash: input.previewSummaryRender?.previewInputSummaryHash ?? null,
+    templatePreviewSummaryHash: input.previewSummaryRender?.templatePreviewSummaryHash ?? null,
+    templateLeafSummaryHash: input.previewSummaryRender?.templateLeafSummaryHash ?? null,
     // This former exporter-only prediction must never substitute for an
     // actual Preview witness.
     visiblePreviewSummaryHash: input.previewSummaryRender?.previewRenderedSummaryHash ?? null,

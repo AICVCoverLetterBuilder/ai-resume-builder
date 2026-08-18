@@ -501,7 +501,54 @@ export type PreviewSummaryRenderEvidence = {
   previewRenderedSummaryHash: string;
   previewRenderAuthority: NonNullable<ExportReadyDiagnostics['previewRenderAuthority']>;
   selectedFinalSummaryHash: string | null;
+  /** Identity of the visible/raw CV state from which Preview was terminalized. */
+  previewSnapshotId?: string;
+  previewInputSummaryHash?: string;
+  /** Hash of the Summary on the exact data object committed to the template. */
+  templatePreviewSummaryHash?: string;
+  /** Hash witnessed in the committed template DOM; null means it was not found. */
+  templateLeafSummaryHash?: string | null;
+  previewSelectedFinalParityPassed?: boolean | null;
 };
+
+/**
+ * Privacy-safe identity for the visible CV state shared by Preview and export.
+ * Cached localization metadata is deliberately excluded: acquiring a cache entry
+ * must not turn an otherwise unchanged user-visible snapshot into a new snapshot.
+ */
+export function buildPreviewSummarySnapshotId(
+  cv: CVData,
+  locale: Locale,
+  context?: { industry?: string; level?: string },
+): string {
+  return hashSummaryV2Text(JSON.stringify({
+    id: cv.id,
+    locale,
+    templateId: cv.templateId,
+    summaryHash: hashSummaryV2Text(cv.summary || ''),
+    summaryOrigin: cv.summaryOrigin || null,
+    summaryGeneratedLocale: cv.summaryGeneratedLocale || null,
+    gender: cv.personal?.gender || null,
+    jobTitleHash: hashSummaryV2Text(cv.personal?.jobTitle || ''),
+    industry: context?.industry || null,
+    level: context?.level || null,
+    experience: (cv.experience || []).map((entry) => ({
+      id: entry.id,
+      companyHash: hashSummaryV2Text(entry.company || ''),
+      positionHash: hashSummaryV2Text(entry.position || ''),
+      startDate: entry.startDate || '',
+      endDate: entry.endDate || '',
+      isPresent: Boolean(entry.isPresent),
+      visibleHash: hashSummaryV2Text(entry.description || ''),
+      immutableHash: hashSummaryV2Text(
+        entry.originalUserDescription
+        || entry.canonicalDescription
+        || entry.description
+        || '',
+      ),
+    })),
+  }));
+}
 
 /**
  * Preview is a synchronous consumer of the export terminalizer.  For an
@@ -540,14 +587,29 @@ export function describePreviewSummaryRender(
   renderedCv: Pick<CVData, 'summary'>,
   prepared: PrepareExportReadyResult | null,
   appOwnedSummary: boolean,
+  options?: {
+    previewSnapshotId?: string;
+    previewInputSummaryHash?: string;
+  },
 ): PreviewSummaryRenderEvidence {
   const rendered = hashSummaryV2Text(renderedCv.summary || '');
   const selected = prepared?.diagnostics.selectedFinalSummaryHash || null;
+  const snapshotFields = options?.previewSnapshotId
+    ? {
+      previewSnapshotId: options.previewSnapshotId,
+      previewInputSummaryHash: options.previewInputSummaryHash
+        || hashSummaryV2Text(renderedCv.summary || ''),
+      templatePreviewSummaryHash: rendered,
+      templateLeafSummaryHash: null,
+      previewSelectedFinalParityPassed: null,
+    }
+    : {};
   if (!appOwnedSummary) {
     return {
       previewRenderedSummaryHash: rendered,
       previewRenderAuthority: 'manual_saved',
       selectedFinalSummaryHash: selected,
+      ...snapshotFields,
     };
   }
   if (!prepared?.ok || !selected || !(renderedCv.summary || '').trim()) {
@@ -555,13 +617,80 @@ export function describePreviewSummaryRender(
       previewRenderedSummaryHash: rendered,
       previewRenderAuthority: 'unresolved',
       selectedFinalSummaryHash: selected,
+      ...snapshotFields,
     };
   }
   return {
     previewRenderedSummaryHash: rendered,
     previewRenderAuthority: rendered === selected ? 'selected_final' : 'render_mismatch',
     selectedFinalSummaryHash: selected,
+    ...snapshotFields,
   };
+}
+
+/**
+ * Converts intended Preview evidence into a leaf-render witness only after the
+ * selected template has committed. A missing Summary in the actual DOM is a
+ * render mismatch, never an inferred successful render.
+ */
+export function commitPreviewSummaryLeafEvidence(
+  evidence: PreviewSummaryRenderEvidence,
+  summary: string,
+  templateTextContent: string,
+): PreviewSummaryRenderEvidence {
+  const normalizedSummary = String(summary || '').normalize('NFKC').replace(/\s+/gu, ' ').trim();
+  const normalizedDom = String(templateTextContent || '').normalize('NFKC').replace(/\s+/gu, ' ').trim();
+  const leafHash = normalizedSummary && normalizedDom.includes(normalizedSummary)
+    ? hashSummaryV2Text(summary)
+    : null;
+  const selected = evidence.selectedFinalSummaryHash;
+  const appOwnedSelected = evidence.previewRenderAuthority === 'selected_final'
+    || evidence.previewRenderAuthority === 'render_mismatch';
+  const parityPassed = appOwnedSelected
+    ? Boolean(leafHash && selected && leafHash === selected)
+    : null;
+  return {
+    ...evidence,
+    templatePreviewSummaryHash: hashSummaryV2Text(summary || ''),
+    templateLeafSummaryHash: leafHash,
+    previewRenderedSummaryHash: leafHash || hashSummaryV2Text(''),
+    previewRenderAuthority: appOwnedSelected
+      ? (parityPassed ? 'selected_final' : 'render_mismatch')
+      : evidence.previewRenderAuthority,
+    previewSelectedFinalParityPassed: parityPassed,
+  };
+}
+
+export function sameSnapshotPreviewParityFailure(options: {
+  evidence: PreviewSummaryRenderEvidence | null | undefined;
+  sourceCv: CVData;
+  locale: Locale;
+  context?: { industry?: string; level?: string };
+  selectedFinalSummaryHash: string | null | undefined;
+}): boolean {
+  const evidence = options.evidence;
+  if (!evidence?.previewSnapshotId) return false;
+  if (evidence.previewSnapshotId !== buildPreviewSummarySnapshotId(
+    options.sourceCv,
+    options.locale,
+    options.context,
+  )) {
+    return false;
+  }
+  if (evidence.previewRenderAuthority === 'render_mismatch'
+    || evidence.previewSelectedFinalParityPassed === false) {
+    // A leaf mismatch is authoritative for this exact input snapshot even
+    // when the divergent Preview/export paths also selected different hashes.
+    return true;
+  }
+  if (evidence.previewRenderAuthority !== 'selected_final') return false;
+  if (!options.selectedFinalSummaryHash) return true;
+  // The selected template leaf, Preview terminalizer, and export terminalizer
+  // are one contract. A disagreement between their selected hashes is itself
+  // a same-snapshot parity failure even when Preview's internal leaf witness
+  // matched the Preview-selected value.
+  return evidence.selectedFinalSummaryHash !== options.selectedFinalSummaryHash
+    || evidence.previewRenderedSummaryHash !== options.selectedFinalSummaryHash;
 }
 
 function fail(

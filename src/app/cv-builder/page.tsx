@@ -108,6 +108,7 @@ import {
   type SummaryV2LocalizationTransportInput,
   type SummaryV2SelectionManifest,
 } from '@/lib/cv-summary-v2';
+import { hashSummaryV2Text } from '@/lib/cv-summary-v2/facts';
 import {
   SUMMARY_TRANSACTIONAL_APPLY_387_REVISION,
   createSummaryApplyOwnershipState,
@@ -180,8 +181,11 @@ import { prepareCreativeArtisticExport } from '@/lib/cv-export-integrity';
 import { prepareCorporateNavyExport } from '@/lib/corporate-navy-export-integrity';
 import {
   applyAppOwnedSummaryPreviewTerminalSnapshot,
+  buildPreviewSummarySnapshotId,
+  commitPreviewSummaryLeafEvidence,
   describePreviewSummaryRender,
   prepareExportReadyCv,
+  sameSnapshotPreviewParityFailure,
   type PrepareExportReadyResult,
   type PreviewSummaryRenderEvidence,
 } from '@/lib/prepare-export-ready-cv';
@@ -1108,14 +1112,41 @@ export default function CVBuilderPage() {
     }
   }, [setCurrentCv]);
 
+  // Preview and export start from the same live content authority. React state
+  // supplies only the selected template; cvRef owns the current visible draft.
+  const previewInputCv = resolveCvExportSourceAuthority(cvRef.current, cv.templateId);
+  const previewPrimaryExpId = (previewInputCv.experience || []).find((entry) => entry.isPresent)?.id
+    || (previewInputCv.experience || [])[0]?.id;
+  const previewIndustry = previewPrimaryExpId
+    ? (expIndustry[previewPrimaryExpId] ?? 'general')
+    : 'general';
+  const previewLevel = previewPrimaryExpId
+    ? (expLevel[previewPrimaryExpId] ?? 'mid')
+    : 'mid';
+  const previewGender = previewInputCv.personal?.gender;
+  const previewPrepareOptions = useMemo(() => ({
+    gender: previewGender,
+    industry: previewIndustry,
+    level: previewLevel,
+  }), [previewGender, previewIndustry, previewLevel]);
+  const previewInputSnapshotId = buildPreviewSummarySnapshotId(
+    previewInputCv,
+    locale,
+    previewPrepareOptions,
+  );
+
   const localizedPreviewPresentation = useMemo<{
     cv: CVData;
     summaryRender: PreviewSummaryRenderEvidence;
   }>(
     () => {
-      const migratedCv = normalizeLegacyCvRuntime(cv, locale);
+      const migratedCv = normalizeLegacyCvRuntime(previewInputCv, locale);
+      const appOwnedPreviewSummary = migratedCv.summaryOrigin === 'deterministic_fallback'
+        || migratedCv.summaryOrigin === 'ai_generated'
+        || migratedCv.summaryOrigin === 'ai_repaired';
+      const previewSourceCv = migratedCv;
       const presentation = resolveExperiencePresentationSnapshot({
-        cv: migratedCv,
+        cv: previewSourceCv,
         targetLocale: locale,
       });
       // Preserve the source-bound Experience terminal snapshot before any
@@ -1128,8 +1159,8 @@ export default function CVBuilderPage() {
         presentation,
       );
       const qualityCv = applyCvContentQuality(terminalExperienceCv, locale, {
-        gender: migratedCv.personal?.gender,
-        summaryOrigin: migratedCv.summaryOrigin,
+        gender: previewSourceCv.personal?.gender,
+        summaryOrigin: previewSourceCv.summaryOrigin,
       }).cv;
       // The shared presentation snapshot is terminal for Experience display.
       // Content-quality normalization is allowed to improve other fields, but
@@ -1144,25 +1175,24 @@ export default function CVBuilderPage() {
       // export terminalizer: it either returns the same safe deterministic V2
       // snapshot used by PDF/DOCX or leaves this Summary explicitly unresolved.
       // User-authored Summary prose never enters this recovery rule.
-      const appOwnedPreviewSummary = migratedCv.summaryOrigin === 'deterministic_fallback'
-        || migratedCv.summaryOrigin === 'ai_generated'
-        || migratedCv.summaryOrigin === 'ai_repaired';
-      const previewPrepared = appOwnedPreviewSummary
-        // Summary recovery must consume the same terminal per-entry Experience
-        // presentation snapshot that reaches the Preview template.  Using the
-        // pre-snapshot draft here could select a stale Summary while PDF/DOCX,
-        // which localize Experience first, selected a different final Summary.
-        ? prepareExportReadyCv(terminalExperienceCv, locale, terminalExperienceCv.templateId, {
-          gender: migratedCv.personal?.gender,
-        })
+      const synchronousPrepared = appOwnedPreviewSummary
+        ? prepareExportReadyCv(
+          terminalExperienceCv,
+          locale,
+          terminalExperienceCv.templateId,
+          previewPrepareOptions,
+        )
         : null;
+      const previewPrepared = synchronousPrepared?.ok ? synchronousPrepared : null;
       const summaryTerminalCv = previewPrepared
         ? applyAppOwnedSummaryPreviewTerminalSnapshot(terminalPresentationCv, previewPrepared, {
           // Provenance alone is enough to require a terminal result.  Do not
           // let incomplete older diagnostics restore the stale saved textarea.
           forceAppOwnedTerminal: appOwnedPreviewSummary,
         })
-        : terminalPresentationCv;
+        : appOwnedPreviewSummary
+          ? { ...terminalPresentationCv, summary: '' }
+          : terminalPresentationCv;
       const localeSafeCv = omitInvalidLocalizedFieldsForPreview(summaryTerminalCv, locale);
       const base = {
         ...localeSafeCv,
@@ -1180,6 +1210,10 @@ export default function CVBuilderPage() {
           previewCv,
           previewPrepared,
           appOwnedPreviewSummary,
+          {
+            previewSnapshotId: previewInputSnapshotId,
+            previewInputSummaryHash: hashSummaryV2Text(migratedCv.summary || ''),
+          },
         ),
       });
       if (RECT_PHOTO_TEMPLATES.includes(cv.templateId)) {
@@ -1203,17 +1237,44 @@ export default function CVBuilderPage() {
       }
       return finalizePreview(base);
     },
-    [cv, locale, circularPhotoDataUrl, rectangularPhotoDataUrl, validatedElegantFormalFallbackPhoto],
+    [
+      cv,
+      previewInputCv,
+      locale,
+      circularPhotoDataUrl,
+      rectangularPhotoDataUrl,
+      validatedElegantFormalFallbackPhoto,
+      previewInputSnapshotId,
+      previewPrepareOptions,
+    ],
   );
 
   const localizedPreviewCv = localizedPreviewPresentation.cv;
 
   useEffect(() => {
-    // Effects run after React commits the same data object into the visible
-    // template. Export diagnostics may therefore distinguish actual Preview
-    // display from a merely intended deterministic candidate.
-    lastPreviewSummaryRenderRef.current = localizedPreviewPresentation.summaryRender;
-  }, [localizedPreviewPresentation]);
+    const previewRootId = showPreview
+      ? 'cv-preview'
+      : step === steps.length - 1
+        ? 'cv-inline-preview'
+        : null;
+    if (!previewRootId) return;
+    const root = document.getElementById(previewRootId);
+    if (!root) return;
+    // This runs after React commits the selected template leaf. Evidence is
+    // accepted only when the exact Summary supplied in `data` is present in
+    // that real DOM subtree; intended candidates cannot self-certify.
+    lastPreviewSummaryRenderRef.current = commitPreviewSummaryLeafEvidence(
+      localizedPreviewPresentation.summaryRender,
+      localizedPreviewCv.summary || '',
+      root.textContent || '',
+    );
+  }, [
+    localizedPreviewPresentation,
+    localizedPreviewCv.summary,
+    showPreview,
+    step,
+    steps.length,
+  ]);
 
   useEffect(() => {
     if (!selectedLanguageName) return;
@@ -4360,6 +4421,18 @@ export default function CVBuilderPage() {
             `${postTitlePrepared.reason} @ title_post_projection_validation`,
           );
         }
+        if (sameSnapshotPreviewParityFailure({
+          evidence: lastPreviewSummaryRenderRef.current,
+          sourceCv: editorSourceCv,
+          locale,
+          context: prepareOptions,
+          selectedFinalSummaryHash: postTitlePrepared.diagnostics.selectedFinalSummaryHash,
+        })) {
+          throw new CvExportFailure(
+            'preview_render_mismatch',
+            'preview_render_mismatch @ same_snapshot_preview_parity',
+          );
+        }
         const exportCv = postTitlePrepared.cv;
         const metadataSource: CVData = {
           ...exportCv,
@@ -4476,17 +4549,21 @@ export default function CVBuilderPage() {
         if (process.env.NODE_ENV !== 'production') console.error('[CV DOCX export] failed:', err);
         const prepared = lastExportPrepareRef.current;
         const originalReason = prepared && !prepared.ok ? prepared.reason : undefined;
+        const terminalReason = extractCvExportFailureReason(err);
+        const previewParityBlocked = /preview_render_mismatch/iu.test(terminalReason);
         await recordExportDiagnostic({
           format: 'docx',
           rawCv: lastExportRawCvRef.current || cvRef.current,
           prepared,
           originalFailureReason: originalReason,
           finalError: err,
-          rendererReached: Boolean(prepared?.ok),
+          rendererReached: previewParityBlocked ? false : Boolean(prepared?.ok),
           blobProduced: false,
           androidSaveReached: /android_file_save_failed/i.test(extractCvExportFailureReason(err)),
-          extraStages: prepared?.ok
-            ? [{ stage: 'render_blob', result: 'fail', reason: extractCvExportFailureReason(err) }]
+          extraStages: previewParityBlocked
+            ? [{ stage: 'same_snapshot_preview_parity', result: 'fail', reason: terminalReason }]
+            : prepared?.ok
+              ? [{ stage: 'render_blob', result: 'fail', reason: terminalReason }]
             : undefined,
         });
         showExportFailureToast(err, 'docx');
@@ -4694,17 +4771,21 @@ export default function CVBuilderPage() {
         if (process.env.NODE_ENV !== 'production') console.error('[CV PDF export] failed:', err);
         const prepared = lastExportPrepareRef.current;
         const originalReason = prepared && !prepared.ok ? prepared.reason : undefined;
+        const terminalReason = extractCvExportFailureReason(err);
+        const previewParityBlocked = /preview_render_mismatch/iu.test(terminalReason);
         await recordExportDiagnostic({
           format: 'pdf',
           rawCv: lastExportRawCvRef.current || cvRef.current,
           prepared,
           originalFailureReason: originalReason,
           finalError: err,
-          rendererReached: Boolean(prepared?.ok),
+          rendererReached: previewParityBlocked ? false : Boolean(prepared?.ok),
           blobProduced: false,
           androidSaveReached: /android_file_save_failed/i.test(extractCvExportFailureReason(err)),
-          extraStages: prepared?.ok
-            ? [{ stage: 'render_blob', result: 'fail', reason: extractCvExportFailureReason(err) }]
+          extraStages: previewParityBlocked
+            ? [{ stage: 'same_snapshot_preview_parity', result: 'fail', reason: terminalReason }]
+            : prepared?.ok
+              ? [{ stage: 'render_blob', result: 'fail', reason: terminalReason }]
             : undefined,
         });
         const cv = { templateId: cvRef.current.templateId, personal: { fullName: cvRef.current.personal.fullName } };
