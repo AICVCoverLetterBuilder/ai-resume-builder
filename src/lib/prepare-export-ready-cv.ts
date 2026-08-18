@@ -23,7 +23,7 @@ import {
   validateCrossLocaleSemanticCoverage,
 } from './cv-cross-locale-experience';
 import { extractExperienceSemanticArgumentKinds } from './cv-experience-unsupported-claims';
-import { buildSummaryCompositionDiagnostics } from './cv-summary-grounding';
+import { buildSummaryCompositionDiagnostics, countSummaryWords } from './cv-summary-grounding';
 import {
   compactSavedSummaryNearWordBudget,
   SUMMARY_EXPORT_WORD_BUDGET_COMPACTION_REVISION,
@@ -391,6 +391,15 @@ export type ExportReadyDiagnostics = {
   summaryWordCountBefore?: number;
   summaryWordCountAfter?: number;
   summaryWordBudgetMax?: number;
+  /** Raw deterministic recovery candidate before any advisory compaction. */
+  rawRecoveryWordCount?: number | null;
+  rawRecoveryWordBudgetPassed?: boolean | null;
+  /** `false` means the source only exceeded an advisory legacy target. */
+  compactionAttempted?: boolean | null;
+  compactedRecoveryWordCount?: number | null;
+  /** Final V2 selected surface applies the actual mandatory postconditions. */
+  selectedFinalWordCount?: number | null;
+  selectedFinalWordBudgetPassed?: boolean | null;
   summaryWordBudgetCompactionRevision?: typeof SUMMARY_EXPORT_WORD_BUDGET_COMPACTION_REVISION;
   summaryCurrentTextAuthorityRevision?: typeof SUMMARY_CURRENT_TEXT_AUTHORITY_REVISION;
   summaryStaleMetadataDetected?: boolean;
@@ -433,6 +442,10 @@ export type ExportReadyDiagnostics = {
   /** Terminal presentation identity; Preview/PDF/DOCX must agree when unchanged. */
   selectedFinalSummaryHash?: string;
   selectedFinalSource?: string | null;
+  /** Actual Summary value supplied to the Preview renderer, never inferred. */
+  previewRenderedSummaryHash?: string | null;
+  previewRenderAuthority?: 'selected_final' | 'manual_saved' | 'unresolved' | 'render_mismatch' | null;
+  /** Deprecated intended-candidate field retained for existing consumers. */
   visiblePreviewSummaryHash?: string | null;
   exportSummaryHash?: string | null;
   summaryRelationalOwnershipPassed?: boolean | null;
@@ -482,6 +495,12 @@ export type PrepareExportReadyResult =
     diagnostics: ExportReadyDiagnostics;
   };
 
+export type PreviewSummaryRenderEvidence = {
+  previewRenderedSummaryHash: string;
+  previewRenderAuthority: NonNullable<ExportReadyDiagnostics['previewRenderAuthority']>;
+  selectedFinalSummaryHash: string | null;
+};
+
 /**
  * Preview is a synchronous consumer of the export terminalizer.  For an
  * app-owned Summary whose saved surface has failed V2 ownership, there is no
@@ -492,8 +511,10 @@ export type PrepareExportReadyResult =
 export function applyAppOwnedSummaryPreviewTerminalSnapshot(
   cv: CVData,
   prepared: PrepareExportReadyResult,
+  options?: { forceAppOwnedTerminal?: boolean },
 ): CVData {
-  const terminalRequired = prepared.diagnostics.summaryValidationAuthoritySource
+  const terminalRequired = options?.forceAppOwnedTerminal === true
+    || prepared.diagnostics.summaryValidationAuthoritySource
     === 'app_owned_v2_manifest'
     || prepared.diagnostics.savedSummaryOwnershipPassed === false;
   if (!terminalRequired) return cv;
@@ -505,6 +526,39 @@ export function applyAppOwnedSummaryPreviewTerminalSnapshot(
     summary: prepared.cv.summary,
     summaryOrigin: prepared.cv.summaryOrigin,
     summaryGeneratedLocale: prepared.cv.summaryGeneratedLocale,
+  };
+}
+
+/**
+ * Preview's diagnostic witness is derived only from the exact object passed to
+ * the template renderer, after its terminal Summary has been selected.  It is
+ * intentionally separate from export preparation, which cannot observe React.
+ */
+export function describePreviewSummaryRender(
+  renderedCv: Pick<CVData, 'summary'>,
+  prepared: PrepareExportReadyResult | null,
+  appOwnedSummary: boolean,
+): PreviewSummaryRenderEvidence {
+  const rendered = hashSummaryV2Text(renderedCv.summary || '');
+  const selected = prepared?.diagnostics.selectedFinalSummaryHash || null;
+  if (!appOwnedSummary) {
+    return {
+      previewRenderedSummaryHash: rendered,
+      previewRenderAuthority: 'manual_saved',
+      selectedFinalSummaryHash: selected,
+    };
+  }
+  if (!prepared?.ok || !selected || !(renderedCv.summary || '').trim()) {
+    return {
+      previewRenderedSummaryHash: rendered,
+      previewRenderAuthority: 'unresolved',
+      selectedFinalSummaryHash: selected,
+    };
+  }
+  return {
+    previewRenderedSummaryHash: rendered,
+    previewRenderAuthority: rendered === selected ? 'selected_final' : 'render_mismatch',
+    selectedFinalSummaryHash: selected,
   };
 }
 
@@ -1273,6 +1327,12 @@ export function prepareExportReadyCv(
           ...recoveryV2ValidationForDiagnostics.relationalOwnershipFailureReasons,
         ])
       : [];
+    diagnostics.rawRecoveryWordCount = rawRecoveryWordCount;
+    diagnostics.rawRecoveryWordBudgetPassed = rawRecoveryWordBudgetPassed;
+    diagnostics.compactionAttempted = compactionAttempted;
+    diagnostics.compactedRecoveryWordCount = compactedRecoveryWordCount;
+    diagnostics.selectedFinalWordCount = selectedFinalWordCount;
+    diagnostics.selectedFinalWordBudgetPassed = selectedFinalWordBudgetPassed;
     diagnostics.recoveryDetectedLocaleByUnit = recoveryLocalePurityForDiagnostics
       ? recoveryLocalePurityForDiagnostics.detectedLocaleByUnit
       : [];
@@ -1282,9 +1342,10 @@ export function prepareExportReadyCv(
     diagnostics.recoveryFactPresentation = recoveryFactPresentationForDiagnostics;
     diagnostics.selectedFinalSummaryHash = selectedFinalSummaryHashForDiagnostics || undefined;
     diagnostics.selectedFinalSource = selectedFinalSourceForDiagnostics;
-    diagnostics.visiblePreviewSummaryHash = selectedFinalSourceForDiagnostics === 'deterministic_v2_manifest'
-      ? selectedFinalSummaryHashForDiagnostics
-      : null;
+    // Export preparation has no access to React's rendered Preview value.
+    // Preserve this deprecated field as unavailable rather than pretending the
+    // intended selected candidate was visibly rendered.
+    diagnostics.visiblePreviewSummaryHash = null;
     diagnostics.exportSummaryHash = selectedFinalSummaryHashForDiagnostics;
     // Terminal ownership describes the selected final Summary only. A rejected
     // recovery candidate may have independently passed ownership before it
@@ -1446,6 +1507,12 @@ export function prepareExportReadyCv(
   let summaryWordCountBefore: number | undefined;
   let summaryWordCountAfter: number | undefined;
   let summaryWordBudgetMax: number | undefined;
+  let rawRecoveryWordCount: number | null = null;
+  let rawRecoveryWordBudgetPassed: boolean | null = null;
+  let compactionAttempted: boolean | null = null;
+  let compactedRecoveryWordCount: number | null = null;
+  let selectedFinalWordCount: number | null = null;
+  let selectedFinalWordBudgetPassed: boolean | null = null;
   let durationCompositionSource = 'saved_summary';
 
   const rebuildOccupationSummary = (): string => {
@@ -1497,6 +1564,8 @@ export function prepareExportReadyCv(
         summaryWordCountBefore = compacted.wordCountBefore;
         summaryWordCountAfter = compacted.wordCountAfter;
         summaryWordBudgetMax = compacted.maxWords;
+        compactionAttempted = true;
+        compactedRecoveryWordCount = compacted.wordCountAfter;
         durationCompositionSource = 'saved_summary_word_budget_compaction';
       }
     }
@@ -1587,6 +1656,13 @@ export function prepareExportReadyCv(
       cv,
       durationSnapshot.total,
     );
+    const recoveryWordBudgetMax = summaryWordBudgetMax
+      ?? (requestedLocale === 'hi' || requestedLocale === 'sr' ? 110 : 90);
+    rawRecoveryWordCount = recovered.trim()
+      ? countSummaryWords(recovered, requestedLocale)
+      : 0;
+    rawRecoveryWordBudgetPassed = rawRecoveryWordCount <= recoveryWordBudgetMax;
+    summaryWordBudgetMax = recoveryWordBudgetMax;
     recoveryCandidateHashForDiagnostics = recovered.trim()
       ? hashSummaryV2Text(recovered)
       : null;
@@ -1627,6 +1703,13 @@ export function prepareExportReadyCv(
     const recoveryOnlyExceedsLegacyWordBudget = !recoveryValidation.valid
       && recoveryValidation.violations.length > 0
       && recoveryValidation.violations.every((violation) => violation.startsWith('summary_too_long'));
+    if (appOwnedSummaryRequiresV2Authority && recoveryOnlyExceedsLegacyWordBudget) {
+      // This is the historic compact-Summary preference, not a mandatory V2
+      // final postcondition.  The selected entry-owned manifest remains the
+      // authoritative completeness/ownership contract.
+      summaryRecoveryReason = 'legacy_word_budget_advisory_not_final_gate';
+      compactionAttempted = false;
+    }
     // Occupation-generic rebuild is authoritative after context change even when
     // semantic validator is strict about missing duty shells.
     const acceptOccupationGeneric = summaryRecoverySource === 'occupation_generic_fallback'
@@ -1654,6 +1737,12 @@ export function prepareExportReadyCv(
       };
       selectedFinalSummaryHashForDiagnostics = hashSummaryV2Text(recovered);
       selectedFinalSourceForDiagnostics = summaryRecoverySource;
+      selectedFinalWordCount = countSummaryWords(recovered, requestedLocale);
+      // A selected app-owned V2 Summary has passed its actual mandatory
+      // ownership/locale/native checks. The old 110-word target is advisory
+      // when preserving all selected facts requires a longer surface.
+      selectedFinalWordBudgetPassed = recoveryValidation.valid
+        || (appOwnedSummaryRequiresV2Authority && recoveryOnlyExceedsLegacyWordBudget);
     } else {
       const diagnostics = baseDiagnostics();
       diagnostics.recoveryInvoked = recoveryInvoked;

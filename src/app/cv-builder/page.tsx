@@ -180,8 +180,10 @@ import { prepareCreativeArtisticExport } from '@/lib/cv-export-integrity';
 import { prepareCorporateNavyExport } from '@/lib/corporate-navy-export-integrity';
 import {
   applyAppOwnedSummaryPreviewTerminalSnapshot,
+  describePreviewSummaryRender,
   prepareExportReadyCv,
   type PrepareExportReadyResult,
+  type PreviewSummaryRenderEvidence,
 } from '@/lib/prepare-export-ready-cv';
 import {
   resolveCvExportSourceAuthority,
@@ -481,6 +483,8 @@ export default function CVBuilderPage() {
   /** Last prepareExportReadyCv result for release diagnostics (non-PII). */
   const lastExportPrepareRef = useRef<PrepareExportReadyResult | null>(null);
   const lastExportRawCvRef = useRef<CVData | null>(null);
+  /** Exact Summary surface last committed to a Preview template render. */
+  const lastPreviewSummaryRenderRef = useRef<PreviewSummaryRenderEvidence | null>(null);
   const lastExperienceLocalizationRef = useRef<ExperienceLocalizationDiagnostics | null>(null);
   const experienceLocalizationAbortRef = useRef<AbortController | null>(null);
   const exportInFlightRef = useRef(false);
@@ -1104,7 +1108,10 @@ export default function CVBuilderPage() {
     }
   }, [setCurrentCv]);
 
-  const localizedPreviewCv = useMemo<CVData>(
+  const localizedPreviewPresentation = useMemo<{
+    cv: CVData;
+    summaryRender: PreviewSummaryRenderEvidence;
+  }>(
     () => {
       const migratedCv = normalizeLegacyCvRuntime(cv, locale);
       const presentation = resolveExperiencePresentationSnapshot({
@@ -1137,7 +1144,11 @@ export default function CVBuilderPage() {
         })
         : null;
       const summaryTerminalCv = previewPrepared
-        ? applyAppOwnedSummaryPreviewTerminalSnapshot(terminalPresentationCv, previewPrepared)
+        ? applyAppOwnedSummaryPreviewTerminalSnapshot(terminalPresentationCv, previewPrepared, {
+          // Provenance alone is enough to require a terminal result.  Do not
+          // let incomplete older diagnostics restore the stale saved textarea.
+          forceAppOwnedTerminal: appOwnedPreviewSummary,
+        })
         : terminalPresentationCv;
       const localeSafeCv = omitInvalidLocalizedFieldsForPreview(summaryTerminalCv, locale);
       const base = {
@@ -1148,6 +1159,16 @@ export default function CVBuilderPage() {
           name: getLocalizedCvLanguageName(language.name, locale),
         })),
       };
+      const finalizePreview = (previewCv: CVData) => ({
+        cv: previewCv,
+        // This hashes the exact `data` object supplied to TemplateComponent;
+        // it cannot be a pre-render selected-candidate surrogate.
+        summaryRender: describePreviewSummaryRender(
+          previewCv,
+          previewPrepared,
+          appOwnedPreviewSummary,
+        ),
+      });
       if (RECT_PHOTO_TEMPLATES.includes(cv.templateId)) {
         // Rectangle templates: use rectangular photo derived from the original upload.
         // Append '#rect' cache-buster so the browser never reuses a stale circular decode.
@@ -1156,21 +1177,30 @@ export default function CVBuilderPage() {
           : (getPersonalPhotoVariants(cv).rectangularPhoto ?? rectangularPhotoDataUrl ?? cv.personal.photo);
         if (rectUrl) {
           const cacheBustedUrl = rectUrl.includes('#') ? rectUrl : rectUrl + '#rect';
-          return { ...base, personal: { ...base.personal, photo: cacheBustedUrl } };
+          return finalizePreview({ ...base, personal: { ...base.personal, photo: cacheBustedUrl } });
         }
         // No original available — hide photo rather than show circular crop in a rect frame
-        return { ...base, personal: { ...base.personal, photo: undefined } };
+        return finalizePreview({ ...base, personal: { ...base.personal, photo: undefined } });
       }
       // Circle templates: use the circular crop stored in circularPhotoDataUrl.
       // Fall back to cv.personal.photo for any existing data loaded from storage.
       const circleUrl = getPersonalPhotoVariants(cv).circularPhoto ?? circularPhotoDataUrl;
       if (circleUrl) {
-        return { ...base, personal: { ...base.personal, photo: circleUrl } };
+        return finalizePreview({ ...base, personal: { ...base.personal, photo: circleUrl } });
       }
-      return base;
+      return finalizePreview(base);
     },
     [cv, locale, circularPhotoDataUrl, rectangularPhotoDataUrl, validatedElegantFormalFallbackPhoto],
   );
+
+  const localizedPreviewCv = localizedPreviewPresentation.cv;
+
+  useEffect(() => {
+    // Effects run after React commits the same data object into the visible
+    // template. Export diagnostics may therefore distinguish actual Preview
+    // display from a merely intended deterministic candidate.
+    lastPreviewSummaryRenderRef.current = localizedPreviewPresentation.summaryRender;
+  }, [localizedPreviewPresentation]);
 
   useEffect(() => {
     if (!selectedLanguageName) return;
@@ -3929,6 +3959,7 @@ export default function CVBuilderPage() {
         appVersionName: app.versionName,
         nextBuildId: resolveNextBuildId(),
         experienceLocalization: lastExperienceLocalizationRef.current,
+        previewSummaryRender: lastPreviewSummaryRenderRef.current,
         extraStages: args.extraStages,
       });
       setExportDiagTick((n) => n + 1);

@@ -124,7 +124,9 @@ describe('AAB477 — stale app-owned Summary recovery', () => {
     expect(prepared.diagnostics.recoveryDetectedScriptByUnit).toHaveLength(4);
     const finalHash = hashSummaryV2Text(final || '');
     expect(prepared.diagnostics.selectedFinalSummaryHash).toBe(finalHash);
-    expect(prepared.diagnostics.visiblePreviewSummaryHash).toBe(finalHash);
+    // `prepareExportReadyCv` has no direct observation of the Preview React
+    // render, so this must remain unavailable rather than falsely green.
+    expect(prepared.diagnostics.visiblePreviewSummaryHash).toBeNull();
     expect(prepared.diagnostics.exportSummaryHash).toBe(finalHash);
     const exportTrace = buildAndStoreCvExportDiagnostic({
       format: 'pdf', locale: 'sr', rawCv: deviceCv(stale), prepared,
@@ -134,7 +136,7 @@ describe('AAB477 — stale app-owned Summary recovery', () => {
       recoveryCandidateLocaleValidationPassed: true,
       recoveryCandidateOwnershipPassed: true,
       selectedFinalSummaryHash: finalHash,
-      visiblePreviewSummaryHash: finalHash,
+      visiblePreviewSummaryHash: null,
       exportSummaryHash: finalHash,
     });
     const current = prepared.diagnostics.summaryFinalUnitOwnership?.find((unit) => unit.roleSlot === 'current_role');

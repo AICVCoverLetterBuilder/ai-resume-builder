@@ -579,6 +579,7 @@ export function realizeFirstPersonDutyClause(
   locale: Locale,
   employmentState: SummaryV2EmploymentState,
   gender?: string | null,
+  options?: { shellSuppliesCompletedAuxiliary?: boolean },
 ): string {
   const tense = dutyTenseFromEmploymentState(employmentState);
   const raw = (bullet || '').replace(/[.;。؟।]+$/u, '').trim();
@@ -605,6 +606,7 @@ export function realizeFirstPersonDutyClause(
       locale,
       employmentState,
       gender,
+      shellSuppliesCompletedAuxiliary: options?.shellSuppliesCompletedAuxiliary,
     });
     return realized.text;
   }
@@ -745,7 +747,10 @@ export function buildNativeFirstPersonDutyTail(
   gender?: string | null,
 ): string {
   const clauses = bullets
-    .map((b) => realizeFirstPersonDutyClause(b, locale, employmentState, gender))
+    .map((b) => realizeFirstPersonDutyClause(b, locale, employmentState, gender, {
+      shellSuppliesCompletedAuxiliary: (locale === 'sr' || locale === 'hr')
+        && employmentState === 'completed',
+    }))
     .filter(Boolean);
   if (!clauses.length) return '';
   if (locale === 'fr') {
@@ -1022,6 +1027,12 @@ function detectLocaleVerbMorphologyDefect(text: string, locale: Locale): string 
     // (`gde sam kreirala je`).
     if (/(?:gd(?:e|je))\s+sam\s+\p{L}+(?:ala|ela|ila)\s+je(?=\s|[,.!?]|$)/iu.test(text)) {
       return 'sr_duplicate_past_auxiliary';
+    }
+    // Valid first-person standalone Serbian/Croatian bullets use
+    // `izrađivala sam …`; inside a `gde/gdje sam …` Summary shell that second
+    // auxiliary is redundant and makes the rendered clause ungrammatical.
+    if (/(?:gd(?:e|je))\s+sam\s+\p{L}+(?:ala|ela|ila)\s+sam(?=\s|[,.!?]|$)/iu.test(text)) {
+      return 'sr_duplicate_first_person_past_auxiliary';
     }
     // A loose `-e` present-verb heuristic can mistake noun-like surfaces such
     // as `rasporede` for a predicate and mutate them into `rasporedem` or

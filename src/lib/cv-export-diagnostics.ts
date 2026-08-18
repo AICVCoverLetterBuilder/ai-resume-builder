@@ -154,6 +154,12 @@ export type CvExportDiagnosticTrace = {
   summaryWordCountBefore?: number;
   summaryWordCountAfter?: number;
   summaryWordBudgetMax?: number;
+  rawRecoveryWordCount?: number | null;
+  rawRecoveryWordBudgetPassed?: boolean | null;
+  compactionAttempted?: boolean | null;
+  compactedRecoveryWordCount?: number | null;
+  selectedFinalWordCount?: number | null;
+  selectedFinalWordBudgetPassed?: boolean | null;
   summaryWordBudgetCompactionRevision?: string;
   summaryCurrentTextAuthorityRevision?: string;
   summaryStaleMetadataDetected?: boolean;
@@ -192,6 +198,10 @@ export type CvExportDiagnosticTrace = {
   }>;
   selectedFinalSummaryHash?: string;
   selectedFinalSource?: string | null;
+  /** Actual Summary value committed to the Preview template data prop. */
+  previewRenderedSummaryHash?: string | null;
+  previewRenderAuthority?: 'selected_final' | 'manual_saved' | 'unresolved' | 'render_mismatch' | null;
+  /** Legacy predicted field; null when no renderer witness exists. */
   visiblePreviewSummaryHash?: string | null;
   exportSummaryHash?: string | null;
   summaryRelationalOwnershipPassed?: boolean | null;
@@ -634,6 +644,11 @@ export type BuildCvExportTraceInput = {
   appVersionName?: string | null;
   nextBuildId?: string | null;
   experienceLocalization?: ExperienceLocalizationDiagnostics | null;
+  previewSummaryRender?: {
+    previewRenderedSummaryHash: string;
+    previewRenderAuthority: 'selected_final' | 'manual_saved' | 'unresolved' | 'render_mismatch';
+    selectedFinalSummaryHash: string | null;
+  } | null;
   extraStages?: CvExportStageDiag[];
   /** Optional non-PII PDF text-layer metrics from the export caller. */
   pdfTextLayerType?: CvExportDiagnosticTrace['pdfTextLayerType'];
@@ -857,6 +872,12 @@ export function buildAndStoreCvExportDiagnostic(input: BuildCvExportTraceInput):
     summaryWordCountBefore: diag?.summaryWordCountBefore,
     summaryWordCountAfter: diag?.summaryWordCountAfter,
     summaryWordBudgetMax: diag?.summaryWordBudgetMax,
+    rawRecoveryWordCount: diag?.rawRecoveryWordCount,
+    rawRecoveryWordBudgetPassed: diag?.rawRecoveryWordBudgetPassed,
+    compactionAttempted: diag?.compactionAttempted,
+    compactedRecoveryWordCount: diag?.compactedRecoveryWordCount,
+    selectedFinalWordCount: diag?.selectedFinalWordCount,
+    selectedFinalWordBudgetPassed: diag?.selectedFinalWordBudgetPassed,
     summaryWordBudgetCompactionRevision: diag?.summaryWordBudgetCompactionRevision,
     summaryCurrentTextAuthorityRevision: diag?.summaryCurrentTextAuthorityRevision,
     summaryStaleMetadataDetected: diag?.summaryStaleMetadataDetected,
@@ -892,7 +913,11 @@ export function buildAndStoreCvExportDiagnostic(input: BuildCvExportTraceInput):
     recoveryFactPresentation: diag?.recoveryFactPresentation,
     selectedFinalSummaryHash: diag?.selectedFinalSummaryHash,
     selectedFinalSource: diag?.selectedFinalSource,
-    visiblePreviewSummaryHash: diag?.visiblePreviewSummaryHash,
+    previewRenderedSummaryHash: input.previewSummaryRender?.previewRenderedSummaryHash ?? null,
+    previewRenderAuthority: input.previewSummaryRender?.previewRenderAuthority ?? null,
+    // This former exporter-only prediction must never substitute for an
+    // actual Preview witness.
+    visiblePreviewSummaryHash: input.previewSummaryRender?.previewRenderedSummaryHash ?? null,
     exportSummaryHash: diag?.exportSummaryHash,
     summaryRelationalOwnershipPassed: diag?.summaryRelationalOwnershipPassed,
     summaryRelationalOwnershipFailureReasons:

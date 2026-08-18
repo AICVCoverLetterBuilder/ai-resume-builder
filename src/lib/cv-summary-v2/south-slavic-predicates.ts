@@ -297,6 +297,13 @@ export function realizeSouthSlavicPredicateChain(options: {
   locale: 'sr' | 'hr';
   employmentState: SummaryV2EmploymentState;
   gender?: string | null;
+  /**
+   * A Summary relative-role shell such as `gde sam` already supplies the
+   * first-person completed auxiliary.  Standalone presentation bullets may
+   * carry it after every coordinated predicate (`izrađivala sam …`); retain
+   * the predicate and its arguments, but not that duplicated shell token.
+   */
+  shellSuppliesCompletedAuxiliary?: boolean;
 }): { text: string; diagnostics: SouthSlavicPredicateChainDiagnostics } {
   void SOUTH_SLAVIC_PREDICATE_CHAIN_386_REVISION;
   void options.locale;
@@ -333,7 +340,12 @@ export function realizeSouthSlavicPredicateChain(options: {
     // `sam kreirala je`.  Remove only that auxiliary; all object/modifier
     // material after it remains untouched.
     const normalizedRest = tense === 'past' && isPastParticiple(seg.verb)
-      ? seg.rest.replace(/^\s+je(?=\s|$)/iu, '')
+      ? seg.rest.replace(
+        options.shellSuppliesCompletedAuxiliary
+          ? /^\s+(?:je|sam)(?=\s|$)/iu
+          : /^\s+je(?=\s|$)/iu,
+        '',
+      )
       : seg.rest;
     if (!seg.verb || !isSouthSlavicFiniteVerbToken(seg.verb, { allowLeadBareEnding: lead })) {
       realized.push(`${seg.conj}${seg.negation}${seg.verb}${normalizedRest}`);

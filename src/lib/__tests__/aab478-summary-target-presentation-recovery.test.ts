@@ -14,8 +14,14 @@ import { extractExperienceSemanticArgumentKinds } from '@/lib/cv-experience-unsu
 import { validateAiUnitLocalePurity } from '@/lib/cv-ai-unit-locale-purity';
 import { buildAndStoreCvExportDiagnostic } from '@/lib/cv-export-diagnostics';
 import { buildModernMinimalPdfBlob, exportToDOCX } from '@/lib/export';
+import { countSummaryWords } from '@/lib/cv-summary-grounding';
+import {
+  buildNativeFirstPersonDutyTail,
+  evaluateSummaryV2NativeSurface,
+} from '@/lib/cv-summary-v2/native-surface';
 import {
   applyAppOwnedSummaryPreviewTerminalSnapshot,
+  describePreviewSummaryRender,
   prepareExportReadyCv,
 } from '@/lib/prepare-export-ready-cv';
 
@@ -266,7 +272,9 @@ describe('AAB478 Summary recovery uses fact-bound target presentation surfaces',
       selectedFinalSource: 'deterministic_v2_manifest',
     });
     expect(prepared.diagnostics.selectedFinalSummaryHash).toBe(hashSummaryV2Text(final));
-    expect(prepared.diagnostics.visiblePreviewSummaryHash).toBe(hashSummaryV2Text(final));
+    // Export preparation cannot observe a React render.  It must never claim
+    // that its selected candidate was already visible in Preview.
+    expect(prepared.diagnostics.visiblePreviewSummaryHash).toBeNull();
     expect(prepared.diagnostics.exportSummaryHash).toBe(hashSummaryV2Text(final));
   });
 
@@ -340,14 +348,22 @@ describe('AAB478 Summary recovery uses fact-bound target presentation surfaces',
     expect(prepared.ok, prepared.ok ? '' : JSON.stringify(prepared.diagnostics)).toBe(true);
     if (!prepared.ok) return;
 
-    const preview = applyAppOwnedSummaryPreviewTerminalSnapshot(source, prepared);
+    const preview = applyAppOwnedSummaryPreviewTerminalSnapshot(source, prepared, {
+      forceAppOwnedTerminal: true,
+    });
     const finalHash = hashSummaryV2Text(prepared.cv.summary || '');
     expect(preview.summary).toBe(prepared.cv.summary);
+    const previewRender = describePreviewSummaryRender(preview, prepared, true);
     expect(prepared.diagnostics).toMatchObject({
       selectedFinalSource: 'deterministic_v2_manifest',
       selectedFinalSummaryHash: finalHash,
-      visiblePreviewSummaryHash: finalHash,
+      visiblePreviewSummaryHash: null,
       exportSummaryHash: finalHash,
+    });
+    expect(previewRender).toEqual({
+      previewRenderedSummaryHash: finalHash,
+      previewRenderAuthority: 'selected_final',
+      selectedFinalSummaryHash: finalHash,
     });
 
     const pdf = await buildModernMinimalPdfBlob(prepared.cv, 'sr');
@@ -359,10 +375,13 @@ describe('AAB478 Summary recovery uses fact-bound target presentation surfaces',
 
     const trace = buildAndStoreCvExportDiagnostic({
       format: 'pdf', locale: 'sr', rawCv: source, prepared,
+      previewSummaryRender: previewRender,
       rendererReached: true, blobProduced: true, blobSize: pdf.size, blobMimeType: pdf.type,
     });
     expect(trace).toMatchObject({
       selectedFinalSummaryHash: finalHash,
+      previewRenderedSummaryHash: finalHash,
+      previewRenderAuthority: 'selected_final',
       visiblePreviewSummaryHash: finalHash,
       exportSummaryHash: finalHash,
     });
@@ -370,4 +389,136 @@ describe('AAB478 Summary recovery uses fact-bound target presentation surfaces',
       fact.owningEntryHash === hashSummaryV2Text('be5c794b')
     ))).toHaveLength(3);
   }, 60_000);
+
+  it('AAB479 renders the terminal Serbian recovery in Preview and removes only a shell-duplicated past auxiliary', () => {
+    const initial = deviceCv();
+    const raw = buildSummaryV2DeterministicText(deviceManifest(initial));
+    const stale = raw.replace(
+      'u Rewitu Current Test, gde',
+      'u Rewitu Current Test i kompaniji Atlas od januara 2023. godine, gde',
+    );
+    const source = deviceCv(stale);
+    const prepared = prepareExportReadyCv(source, 'sr', 'modern-minimal', {
+      gender: 'female', referenceDate: '2026-08-18',
+    });
+    expect(prepared.ok, prepared.ok ? '' : JSON.stringify(prepared.diagnostics)).toBe(true);
+    if (!prepared.ok) return;
+
+    // This is the exact Preview terminalizer path: app-owned provenance makes
+    // a stale saved Summary ineligible even if older diagnostics are absent.
+    const preview = applyAppOwnedSummaryPreviewTerminalSnapshot(source, prepared, {
+      forceAppOwnedTerminal: true,
+    });
+    const final = prepared.cv.summary || '';
+    const finalHash = hashSummaryV2Text(final);
+    const previewRender = describePreviewSummaryRender(preview, prepared, true);
+    expect(source.summary).toContain('Atlas');
+    expect(preview.summary).toBe(final);
+    expect(preview.summary).not.toContain('Atlas');
+    expect(preview.summary).not.toContain('januara 2023');
+    expect(preview.summary).not.toMatch(/[\u0900-\u097F]/u);
+    expect(preview.summary).not.toMatch(/gd(?:e|je)\s+sam\s+\p{L}+(?:ala|ela|ila)\s+sam\b/iu);
+    expect(prepared.diagnostics).toMatchObject({
+      savedSummaryOwnershipPassed: false,
+      recoveryCandidateOwnershipPassed: true,
+      recoveryCandidateLocaleValidationPassed: true,
+      recoveryCandidateNativeSurfacePassed: true,
+      selectedFinalSource: 'deterministic_v2_manifest',
+      selectedFinalSummaryHash: finalHash,
+      exportSummaryHash: finalHash,
+      // This is a raw phase result, not a terminal rejection.
+      rawRecoveryWordCount: 110,
+      rawRecoveryWordBudgetPassed: true,
+      compactionAttempted: null,
+      selectedFinalWordCount: 110,
+      selectedFinalWordBudgetPassed: true,
+    });
+    expect(countSummaryWords(final, 'sr')).toBe(110);
+    expect(previewRender).toEqual({
+      previewRenderedSummaryHash: finalHash,
+      previewRenderAuthority: 'selected_final',
+      selectedFinalSummaryHash: finalHash,
+    });
+
+    const trace = buildAndStoreCvExportDiagnostic({
+      format: 'pdf', locale: 'sr', rawCv: source, prepared,
+      previewSummaryRender: previewRender,
+      rendererReached: true, blobProduced: true, blobSize: 1, blobMimeType: 'application/pdf',
+    });
+    expect(trace).toMatchObject({
+      savedSummaryHash: hashSummaryV2Text(stale),
+      savedSummaryOwnershipPassed: false,
+      recoveryCandidateHash: finalHash,
+      rawRecoveryWordCount: 110,
+      rawRecoveryWordBudgetPassed: true,
+      selectedFinalSummaryHash: finalHash,
+      selectedFinalSource: 'deterministic_v2_manifest',
+      selectedFinalWordCount: 110,
+      selectedFinalWordBudgetPassed: true,
+      previewRenderedSummaryHash: finalHash,
+      previewRenderAuthority: 'selected_final',
+      visiblePreviewSummaryHash: finalHash,
+      exportSummaryHash: finalHash,
+    });
+
+    // Standalone first-person target bullets retain `sam`; only the enclosing
+    // completed-role shell consumes it. Predicate arguments remain verbatim.
+    const pastTail = buildNativeFirstPersonDutyTail([
+      'Izrađivala sam vizuelne koncepte i rasporede za digitalne materijale.',
+      'Uređivala sam grafike i slike za različite projekte.',
+      'Usaglašavala sam nacrte i izmene sa članovima projektnog tima.',
+    ], 'sr', 'completed', 'female');
+    expect(pastTail).toContain(', gde sam izrađivala vizuelne koncepte i rasporede za digitalne materijale');
+    expect(pastTail).toContain('uređivala grafike i slike za različite projekte');
+    expect(pastTail).toContain('usaglašavala nacrte i izmene sa članovima projektnog tima');
+    expect(pastTail).not.toMatch(/gd(?:e|je)\s+sam\s+\p{L}+(?:ala|ela|ila)\s+sam\b/iu);
+    const presentTail = buildNativeFirstPersonDutyTail([
+      'Pripremam vizuelne koncepte i rasporede za digitalne materijale.',
+    ], 'sr', 'present', 'female');
+    expect(presentTail).toContain(', gde pripremam vizuelne koncepte');
+
+    const malformed = evaluateSummaryV2NativeSurface({
+      text: final.replace('gde sam izrađivala', 'gde sam izrađivala sam'),
+      locale: 'sr', hasCurrent: true, hasPrior: true, perspectiveMode: 'first_person', gender: 'female',
+    });
+    expect(malformed.nativeSurfaceValidationPassed).toBe(false);
+    expect(malformed.nativeSurfaceRejectionReasons).toContain(
+      'locale_verb_morphology:sr_duplicate_first_person_past_auxiliary',
+    );
+  });
+
+  it('AAB479 records a 111-word app-owned recovery as advisory raw budget evidence, not a final failure', () => {
+    const source = deviceCv();
+    // Employer names are source-owned role metadata. Extending this arbitrary
+    // source value by one word exercises the historic 110-word boundary while
+    // retaining the same selected-entry fact/ownership contract.
+    source.experience[0] = {
+      ...source.experience[0]!,
+      company: 'Rewitu Current Test Studio',
+    };
+    const raw = buildSummaryV2DeterministicText(deviceManifest(source));
+    source.summary = raw.replace(
+      'u Rewitu Current Test Studio, gde',
+      'u Rewitu Current Test Studio i kompaniji Atlas od januara 2023. godine, gde',
+    );
+    const prepared = prepareExportReadyCv(source, 'sr', 'modern-minimal', {
+      gender: 'female', referenceDate: '2026-08-18',
+    });
+    expect(prepared.ok, prepared.ok ? '' : JSON.stringify(prepared.diagnostics)).toBe(true);
+    if (!prepared.ok) return;
+
+    expect(prepared.diagnostics).toMatchObject({
+      rawRecoveryWordCount: 111,
+      rawRecoveryWordBudgetPassed: false,
+      compactionAttempted: false,
+      compactedRecoveryWordCount: null,
+      selectedFinalWordCount: 111,
+      selectedFinalWordBudgetPassed: true,
+      selectedFinalSource: 'deterministic_v2_manifest',
+    });
+    expect(prepared.diagnostics.summaryRecoveryReason).toBe('legacy_word_budget_advisory_not_final_gate');
+    expect(prepared.diagnostics.recoveryCandidateRejectionReasons || []).not.toEqual(
+      expect.arrayContaining([expect.stringMatching(/^summary_too_long:/u)]),
+    );
+  });
 });
