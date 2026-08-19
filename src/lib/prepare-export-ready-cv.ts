@@ -402,6 +402,18 @@ export type ExportReadyDiagnostics = {
   selectedFinalWordBudgetPassed?: boolean | null;
   summaryWordBudgetCompactionRevision?: typeof SUMMARY_EXPORT_WORD_BUDGET_COMPACTION_REVISION;
   summaryCurrentTextAuthorityRevision?: typeof SUMMARY_CURRENT_TEXT_AUTHORITY_REVISION;
+  /** Privacy-safe trace of canonical Summary authority at the export boundary. */
+  canonicalSummaryTopLevelPresent?: boolean;
+  canonicalSummaryTopLevelHash?: string | null;
+  canonicalSnapshotPresent?: boolean;
+  canonicalSnapshotSummaryPresent?: boolean;
+  canonicalSnapshotSummaryHash?: string | null;
+  canonicalSnapshotStateSource?: 'persisted' | 'legacy_state_inferred' | 'not_valid' | 'none';
+  resolvedCanonicalSummaryPresent?: boolean;
+  resolvedCanonicalSummaryHash?: string | null;
+  resolvedCanonicalSummarySource?: 'top_level' | 'canonical_snapshot' | 'canonical_snapshot_legacy_state_inferred' | 'none';
+  resolvedCanonicalSummaryRejectionReason?: 'canonical_snapshot_state_not_valid' | 'canonical_snapshot_summary_missing' | null;
+  summaryAuthorityDecisionBranch?: 'app_owned_canonical_v2_authority' | 'manual_saved_summary' | 'app_owned_saved_summary';
   summaryStaleMetadataDetected?: boolean;
   summaryVisibleTextAuthorityRebound?: boolean;
   summaryVisibleTextAuthorityReason?: string;
@@ -1435,12 +1447,27 @@ export function prepareExportReadyCv(
   // stale app-owned visible Summary incorrectly win on semantic validity
   // alone.  User-authored Summaries retain their explicit saved authority;
   // this fallback is used only by the app-owned authority branch below.
-  const savedCanonicalSummary = (
-    cv.canonicalSummary
-    || (cv.canonicalSnapshot?.canonicalState === 'valid'
-      ? cv.canonicalSnapshot.canonicalSummary
-      : '')
-  ).trim();
+  const topLevelCanonicalSummary = (cv.canonicalSummary || '').trim();
+  const canonicalSnapshotSummary = (cv.canonicalSnapshot?.canonicalSummary || '').trim();
+  const canonicalSnapshotIsValid = cv.canonicalSnapshot?.canonicalState === 'valid';
+  const resolvedCanonicalSummarySource: NonNullable<ExportReadyDiagnostics['resolvedCanonicalSummarySource']> =
+    topLevelCanonicalSummary
+      ? 'top_level'
+      : canonicalSnapshotIsValid && canonicalSnapshotSummary
+        ? (cv.canonicalSnapshot?.canonicalStateSource === 'legacy_state_inferred'
+          ? 'canonical_snapshot_legacy_state_inferred'
+          : 'canonical_snapshot')
+        : 'none';
+  const resolvedCanonicalSummaryRejectionReason: ExportReadyDiagnostics['resolvedCanonicalSummaryRejectionReason'] =
+    topLevelCanonicalSummary || !cv.canonicalSnapshot
+      ? null
+      : !canonicalSnapshotIsValid
+        ? 'canonical_snapshot_state_not_valid'
+        : !canonicalSnapshotSummary
+          ? 'canonical_snapshot_summary_missing'
+          : null;
+  const savedCanonicalSummary = topLevelCanonicalSummary
+    || (canonicalSnapshotIsValid ? canonicalSnapshotSummary : '');
   const savedSummaryText = (cv.summary || '').trim();
   const savedSummaryDiffersFromCanonical = Boolean(
     cv.summaryOrigin !== 'user'
@@ -1502,6 +1529,31 @@ export function prepareExportReadyCv(
   let selectedFinalSummaryHashForDiagnostics: string | null = null;
   let selectedFinalSourceForDiagnostics: string | null = null;
   const assignSummaryV2Diagnostics = (diagnostics: ExportReadyDiagnostics) => {
+    diagnostics.canonicalSummaryTopLevelPresent = Boolean(topLevelCanonicalSummary);
+    diagnostics.canonicalSummaryTopLevelHash = topLevelCanonicalSummary
+      ? hashSummaryV2Text(topLevelCanonicalSummary)
+      : null;
+    diagnostics.canonicalSnapshotPresent = Boolean(cv.canonicalSnapshot);
+    diagnostics.canonicalSnapshotSummaryPresent = Boolean(canonicalSnapshotSummary);
+    diagnostics.canonicalSnapshotSummaryHash = canonicalSnapshotSummary
+      ? hashSummaryV2Text(canonicalSnapshotSummary)
+      : null;
+    diagnostics.canonicalSnapshotStateSource = !cv.canonicalSnapshot
+      ? 'none'
+      : canonicalSnapshotIsValid
+        ? (cv.canonicalSnapshot.canonicalStateSource || 'persisted')
+        : 'not_valid';
+    diagnostics.resolvedCanonicalSummaryPresent = Boolean(savedCanonicalSummary);
+    diagnostics.resolvedCanonicalSummaryHash = savedCanonicalSummary
+      ? hashSummaryV2Text(savedCanonicalSummary)
+      : null;
+    diagnostics.resolvedCanonicalSummarySource = resolvedCanonicalSummarySource;
+    diagnostics.resolvedCanonicalSummaryRejectionReason = resolvedCanonicalSummaryRejectionReason;
+    diagnostics.summaryAuthorityDecisionBranch = appOwnedSummaryRequiresV2Authority
+      ? 'app_owned_canonical_v2_authority'
+      : cv.summaryOrigin === 'user'
+        ? 'manual_saved_summary'
+        : 'app_owned_saved_summary';
     diagnostics.summaryValidationAuthoritySource = summaryValidationAuthoritySource;
     diagnostics.summarySavedProvenance = rawCv.summaryOrigin || 'user';
     diagnostics.summarySavedSummaryReboundRevalidated = appOwnedSummaryRequiresV2Authority;

@@ -36,6 +36,31 @@ function sameText(a?: string, b?: string): boolean {
   return Boolean(normalized(a)) && normalized(a) === normalized(b);
 }
 
+/**
+ * Older persisted snapshots predate `canonicalState`. Promote only a complete
+ * revisioned, locale-bound snapshot; partial data remains untrusted.
+ */
+function isStructurallyValidPreStateCanonicalSnapshot(
+  snapshot: CanonicalCvSnapshot | undefined,
+): snapshot is CanonicalCvSnapshot {
+  return Boolean(
+    snapshot
+    && snapshot.canonicalState === undefined
+    && normalized(snapshot.canonicalSummary)
+    && Array.isArray(snapshot.canonicalExperiences)
+    && snapshot.canonicalExperiences.length > 0
+    && snapshot.canonicalExperiences.every((experience) => (
+      Boolean(normalized(experience.experienceId)) && Array.isArray(experience.bullets)
+    ))
+    && asLocale(snapshot.canonicalLocale)
+    && Number.isInteger(snapshot.canonicalRevision)
+    && snapshot.canonicalRevision >= 1
+    && normalized(snapshot.canonicalSourceHash)
+    && ['user_structured_input', 'validated_ai_result', 'legacy_migration']
+      .includes(snapshot.canonicalCreatedFrom),
+  );
+}
+
 function snapshotDuties(cv: CVData, exp: WorkExperience): string {
   const snap = cv.canonicalSnapshot?.canonicalExperiences.find((item) => item.experienceId === exp.id);
   return (snap?.bullets || []).map((bullet) => bullet.sourceText.trim()).filter(Boolean).join('\n');
@@ -135,6 +160,15 @@ export function normalizeLegacyCvRuntimeWithTrace(
 ): { cv: CVData; trace: LegacyCvMigrationTrace } {
   const fromVersion = Number(input.runtimeMigrationVersion || 0);
   const normalizedRegion = normalizeCvRegion(input.region);
+  const persistedCanonicalSnapshot = input.canonicalSnapshot;
+  const canonicalSnapshot = isStructurallyValidPreStateCanonicalSnapshot(persistedCanonicalSnapshot)
+    ? {
+      ...persistedCanonicalSnapshot,
+      canonicalState: 'valid' as const,
+      canonicalStateSource: 'legacy_state_inferred' as const,
+    }
+    : persistedCanonicalSnapshot;
+  const canonicalSnapshotWasUpgraded = canonicalSnapshot !== persistedCanonicalSnapshot;
   const canRecoverMissingGrounding = (input.experience || []).some((exp) => {
     if ((exp.originalUserDescription || '').trim()) return false;
     const visible = (exp.description || '').trim();
@@ -147,7 +181,7 @@ export function normalizeLegacyCvRuntimeWithTrace(
   if (fromVersion >= CV_RUNTIME_MIGRATION_VERSION && !canRecoverMissingGrounding) {
     // Idempotent safety: even after a prior migration, never leave an invalid region
     // that crashes Corporate Navy PDF/DOCX on regionSettings[region].showAddress.
-    if (normalizedRegion === input.region) {
+    if (normalizedRegion === input.region && !canonicalSnapshotWasUpgraded) {
       return {
         cv: input,
         trace: {
@@ -166,7 +200,11 @@ export function normalizeLegacyCvRuntimeWithTrace(
       };
     }
     return {
-      cv: { ...input, region: normalizedRegion },
+      cv: {
+        ...input,
+        region: normalizedRegion,
+        ...(canonicalSnapshotWasUpgraded ? { canonicalSnapshot } : {}),
+      },
       trace: {
         applied: true,
         fromVersion,
@@ -264,13 +302,15 @@ export function normalizeLegacyCvRuntimeWithTrace(
     ...(summaryGeneratedLocale ? { summaryGeneratedLocale } : {}),
     summaryOrigin,
     canonicalSummary,
+    ...(canonicalSnapshot !== persistedCanonicalSnapshot ? { canonicalSnapshot } : {}),
     runtimeMigrationVersion: CV_RUNTIME_MIGRATION_VERSION,
   };
 
   const hasAuthoritativeDuties = experience.some((exp) => Boolean((exp.canonicalDescription || '').trim()));
   const authoritativeSourceText = experience.map((exp) => exp.canonicalDescription || '').join('\n');
   const detectedAuthoritativeLocale = detectContentLocale(authoritativeSourceText);
-  const hasTrustedExistingLocale = input.canonicalSnapshot?.canonicalState === 'valid';
+  const canonicalSnapshotState = canonicalSnapshot?.canonicalState as CanonicalCvSnapshot['canonicalState'] | undefined;
+  const hasTrustedExistingLocale = canonicalSnapshotState === 'valid';
   const summaryCanSupportRecovery = validateSummaryCompleteness(input.summary || '', {
     locale: contentLocale || localeHint || 'en',
   }).valid;
@@ -278,14 +318,14 @@ export function normalizeLegacyCvRuntimeWithTrace(
   if (hasAuthoritativeDuties && (
     provenanceChanged
     || staleLocale
-    || !input.canonicalSnapshot
-    || input.canonicalSnapshot.canonicalState !== 'valid'
+    || !canonicalSnapshot
+    || canonicalSnapshotState !== 'valid'
   ) && (
-    input.canonicalSnapshot?.canonicalState !== 'needs_rebuild'
+    canonicalSnapshotState !== 'needs_rebuild'
     || summaryCanSupportRecovery
   ) && (Boolean(detectedAuthoritativeLocale) || hasTrustedExistingLocale)) {
     const canonicalLocale = detectedAuthoritativeLocale
-      || input.canonicalSnapshot?.canonicalLocale
+      || canonicalSnapshot?.canonicalLocale
       || contentLocale
       || localeHint
       || 'en';
@@ -295,11 +335,11 @@ export function normalizeLegacyCvRuntimeWithTrace(
       canonicalSummary: canonicalSummary || '',
       canonicalExperiences,
       canonicalLocale,
-      canonicalRevision: Math.max(1, input.canonicalSnapshot?.canonicalRevision || 0),
+      canonicalRevision: Math.max(1, canonicalSnapshot?.canonicalRevision || 0),
       canonicalCreatedFrom: 'legacy_migration' as const,
       canonicalState: 'valid' as const,
     };
-    const canonicalSnapshot: CanonicalCvSnapshot = {
+    const rebuiltSnapshot: CanonicalCvSnapshot = {
       ...snapshotBase,
       canonicalSourceHash: computeCanonicalSourceHash({
         canonicalLocale,
@@ -310,7 +350,7 @@ export function normalizeLegacyCvRuntimeWithTrace(
         languages: input.languages || [],
       }),
     };
-    next = { ...next, canonicalSnapshot };
+    next = { ...next, canonicalSnapshot: rebuiltSnapshot };
     rebuiltCanonicalSnapshot = true;
   }
 

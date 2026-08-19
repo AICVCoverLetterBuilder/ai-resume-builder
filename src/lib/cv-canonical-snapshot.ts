@@ -69,6 +69,8 @@ export type CanonicalCvSnapshot = {
   canonicalSourceHash: string;
   canonicalCreatedFrom: CanonicalCreatedFrom;
   canonicalState: CanonicalState;
+  /** Privacy-safe provenance for a structurally valid pre-state migration. */
+  canonicalStateSource?: 'persisted' | 'legacy_state_inferred';
 };
 
 export type LocalizedProjectionBullet = {

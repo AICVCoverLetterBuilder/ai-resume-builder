@@ -134,6 +134,99 @@ describe('AAB484 Creative Artistic persisted-device recovery', () => {
     expect(prepared.diagnostics.summaryFinalUnitOwnership).toHaveLength(4);
   });
 
+  it('retains snapshot-only canonical V2 authority through the real stale persisted migration shape', () => {
+    const persisted = stalePersistedDeviceCv();
+    delete persisted.canonicalSummary;
+    // The persisted snapshot is captured before the stale display-only
+    // Experience projections. Hydration must retain this immutable authority
+    // while normalizing those projections.
+    persisted.canonicalSnapshot = buildCanonicalSnapshotFromCv(
+      { ...deviceCv(), canonicalSummary: EXPECTED },
+      { canonicalLocale: 'sr', createdFrom: 'legacy_migration', revision: 2 },
+    );
+    const hydrated = normalizeLegacyCvRuntime(persisted, 'sr');
+    expect(hydrated.canonicalSummary).toBeUndefined();
+    expect(hydrated.canonicalSnapshot?.canonicalSummary).toBe(EXPECTED);
+
+    const prepared = prepareExportReadyCv(hydrated, 'sr', 'creative-artistic', {
+      gender: 'female', referenceDate: '2026-08-19',
+    });
+    expect(prepared.ok, prepared.ok ? '' : `${prepared.reason}:${prepared.stage}`).toBe(true);
+    if (!prepared.ok) return;
+    expect(prepared.cv.summary).toBe(EXPECTED);
+    expect(prepared.diagnostics.selectedFinalSource).toBe('deterministic_v2_manifest');
+  });
+
+  it('rebinds a structurally valid pre-state persisted canonical snapshot before stale app-owned recovery', () => {
+    const persisted = stalePersistedDeviceCv();
+    delete persisted.canonicalSummary;
+    const canonicalSnapshot = buildCanonicalSnapshotFromCv(
+      { ...deviceCv(), canonicalSummary: EXPECTED },
+      { canonicalLocale: 'sr', createdFrom: 'legacy_migration', revision: 2 },
+    );
+    // The device draft predates canonicalState. This is the persisted schema
+    // that reaches hydration, not a synthetic current-schema snapshot.
+    delete (canonicalSnapshot as Partial<typeof canonicalSnapshot>).canonicalState;
+    persisted.canonicalSnapshot = canonicalSnapshot;
+    const hydrated = normalizeLegacyCvRuntime(persisted, 'sr');
+    expect(hydrated.canonicalSummary).toBeUndefined();
+    expect(hydrated.canonicalSnapshot?.canonicalSummary).toBe(EXPECTED);
+
+    const prepared = prepareExportReadyCv(hydrated, 'sr', 'creative-artistic', {
+      gender: 'female', referenceDate: '2026-08-19',
+    });
+    expect(prepared.ok, prepared.ok ? '' : `${prepared.reason}:${prepared.stage}`).toBe(true);
+    if (!prepared.ok) return;
+    expect(prepared.diagnostics).toMatchObject({
+      canonicalSummaryTopLevelPresent: false,
+      canonicalSnapshotPresent: true,
+      canonicalSnapshotSummaryPresent: true,
+      canonicalSnapshotSummaryHash: 'fnv1a_e7f712af',
+      canonicalSnapshotStateSource: 'legacy_state_inferred',
+      resolvedCanonicalSummaryPresent: true,
+      resolvedCanonicalSummaryHash: 'fnv1a_e7f712af',
+      resolvedCanonicalSummarySource: 'canonical_snapshot_legacy_state_inferred',
+      resolvedCanonicalSummaryRejectionReason: null,
+      summaryAuthorityDecisionBranch: 'app_owned_canonical_v2_authority',
+      summaryFactSetSource: 'app_owned_v2_manifest',
+      summaryValidationAuthoritySource: 'app_owned_v2_manifest',
+      summarySavedProvenance: 'deterministic_fallback',
+      summaryStaleMetadataDetected: true,
+      savedSummaryJobContextPassed: false,
+      summaryVisibleTextAuthorityBlockedReason: 'app_owned_canonical_v2_authority',
+      selectedFinalSource: 'deterministic_v2_manifest',
+    });
+    expect(prepared.diagnostics.selectedFinalSummaryHash).toBe('fnv1a_e7f712af');
+    expect(prepared.cv.summary).toBe(EXPECTED);
+  });
+
+  it('does not promote a malformed pre-state canonical snapshot into app-owned authority', () => {
+    const persisted = stalePersistedDeviceCv();
+    delete persisted.canonicalSummary;
+    const canonicalSnapshot = buildCanonicalSnapshotFromCv(
+      { ...deviceCv(), canonicalSummary: EXPECTED },
+      { canonicalLocale: 'sr', createdFrom: 'legacy_migration', revision: 2 },
+    );
+    delete (canonicalSnapshot as Partial<typeof canonicalSnapshot>).canonicalState;
+    canonicalSnapshot.canonicalSourceHash = '';
+    persisted.canonicalSnapshot = canonicalSnapshot;
+
+    const prepared = prepareExportReadyCv(normalizeLegacyCvRuntime(persisted, 'sr'), 'sr', 'creative-artistic', {
+      gender: 'female', referenceDate: '2026-08-19',
+    });
+    expect(prepared.ok, prepared.ok ? '' : `${prepared.reason}:${prepared.stage}`).toBe(true);
+    if (!prepared.ok) return;
+    expect(prepared.cv.summary).toBe(STALE);
+    expect(prepared.diagnostics).toMatchObject({
+      canonicalSnapshotPresent: true,
+      canonicalSnapshotStateSource: 'not_valid',
+      resolvedCanonicalSummaryPresent: false,
+      resolvedCanonicalSummarySource: 'none',
+      resolvedCanonicalSummaryRejectionReason: 'canonical_snapshot_state_not_valid',
+      selectedFinalSource: 'saved_summary',
+    });
+  });
+
   it('keeps an app-owned Summary when its canonical terminal surface and context are genuinely aligned', () => {
     const base = deviceCv();
     const aligned: CVData = {
