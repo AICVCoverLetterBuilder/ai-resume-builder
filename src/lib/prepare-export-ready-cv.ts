@@ -1417,9 +1417,37 @@ export function prepareExportReadyCv(
       candidateSource: 'final_selected',
     })
     : null;
+  const primaryExp = (summaryManifest.current
+    ? (cv.experience || []).find((entry) => entry.id === summaryManifest.current!.entryId)
+    : undefined)
+    || (cv.experience || []).find((e) => e.isPresent)
+    || (cv.experience || [])[0];
+  const primaryJobCtx = jobContextForExport(primaryExp?.position || cv.personal?.jobTitle);
+  // A persisted app-owned Summary can remain semantically valid while still
+  // being an older terminal surface (for example after an app upgrade).  When
+  // the immutable canonical Summary is a distinct app-owned terminal surface, the
+  // visible saved text is stale even if its own ownership check passes.  Route
+  // this case through the same deterministic V2 rebound used for relational
+  // ownership failures so Preview/PDF cannot retain the pre-upgrade wording.
+  const savedCanonicalSummary = (cv.canonicalSummary || '').trim();
+  const savedSummaryText = (cv.summary || '').trim();
+  const savedSummaryDiffersFromCanonical = Boolean(
+    cv.summaryOrigin !== 'user'
+    && savedCanonicalSummary
+    && savedCanonicalSummary !== savedSummaryText,
+  );
+  const appOwnedSummaryHasStaleCanonicalSurface = Boolean(
+    savedSummaryDiffersFromCanonical
+    && savedCanonicalSummary
+    && !isSummaryStaleForJobContext(savedCanonicalSummary, primaryJobCtx, {
+      summaryOrigin: cv.summaryOrigin,
+      summaryGenerationContextKey: cv.summaryGenerationContextKey,
+    }),
+  );
   const appOwnedSummaryRequiresV2Authority = Boolean(
-    savedAppOwnedV2Validation
-    && savedAppOwnedV2Validation.relationalOwnershipFailureReasons.length > 0,
+    (savedAppOwnedV2Validation
+      && savedAppOwnedV2Validation.relationalOwnershipFailureReasons.length > 0)
+    || appOwnedSummaryHasStaleCanonicalSurface,
   );
   const summaryValidationAuthoritySource: NonNullable<ExportReadyDiagnostics['summaryValidationAuthoritySource']> =
     appOwnedSummaryRequiresV2Authority
@@ -1556,12 +1584,6 @@ export function prepareExportReadyCv(
   // The V2 resolver, not array order, owns every current Summary context
   // field. A second older current job may never lend its employer/date to the
   // selected current role.
-  const primaryExp = (summaryManifest.current
-    ? (cv.experience || []).find((entry) => entry.id === summaryManifest.current!.entryId)
-    : undefined)
-    || (cv.experience || []).find((e) => e.isPresent)
-    || (cv.experience || [])[0];
-  const primaryJobCtx = jobContextForExport(primaryExp?.position || cv.personal?.jobTitle);
   const summaryContextMatch = Boolean(
     cv.summaryGenerationContextKey
     && experienceJobContextsMatch(cv.summaryGenerationContextKey, primaryJobCtx.key),
@@ -1724,7 +1746,9 @@ export function prepareExportReadyCv(
       recoveryManifest = projection.manifest;
       recoveryFactPresentationForDiagnostics = projection.factPresentation;
       finalSummaryManifest = recoveryManifest;
-      recovered = buildSummaryV2DeterministicText(recoveryManifest);
+      recovered = appOwnedSummaryHasStaleCanonicalSurface
+        ? savedCanonicalSummary
+        : buildSummaryV2DeterministicText(recoveryManifest);
       summaryRecoverySource = 'deterministic_v2_manifest';
       durationCompositionSource = 'deterministic_v2_manifest';
       factSource = 'app_owned_v2_manifest';
@@ -1971,6 +1995,7 @@ export function prepareExportReadyCv(
   if (appOwnedSummaryRequiresV2Authority) {
     const postQualityV2 = validateSummaryV2AgainstManifest(cv.summary || '', finalSummaryManifest, {
       candidateSource: 'final_selected',
+      trustedConstructionAuthority: true,
     });
     summaryV2ValidationForDiagnostics = postQualityV2;
     if (!postQualityV2.ok) {

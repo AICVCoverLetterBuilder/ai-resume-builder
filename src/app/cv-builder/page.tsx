@@ -4848,6 +4848,20 @@ export default function CVBuilderPage() {
             { alreadyPrepared: terminalExperiencePresentationReady },
           );
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
+          await recordExportDiagnostic({
+            format: 'pdf',
+            rawCv: lastExportRawCvRef.current || cvForExport,
+            prepared: lastExportPrepareRef.current,
+            rendererReached: true,
+            blobProduced: true,
+            blobMimeType: 'application/pdf',
+            androidSaveReached: true,
+            saveResult,
+            extraStages: [
+              { stage: 'render_blob', result: 'ok' },
+              { stage: 'android_save', result: saveResult.result === 'saved' ? 'ok' : 'fail' },
+            ],
+          });
           incrementDownloads('cv');
           return;
         }

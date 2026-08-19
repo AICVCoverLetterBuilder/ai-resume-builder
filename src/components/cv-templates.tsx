@@ -29,6 +29,18 @@ function getLabels(locale?: Locale) {
   };
 }
 
+/** Keep date ranges meaningful when one side of an app-owned entry is absent. */
+function formatExperienceDateRange(
+  startDate: string | undefined,
+  endDate: string | undefined,
+  isPresent: boolean | undefined,
+  presentLabel: string,
+): string {
+  const start = String(startDate || '').trim();
+  const end = String(isPresent ? presentLabel : (endDate || '')).trim();
+  return [start, end].filter(Boolean).join(' - ');
+}
+
 function PhotoFill({
   photo,
   alt = '',
@@ -819,7 +831,7 @@ export function CreativeArtisticTemplate({ data, locale }: TemplateProps) {
       </header>
       <div className="p-8" style={{ padding: 32, backgroundColor: '#ffffff', boxSizing: 'border-box' }}>
         {data.summary && <section className="mb-6" style={{ marginBottom: 24 }}><p data-export-meaningful="true" className="text-gray-700 text-base leading-relaxed" style={{ color: '#374151', fontSize: 16, lineHeight: 1.625, margin: 0, ...exportSafeTextStyle }}>{data.summary}</p></section>}
-        {data.experience.length > 0 && <section className="mb-6" style={{ marginBottom: 24 }}><h2 data-export-meaningful="true" className="text-violet-600 font-bold mb-3" style={{ color: '#7c3aed', fontWeight: 700, marginBottom: 12, ...exportSafeTextStyle }}>{L.experience}</h2>{data.experience.map(exp => (<div key={exp.id} data-export-meaningful="true" className="mb-4 pl-4 border-l-2 border-violet-200" style={{ marginBottom: 16, paddingLeft: 16, borderLeft: '2px solid #ddd6fe', boxSizing: 'border-box' }}><h3 className="font-semibold" style={{ fontWeight: 600, margin: 0, ...exportSafeTextStyle }}>{exp.position}</h3><p className="text-xs text-violet-500" style={{ color: '#8b5cf6', fontSize: 12, margin: '2px 0 0', ...exportSafeTextStyle }}>{exp.company} | {exp.startDate} - {exp.isPresent ? L.present : exp.endDate}</p>{exp.description && <p className="mt-1 text-gray-600 whitespace-pre-line" style={{ ...exportSafeTextStyle, color: '#4b5563', marginTop: 4, whiteSpace: 'pre-line' }}>{exp.description}</p>}</div>))}</section>}
+        {data.experience.length > 0 && <section className="mb-6" style={{ marginBottom: 24 }}><h2 data-export-meaningful="true" className="text-violet-600 font-bold mb-3" style={{ color: '#7c3aed', fontWeight: 700, marginBottom: 12, ...exportSafeTextStyle }}>{L.experience}</h2>{data.experience.map(exp => (<div key={exp.id} data-export-meaningful="true" className="mb-4 pl-4 border-l-2 border-violet-200" style={{ marginBottom: 16, paddingLeft: 16, borderLeft: '2px solid #ddd6fe', boxSizing: 'border-box' }}><h3 className="font-semibold" style={{ fontWeight: 600, margin: 0, ...exportSafeTextStyle }}>{exp.position}</h3><p className="text-xs text-violet-500" style={{ color: '#8b5cf6', fontSize: 12, margin: '2px 0 0', ...exportSafeTextStyle }}>{exp.company}{formatExperienceDateRange(exp.startDate, exp.endDate, exp.isPresent, L.present) ? ` | ${formatExperienceDateRange(exp.startDate, exp.endDate, exp.isPresent, L.present)}` : ''}</p>{exp.description && <p className="mt-1 text-gray-600 whitespace-pre-line" style={{ ...exportSafeTextStyle, color: '#4b5563', marginTop: 4, whiteSpace: 'pre-line' }}>{exp.description}</p>}</div>))}</section>}
         {data.education.length > 0 && <section data-export-group="education-section" className="mb-6" style={{ marginBottom: 24 }}><h2 data-export-meaningful="true" data-export-keep-with-next="true" className="text-violet-600 font-bold mb-3" style={{ color: '#7c3aed', fontWeight: 700, marginBottom: 12, ...exportSafeTextStyle }}>{L.education}</h2>{data.education.map(edu => {
           const educationDates = [edu.startDate, edu.endDate].filter(Boolean).join(' - ');
           const educationMeta = [edu.school, educationDates].filter(Boolean).join(' | ');
