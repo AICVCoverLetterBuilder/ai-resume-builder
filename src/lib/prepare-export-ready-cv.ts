@@ -1429,7 +1429,18 @@ export function prepareExportReadyCv(
   // visible saved text is stale even if its own ownership check passes.  Route
   // this case through the same deterministic V2 rebound used for relational
   // ownership failures so Preview/PDF cannot retain the pre-upgrade wording.
-  const savedCanonicalSummary = (cv.canonicalSummary || '').trim();
+  // A valid canonical snapshot is the durable V2 authority.  Legacy drafts
+  // can lose the top-level `canonicalSummary` mirror during hydration while
+  // retaining that snapshot, so treating the mirror as the only source lets a
+  // stale app-owned visible Summary incorrectly win on semantic validity
+  // alone.  User-authored Summaries retain their explicit saved authority;
+  // this fallback is used only by the app-owned authority branch below.
+  const savedCanonicalSummary = (
+    cv.canonicalSummary
+    || (cv.canonicalSnapshot?.canonicalState === 'valid'
+      ? cv.canonicalSnapshot.canonicalSummary
+      : '')
+  ).trim();
   const savedSummaryText = (cv.summary || '').trim();
   const savedSummaryDiffersFromCanonical = Boolean(
     cv.summaryOrigin !== 'user'
@@ -1653,7 +1664,7 @@ export function prepareExportReadyCv(
     factSet,
     requestedLocale,
     gender,
-    (cv.canonicalSummary || '').trim(),
+    savedCanonicalSummary,
     cv.canonicalSnapshot?.canonicalLocale,
     cv,
     durationSnapshot.total,
@@ -1743,7 +1754,7 @@ export function prepareExportReadyCv(
           factSet,
           requestedLocale,
           gender,
-          (cv.canonicalSummary || '').trim(),
+          savedCanonicalSummary,
           cv.canonicalSnapshot?.canonicalLocale,
           cv,
           durationSnapshot.total,
@@ -1846,7 +1857,7 @@ export function prepareExportReadyCv(
         : factSet,
       requestedLocale,
       gender,
-      (cv.canonicalSummary || '').trim(),
+      savedCanonicalSummary,
       cv.canonicalSnapshot?.canonicalLocale,
       cv,
       durationSnapshot.total,

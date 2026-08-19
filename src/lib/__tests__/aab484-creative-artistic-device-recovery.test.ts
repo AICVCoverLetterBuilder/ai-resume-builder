@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import type { CVData, WorkExperience } from '@/lib/types';
 import { hashSummaryV2Text } from '@/lib/cv-summary-v2/facts';
 import { normalizeLegacyCvRuntime } from '@/lib/cv-legacy-runtime-migration';
+import { buildCanonicalSnapshotFromCv } from '@/lib/cv-canonical-snapshot';
 import { prepareExportReadyCv } from '@/lib/prepare-export-ready-cv';
 import { applyGeneratedExperienceDescription } from '@/lib/cv-experience-provenance';
 import { templateComponents } from '@/components/cv-templates';
@@ -89,6 +90,47 @@ describe('AAB484 Creative Artistic persisted-device recovery', () => {
     expect(prepared.cv.summary).toBe(EXPECTED);
     expect(prepared.diagnostics.summaryRelationalOwnershipPassed).toBe(true);
     // One duration unit plus the current and two selected prior roles.
+    expect(prepared.diagnostics.summaryFinalUnitOwnership).toHaveLength(4);
+  });
+
+  it('uses the validated canonical V2 snapshot when the stale app-owned draft has no top-level canonicalSummary', () => {
+    const persisted = {
+      ...deviceCv(),
+      summaryGenerationContextKey: 'fnv1a_aab486_stale_saved_summary_context',
+    };
+    // The device branch was hydrated from a persisted canonical snapshot. Its
+    // top-level legacy mirror is absent, so the authority state machine must
+    // not treat that as absence of canonical V2 authority.
+    delete persisted.canonicalSummary;
+    persisted.canonicalSnapshot = buildCanonicalSnapshotFromCv(
+      { ...deviceCv(), canonicalSummary: EXPECTED },
+      { canonicalLocale: 'sr', createdFrom: 'legacy_migration', revision: 2 },
+    );
+    const hydrated = normalizeLegacyCvRuntime(persisted, 'sr');
+    expect(hydrated.canonicalSummary).toBeUndefined();
+    expect(hydrated.canonicalSnapshot?.canonicalSummary).toBe(EXPECTED);
+
+    const prepared = prepareExportReadyCv(hydrated, 'sr', 'creative-artistic', {
+      gender: 'female', referenceDate: '2026-08-19',
+    });
+    expect(prepared.ok, prepared.ok ? '' : `${prepared.reason}:${prepared.stage}`).toBe(true);
+    if (!prepared.ok) return;
+
+    expect(prepared.cv.summary).toBe(EXPECTED);
+    expect(prepared.diagnostics).toMatchObject({
+      summaryFactSetSource: 'app_owned_v2_manifest',
+      summaryValidationAuthoritySource: 'app_owned_v2_manifest',
+      summarySavedProvenance: 'deterministic_fallback',
+      summaryStaleMetadataDetected: true,
+      savedSummaryJobContextPassed: false,
+      summaryVisibleTextAuthorityRebound: false,
+      summaryVisibleTextAuthorityBlockedReason: 'app_owned_canonical_v2_authority',
+      summarySavedSummaryReboundRevalidated: true,
+      selectedFinalSource: 'deterministic_v2_manifest',
+    });
+    expect(prepared.diagnostics.savedSummaryHash).toBe(hashSummaryV2Text(STALE));
+    expect(prepared.diagnostics.selectedFinalSummaryHash).toBe(hashSummaryV2Text(EXPECTED));
+    expect(prepared.diagnostics.summaryRelationalOwnershipPassed).toBe(true);
     expect(prepared.diagnostics.summaryFinalUnitOwnership).toHaveLength(4);
   });
 
