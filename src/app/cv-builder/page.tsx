@@ -1172,6 +1172,7 @@ export default function CVBuilderPage() {
       const appOwnedPreviewSummary = migratedCv.summaryOrigin === 'deterministic_fallback'
         || migratedCv.summaryOrigin === 'ai_generated'
         || migratedCv.summaryOrigin === 'ai_repaired';
+      const terminalSelectedSummaryHash = matchingTerminalPreview?.selectedFinalSummaryHash || null;
       const previewSourceCv = migratedCv;
       const presentation = resolveExperiencePresentationSnapshot({
         cv: previewSourceCv,
@@ -1186,7 +1187,21 @@ export default function CVBuilderPage() {
         presentation.cv,
         presentation,
       );
-      const qualityCv = applyCvContentQuality(terminalExperienceCv, locale, {
+      // Content-quality is not a Summary authority.  Give it either the
+      // already-selected terminal Summary or an empty Summary while the
+      // asynchronous terminal pass is pending, then restore that exact
+      // surface below.  Otherwise the quality helper can synthesize a generic
+      // occupation blurb between Preview renders and mask the pending/selected
+      // terminal decision.
+      const terminalSummaryText = appOwnedPreviewSummary
+        ? terminalPreviewReady && terminalSelectedSummaryHash
+          ? migratedCv.summary || ''
+          : ''
+        : null;
+      const qualityInputCv = terminalSummaryText === null
+        ? terminalExperienceCv
+        : { ...terminalExperienceCv, summary: terminalSummaryText };
+      const qualityCv = applyCvContentQuality(qualityInputCv, locale, {
         gender: previewSourceCv.personal?.gender,
         summaryOrigin: previewSourceCv.summaryOrigin,
       }).cv;
@@ -1203,16 +1218,12 @@ export default function CVBuilderPage() {
       // it must not re-run Summary recovery against that post-final CV or
       // replace its selected surface. User-authored Summary prose remains on
       // the ordinary synchronous path.
-      const terminalSelectedSummaryHash = matchingTerminalPreview?.selectedFinalSummaryHash || null;
       const summaryTerminalCv = appOwnedPreviewSummary
-        ? terminalPreviewReady && terminalSelectedSummaryHash
-          ? {
-            ...terminalPresentationCv,
-            summary: migratedCv.summary,
-            summaryOrigin: migratedCv.summaryOrigin,
-            summaryGeneratedLocale: migratedCv.summaryGeneratedLocale,
-          }
-          : { ...terminalPresentationCv, summary: '' }
+        // `previewDerivationInputCv` is the asynchronously prepared terminal
+        // CV here.  Restoring its exact Summary after quality normalization
+        // prevents either stale editor prose or a generic quality fallback
+        // from being spliced into the Preview.
+        ? { ...terminalPresentationCv, summary: terminalSummaryText || '' }
         : terminalPresentationCv;
       const localeSafeCv = omitInvalidLocalizedFieldsForPreview(summaryTerminalCv, locale);
       const base = {
@@ -4250,22 +4261,17 @@ export default function CVBuilderPage() {
           computeExperienceLocalizationOperationDeadline(Date.now());
         const titleRepairContextByBatchKey = new Map<string, unknown>();
         const titleTransportDiagnostics: Partial<ExperienceLocalizationDiagnostics> = {};
-        const previewSelectedEntryIds = (options?.purpose || 'export') === 'preview'
-          ? new Set(
-            (sourceCv.experience || [])
-              .filter((entry) => (
-                prepared.diagnostics.summarySelectedEntryHashes || []
-              ).includes(hashSummaryV2Text(entry.id)))
-              .map((entry) => entry.id),
-          )
-          : undefined;
+        // Preview renders every Experience row, not only Summary-selected
+        // entries.  Resolve title presentation for the complete terminal CV so
+        // an omitted row cannot show a stale source title while PDF/DOCX use a
+        // localized title surface for that same entry.
         const titleLocalization = await prepareExportLocalizedTitles({
           sourceCv,
           exportCv: recoveredCv,
           targetLocale: locale,
           gender: sourceCv.personal?.gender,
           getCurrentCv: () => cvRef.current,
-          experienceIds: previewSelectedEntryIds,
+          experienceIds: undefined,
           includePersonalTitle: (options?.purpose || 'export') === 'export',
           adapter: async (request: ExportTitleLocalizationTransportInput) => {
             const aiGate = getAiGate();
@@ -4460,8 +4466,7 @@ export default function CVBuilderPage() {
             !== titleKey(recoveredCv.personal?.jobTitle || '')
         )
           || (titleLocalization.exportCv.experience || []).some(
-            (entry) => (!previewSelectedEntryIds || previewSelectedEntryIds.has(entry.id))
-              && titleKey(recoveredPositions.get(entry.id) || '')
+          (entry) => titleKey(recoveredPositions.get(entry.id) || '')
                 !== titleKey(entry.position || ''),
           )
           || hashSummaryV2Text(titleLocalization.exportCv.summary || '')

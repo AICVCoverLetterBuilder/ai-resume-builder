@@ -1436,13 +1436,35 @@ export function prepareExportReadyCv(
     && savedCanonicalSummary
     && savedCanonicalSummary !== savedSummaryText,
   );
+  // `summaryGenerationContextKey` belongs to the persisted visible Summary,
+  // not necessarily to an older canonical terminal surface.  Never use that
+  // stale saved key when judging the canonical V2 candidate below.
+  const canonicalPresentationProjection = savedSummaryDiffersFromCanonical
+    ? projectDeterministicRecoveryPresentationSurfaces(summaryManifest)
+    : null;
+  const canonicalV2Validation = canonicalPresentationProjection
+    ? validateSummaryV2AgainstManifest(
+      savedCanonicalSummary,
+      canonicalPresentationProjection.manifest,
+      {
+        candidateSource: 'deterministic',
+        preserveConstructionOrder: true,
+        trustedConstructionAuthority: true,
+      },
+    )
+    : null;
+  const canonicalV2AuthorityAvailable = Boolean(canonicalV2Validation?.ok);
+  const canonicalHasOccupationalConflict = isSummaryStaleForJobContext(
+    savedCanonicalSummary,
+    primaryJobCtx,
+    // Evaluate canonical prose for content conflicts only.  A saved
+    // generation-context mismatch must not be projected onto it.
+    { summaryOrigin: cv.summaryOrigin },
+  );
   const appOwnedSummaryHasStaleCanonicalSurface = Boolean(
     savedSummaryDiffersFromCanonical
-    && savedCanonicalSummary
-    && !isSummaryStaleForJobContext(savedCanonicalSummary, primaryJobCtx, {
-      summaryOrigin: cv.summaryOrigin,
-      summaryGenerationContextKey: cv.summaryGenerationContextKey,
-    }),
+    && canonicalV2AuthorityAvailable
+    && !canonicalHasOccupationalConflict,
   );
   const appOwnedSummaryRequiresV2Authority = Boolean(
     (savedAppOwnedV2Validation
@@ -1456,7 +1478,12 @@ export function prepareExportReadyCv(
         ? 'manual_saved_summary'
         : 'app_owned_unstructured_legacy';
   let summaryV2ValidationForDiagnostics: SummaryV2ValidationResult | null =
-    appOwnedSummaryRequiresV2Authority ? savedAppOwnedV2Validation : null;
+    appOwnedSummaryRequiresV2Authority
+      // When canonical V2 wins, selected-final ownership diagnostics must
+      // describe that selected canonical surface—not the displaced saved
+      // Summary whose validation merely triggered this authority decision.
+      ? (canonicalV2Validation || savedAppOwnedV2Validation)
+      : null;
   let recoveryV2ValidationForDiagnostics: SummaryV2ValidationResult | null = null;
   let recoveryLocalePurityForDiagnostics: ReturnType<typeof validateAiUnitLocalePurity> | null = null;
   let recoveryCandidateHashForDiagnostics: string | null = null;
@@ -1651,6 +1678,7 @@ export function prepareExportReadyCv(
   const summaryCurrentTextAuthority = resolveSummaryCurrentTextAuthority({
     staleMetadataDetected: summaryStaleMetadataDetected,
     occupationalContentConflict: summaryOccupationalContentConflict,
+    canonicalV2AuthorityRequired: appOwnedSummaryRequiresV2Authority,
     validation: visibleSummaryValidation,
     visibleText: cv.summary || '',
     requestedLocale,
@@ -1742,7 +1770,8 @@ export function prepareExportReadyCv(
       // The immutable manifest intentionally retains source role labels. Build
       // the recovery from the target-native *presentation* labels first, then
       // run the unchanged V2 ownership/locale gate over that projection.
-      const projection = projectDeterministicRecoveryPresentationSurfaces(summaryManifest);
+      const projection = canonicalPresentationProjection
+        || projectDeterministicRecoveryPresentationSurfaces(summaryManifest);
       recoveryManifest = projection.manifest;
       recoveryFactPresentationForDiagnostics = projection.factPresentation;
       finalSummaryManifest = recoveryManifest;
@@ -2185,6 +2214,25 @@ export function prepareExportReadyCv(
   stage = 'complete';
   selectedFinalSummaryHashForDiagnostics ||= hashSummaryV2Text(cv.summary || '');
   selectedFinalSourceForDiagnostics ||= summaryRecoverySource;
+  // A valid canonical V2 terminal surface is a stronger authority than stale
+  // app-owned prose.  Fail closed if future control-flow changes ever attempt
+  // to serialize that contradictory state as a successful export.
+  if (
+    appOwnedSummaryHasStaleCanonicalSurface
+    && selectedFinalSourceForDiagnostics === 'saved_summary'
+  ) {
+    const diagnostics = baseDiagnostics();
+    diagnostics.summaryRecoverySource = summaryRecoverySource;
+    diagnostics.summaryFactSetSource = factSource;
+    diagnostics.summaryInitialValid = initialSummaryValidation.valid;
+    diagnostics.summaryInitialReason = initialSummaryValidation.reason;
+    assignSummaryOwnershipDiagnostics(diagnostics);
+    return fail(
+      'stale_app_owned_summary_authority_conflict',
+      'validate_summary',
+      diagnostics,
+    );
+  }
   const summaryDiag = buildSummaryCompositionDiagnostics(factSet, cv.summary || '', {
     fallbackReason: summaryRecoverySource === 'saved_summary'
       ? undefined

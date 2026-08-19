@@ -14,7 +14,9 @@ export type SummaryCurrentTextAuthorityDecision = {
   visibleTextValidationReason: string;
   onlyWordBudgetViolation: boolean;
   foreignProfessionalPrefixRejected: boolean;
-  blockedReason?: 'foreign_professional_prefix_non_english_target';
+  blockedReason?:
+    | 'foreign_professional_prefix_non_english_target'
+    | 'app_owned_canonical_v2_authority';
   localeGuardRevision: typeof SUMMARY_STALE_REBOUND_LOCALE_GUARD_REVISION;
   revision: typeof SUMMARY_CURRENT_TEXT_AUTHORITY_REVISION;
 };
@@ -31,6 +33,12 @@ export function resolveSummaryCurrentTextAuthority(options: {
   validation: SummaryExportCandidateValidation;
   visibleText?: string;
   requestedLocale?: Locale;
+  /**
+   * A distinct, validated canonical V2 terminal surface exists for an
+   * app-owned saved Summary.  Current-text validation is not sufficient to
+   * promote the older app surface over that terminal authority.
+   */
+  canonicalV2AuthorityRequired?: boolean;
 }): SummaryCurrentTextAuthorityDecision {
   const violations = options.validation.violations || [];
   const onlyWordBudgetViolation = violations.length > 0
@@ -47,6 +55,7 @@ export function resolveSummaryCurrentTextAuthority(options: {
     options.staleMetadataDetected
     && !options.occupationalContentConflict
     && !foreignProfessionalPrefixRejected
+    && !options.canonicalV2AuthorityRequired
     && validatedAgainstCurrentCv
   );
 
@@ -58,6 +67,10 @@ export function resolveSummaryCurrentTextAuthority(options: {
       ? {
           blockedReason:
             'foreign_professional_prefix_non_english_target' as const,
+        }
+      : options.canonicalV2AuthorityRequired
+        ? {
+          blockedReason: 'app_owned_canonical_v2_authority' as const,
         }
       : {}),
     visibleTextValidationReason: options.validation.reason,

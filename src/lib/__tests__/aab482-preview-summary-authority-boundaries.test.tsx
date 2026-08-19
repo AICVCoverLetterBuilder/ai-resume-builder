@@ -24,6 +24,8 @@ const observed = vi.hoisted(() => ({
   currentCv: undefined as unknown as CVData,
   writes: [] as CVData[],
   templateSummary: '',
+  templatePixelTitle: '',
+  titleRoles: [] as string[],
   titleRequests: 0,
   experienceRequests: 0,
 }));
@@ -118,6 +120,7 @@ vi.mock('@/lib/api', () => ({
       const entries = Array.isArray(body.entries)
         ? body.entries as Array<Record<string, unknown>>
         : [];
+      observed.titleRoles = entries.map((entry) => String(entry.roleTitle || ''));
       return {
         data: {
           localizedManifest: {
@@ -126,6 +129,8 @@ vi.mock('@/lib/api', () => ({
               entryId: entry.entryId,
               localizedRoleTitle: entry.roleTitle === 'Graphic designer'
                 ? 'Grafička dizajnerka'
+                : entry.roleTitle === 'Visual artist'
+                  ? 'Vizuelna umetnica'
                 : String(entry.roleTitle || ''),
               facts: [],
             })),
@@ -160,6 +165,9 @@ vi.mock('@/components/cv-templates', async (importOriginal) => {
         },
         'creative-artistic': (props: { data: CVData; locale?: Locale }) => {
           observed.templateSummary = props.data.summary || '';
+          observed.templatePixelTitle = props.data.experience.find(
+            (entry) => entry.id === '8da68c15',
+          )?.position || '';
           const Component = actual.templateComponents['creative-artistic'];
           return <Component {...props} />;
         },
@@ -250,7 +258,7 @@ function deviceCv(): CVData {
       testWerk,
       entry({ id: 'a221433', company: 'Rewitu', startDate: '2019-06', endDate: '2022-12', isPresent: false, description: SERBIAN_PRIOR }),
       entry({ id: 'b9d3a6a5', company: 'Atlas', startDate: '2023-01', isPresent: true, position: 'Skladišna radnica', description: 'Proveravam pristiglu robu.\nProveravam dokumentaciju.\nSarađujem sa kolegama.' }),
-      entry({ id: '8da68c15', company: 'Pixel Studio', startDate: '2026-01', isPresent: true, position: 'Operaterka', description: 'Vodila sam evidenciju smena.' }),
+      entry({ id: '8da68c15', company: 'Pixel Studio', startDate: '2026-01', isPresent: true, position: 'Visual artist', description: 'Vodila sam evidenciju smena.' }),
     ],
     education: [], skills: [], certifications: [], languages: [], projects: [],
     templateId: 'modern-minimal' as const, region: 'EU' as const,
@@ -304,6 +312,8 @@ describe('AAB482 — one terminal Summary authority through Preview and template
     observed.currentCv = deviceCv();
     observed.writes = [];
     observed.templateSummary = '';
+    observed.templatePixelTitle = '';
+    observed.titleRoles = [];
     observed.titleRequests = 0;
     observed.experienceRequests = 0;
     HTMLElement.prototype.scrollIntoView = vi.fn();
@@ -494,6 +504,24 @@ describe('AAB482 — one terminal Summary authority through Preview and template
       expect(observed.writes).toEqual([]);
     },
   );
+
+  it('uses the complete terminal title surface set for Creative Artistic Preview rows, including Summary-omitted Experience', async () => {
+    observed.currentCv = {
+      ...deviceCv(),
+      templateId: 'creative-artistic',
+    };
+    const Page = (await import('@/app/cv-builder/page')).default;
+    const view = render(<Page />);
+    fireEvent.click(screen.getAllByRole('button', { name: translations.sr.cv.preview })[0]!);
+
+    await waitFor(() => {
+      const leaf = view.container.querySelector('[data-template-id="creative-artistic"]');
+      expect(leaf).not.toBeNull();
+      expect(observed.titleRoles).toContain('Visual artist');
+      expect(observed.templatePixelTitle).toBe('Vizuelna umetnica');
+    });
+    expect(observed.writes).toEqual([]);
+  });
 
   it('maps preview_render_mismatch to a safe localized review message rather than a generic PDF error', () => {
     const reason = new CvExportFailure('preview_render_mismatch');
