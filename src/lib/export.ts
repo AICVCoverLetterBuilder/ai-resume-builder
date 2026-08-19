@@ -5793,6 +5793,25 @@ export function epNormalizeDocxText(text: string): string {
   return out.replace(/[ \t]+/g, ' ').replace(/ *\n */g, '\n').trim();
 }
 
+/**
+ * Format an Experience date range for every DOCX template.
+ *
+ * Experience dates are semantic fields, not free-form punctuation.  In
+ * particular, a start-only record must not render a dangling separator and a
+ * current record must use the localized present label as its end value.
+ */
+export function formatExperienceDateRange(
+  start: string | null | undefined,
+  end: string | null | undefined,
+  isPresent: boolean | undefined,
+  presentLabel: string,
+  separator = ' - ',
+): string {
+  const normalizedStart = String(start ?? '').trim();
+  const normalizedEnd = (isPresent ? String(presentLabel ?? '') : String(end ?? '')).trim();
+  return [normalizedStart, normalizedEnd].filter(Boolean).join(separator);
+}
+
 export async function exportToDOCX(
   sourceCvData: CVData,
   fileName: string,
@@ -6059,7 +6078,7 @@ export async function exportToDOCX(
     if (cvData.experience.length > 0) {
       target.push(sectionHeading(t.cv.experience));
       for (const exp of cvData.experience) {
-        const dateText = `${exp.startDate} – ${exp.isPresent ? t.cv.present : exp.endDate}`;
+        const dateText = formatExperienceDateRange(exp.startDate, exp.endDate, exp.isPresent, t.cv.present);
         if (rightDates) {
           // FIX-08: position / company on left, date on right
           target.push(dateRow([
@@ -6248,7 +6267,7 @@ export async function exportToDOCX(
     if (cvData.experience.length > 0) {
       children.push(pcHeading(t.cv.experience));
       for (const exp of cvData.experience) {
-        const dateText = `${exp.startDate} – ${exp.isPresent ? t.cv.present : exp.endDate}`;
+        const dateText = formatExperienceDateRange(exp.startDate, exp.endDate, exp.isPresent, t.cv.present);
         // Row: position (bold) left | date (gray italic) right
         children.push(new Table({
           width: { size: 100, type: WidthType.PERCENTAGE },
@@ -6456,8 +6475,8 @@ export async function exportToDOCX(
         exp: CVData['experience'][number],
         options: { isFirst?: boolean; lineSlice?: { start: number; end?: number }; trailingSpacer?: boolean },
       ) {
-        const dateText = exp.isPresent ? t.cv.present : exp.endDate;
-        const metaLine = [exp.company, `${exp.startDate} – ${dateText}`].filter(Boolean).join('  |  ');
+        const dateText = formatExperienceDateRange(exp.startDate, exp.endDate, exp.isPresent, t.cv.present);
+        const metaLine = [exp.company, dateText].filter(Boolean).join('  |  ');
         const allLines = exp.description ? exp.description.split('\n').filter((line) => line.trim()) : [];
         const lines = options.lineSlice
           ? allLines.slice(options.lineSlice.start, options.lineSlice.end)
@@ -6742,7 +6761,7 @@ export async function exportToDOCX(
     if (cvData.experience.length > 0) {
       children.push(efHeading(t.cv.experience));
       for (const exp of cvData.experience) {
-        const dateText = `${exp.startDate} – ${exp.isPresent ? t.cv.present : exp.endDate}`;
+        const dateText = formatExperienceDateRange(exp.startDate, exp.endDate, exp.isPresent, t.cv.present);
         children.push(new Table({
           width: { size: 100, type: WidthType.PERCENTAGE },
           borders: efNoBorders,
@@ -6889,7 +6908,7 @@ export async function exportToDOCX(
       exp: CVData['experience'][number],
       options: { keepNext?: boolean } = {},
     ) {
-      const dateText = `${exp.startDate} – ${exp.isPresent ? t.cv.present : exp.endDate}`;
+      const dateText = formatExperienceDateRange(exp.startDate, exp.endDate, exp.isPresent, t.cv.present);
       return new Table({
         width: { size: 100, type: WidthType.PERCENTAGE },
         borders: noBorders,
@@ -7309,7 +7328,7 @@ export async function exportToDOCX(
     if (cvData.experience.length > 0) {
       children.push(epHeading(t.cv.experience));
       for (const exp of cvData.experience) {
-        const dateText = `${exp.startDate} – ${exp.isPresent ? t.cv.present : exp.endDate}`;
+        const dateText = formatExperienceDateRange(exp.startDate, exp.endDate, exp.isPresent, t.cv.present);
         // Position title left, date right
         children.push(new Table({
           width: { size: 100, type: WidthType.PERCENTAGE },
@@ -7518,7 +7537,7 @@ export async function exportToDOCX(
     if (cvData.experience.length > 0) {
       children.push(csHeading(t.cv.experience));
       for (const exp of cvData.experience) {
-        const dateText = `${exp.startDate} - ${exp.isPresent ? t.cv.present : exp.endDate}`;
+        const dateText = formatExperienceDateRange(exp.startDate, exp.endDate, exp.isPresent, t.cv.present);
         children.push(csDateRow([
           new TextRun({ text: exp.position, bold: true, size: 21, color: '111827' }),
           ...(exp.company ? [new TextRun({ text: ` at ${exp.company}`, size: 20, color: '374151' })] : []),
@@ -7691,7 +7710,7 @@ export async function exportToDOCX(
     if (cvData.experience.length > 0) {
       children.push(mmHeading(t.cv.experience));
       for (const exp of cvData.experience) {
-        const dateText = `${exp.startDate} - ${exp.isPresent ? t.cv.present : exp.endDate}`;
+        const dateText = formatExperienceDateRange(exp.startDate, exp.endDate, exp.isPresent, t.cv.present);
         children.push(mmDateRow([
           new TextRun({ text: exp.position, bold: true, size: 20, color: '111827' }),
           ...(exp.company ? [new TextRun({ text: `  |  ${exp.company}`, size: 20, color: '6B7280' })] : []),
@@ -7846,7 +7865,7 @@ export async function exportToDOCX(
     if (cvData.experience.length > 0) {
       children.push(mmeHeading(t.cv.experience));
       for (const exp of cvData.experience) {
-        const dateText = `${exp.startDate} – ${exp.isPresent ? t.cv.present : exp.endDate}`;
+        const dateText = formatExperienceDateRange(exp.startDate, exp.endDate, exp.isPresent, t.cv.present);
         // Job Title (bold)
         children.push(new Paragraph({
           children: [new TextRun({ text: exp.position, bold: true, size: 22, color: '111827' })],
@@ -8107,7 +8126,7 @@ export async function exportToDOCX(
     if (cvData.experience.length > 0) {
       children.push(cnHeading(t.cv.experience));
       for (const exp of cvData.experience) {
-        const dateText = `${exp.startDate} - ${exp.isPresent ? t.cv.present : exp.endDate}`;
+        const dateText = formatExperienceDateRange(exp.startDate, exp.endDate, exp.isPresent, t.cv.present);
         children.push(cnDateRow([
           new TextRun({ text: exp.position, bold: true, size: 20, color: '111827' }),
         ], dateText));
@@ -8308,7 +8327,7 @@ export async function exportToDOCX(
     if (cvData.experience.length > 0) {
       children.push(cnHeading(t.cv.experience));
       for (const exp of cvData.experience) {
-        const dateText = `${exp.startDate} – ${exp.isPresent ? t.cv.present : exp.endDate}`;
+        const dateText = formatExperienceDateRange(exp.startDate, exp.endDate, exp.isPresent, t.cv.present);
         // Position (bold) left | date right
         children.push(cnDateRow([
           new TextRun({ text: exp.position, bold: true, size: 20, color: '111827' }),
@@ -8515,7 +8534,7 @@ export async function exportToDOCX(
     if (cvData.experience.length > 0) {
       children.push(cbHeading(t.cv.experience));
       for (const exp of cvData.experience) {
-        const dateText = `${exp.startDate} – ${exp.isPresent ? t.cv.present : exp.endDate}`;
+        const dateText = formatExperienceDateRange(exp.startDate, exp.endDate, exp.isPresent, t.cv.present);
         // Job Title — bold, dominant
         children.push(new Paragraph({
           children: [new TextRun({ text: exp.position, bold: true, size: 22, color: '111827' })],
@@ -8860,7 +8879,7 @@ export async function exportToDOCX(
     if (cvData.experience.length > 0) {
       mainChildren.push(techMainHeading(t.cv.experience));
       for (const exp of cvData.experience) {
-        const dateText = `${exp.startDate} – ${exp.isPresent ? t.cv.present : exp.endDate}`;
+        const dateText = formatExperienceDateRange(exp.startDate, exp.endDate, exp.isPresent, t.cv.present);
         mainChildren.push(techDateRow([
           new TextRun({ text: exp.position, bold: true, size: 22, color: '111827' }),
           new TextRun({ text: '  —  ' + exp.company, size: 20, color: '6B7280' }),
@@ -9076,7 +9095,7 @@ export async function exportToDOCX(
     if (cvData.experience.length > 0) {
       mainChildren.push(mainHeading(t.cv.experience));
       for (const exp of cvData.experience) {
-        const dateText = `${exp.startDate} – ${exp.isPresent ? t.cv.present : exp.endDate}`;
+        const dateText = formatExperienceDateRange(exp.startDate, exp.endDate, exp.isPresent, t.cv.present);
         if (rightDates) {
           mainChildren.push(mainDateRow([
             new TextRun({ text: exp.position, bold: true, size: 22, color: '111827' }),
@@ -9694,9 +9713,7 @@ export async function exportRirekishoToDOCX(sourceCvData: CVData, fileName: stri
     children.push(sectionHeadingRow('職　歴'));
     const expRows = [tableHeaderRow('期間', '会社名・職位・職務内容')];
     for (const exp of cvData.experience) {
-      const period = exp.startDate
-        ? `${exp.startDate}〜${exp.isPresent ? '現在' : exp.endDate || ''}`
-        : '';
+      const period = formatExperienceDateRange(exp.startDate, exp.endDate, exp.isPresent, '現在', '〜');
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const detailParas: any[] = [
         new Paragraph({ children: [jpRun(exp.company, { bold: true, size: 20 })], spacing: { before: 40, after: 20 } }),
