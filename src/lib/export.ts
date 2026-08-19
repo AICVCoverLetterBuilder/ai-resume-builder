@@ -5817,7 +5817,11 @@ export async function exportToDOCX(
   fileName: string,
   locale: Locale = 'en',
   templateId?: string,
-  options?: { elegantFormalPhoto?: ElegantFormalCanonicalPhotoResult | null },
+  options?: {
+    elegantFormalPhoto?: ElegantFormalCanonicalPhotoResult | null;
+    /** The caller already ran the shared terminal Experience presentation gate. */
+    experiencePresentationReady?: boolean;
+  },
 ): Promise<SaveFileResult> {
   let cvData = buildCvExportRenderProjection(sourceCvData, locale);
   const {
@@ -6349,9 +6353,11 @@ export async function exportToDOCX(
   else if (cfg.customLayout === 'creative-artistic') {
     // Fail-closed locale gate: one validated projection for this DOCX export.
     // Non-English exports never dump English — they throw.
-    const caPrepared = prepareCreativeArtisticExport(cvData, locale, {
-      gender: cvData.personal?.gender,
-    });
+    const caPrepared = options?.experiencePresentationReady
+      ? { cv: cvData, projection: { projectionId: 'terminal_experience_presentation' } }
+      : prepareCreativeArtisticExport(cvData, locale, {
+        gender: cvData.personal?.gender,
+      });
     cvData = caPrepared.cv;
     (cvData as CVData & { __caExportProjectionId?: string }).__caExportProjectionId = caPrepared.projection.projectionId;
     const headerBg = { fill: cfg.headerBg, type: ShadingType.SOLID, color: cfg.headerBg };
@@ -7987,9 +7993,11 @@ export async function exportToDOCX(
   // Centered dark header · letter-spaced section headings · 2-col skills · slash languages
   else if (cfg.customLayout === 'corporate-navy') {
     // One validated projection for PDF/DOCX parity (per-field locale integrity).
-    const cnPrepared = prepareCorporateNavyExport(cvData, locale, {
-      gender: cvData.personal?.gender,
-    });
+    const cnPrepared = options?.experiencePresentationReady
+      ? { cv: cvData, projection: { projectionId: 'terminal_experience_presentation' } }
+      : prepareCorporateNavyExport(cvData, locale, {
+        gender: cvData.personal?.gender,
+      });
     cvData = cnPrepared.cv;
     (cvData as CVData & { __cnExportProjectionId?: string }).__cnExportProjectionId = cnPrepared.projection.projectionId;
     const cnBg = { fill: cfg.headerBg, type: ShadingType.SOLID, color: cfg.headerBg };
@@ -13346,10 +13354,13 @@ async function prepareCreativeArtisticPdfPhotoDataUrl(cv: CVData): Promise<strin
 export async function buildCreativeArtisticPdfBlob(
   cv: CVData,
   locale: Locale,
+  options: { alreadyPrepared?: boolean } = {},
 ): Promise<Blob> {
-  const prepared = prepareCreativeArtisticExport(cv, locale, {
-    gender: cv.personal?.gender,
-  });
+  const prepared = options.alreadyPrepared
+    ? { cv, projection: { projectionId: 'terminal_experience_presentation' } }
+    : prepareCreativeArtisticExport(cv, locale, {
+      gender: cv.personal?.gender,
+    });
   const safeCv = prepared.cv;
   const photoDataUrl = await prepareCreativeArtisticPdfPhotoDataUrl(safeCv);
   const blob = await buildCreativeArtisticPagedPdfBlob(safeCv, locale, {
@@ -13370,8 +13381,13 @@ export async function exportCreativeArtisticPdf(
   cv: CVData,
   fileName: string,
   locale: Locale,
+  options: { alreadyPrepared?: boolean } = {},
 ): Promise<SaveFileResult> {
-  const pdfBlob = await buildCreativeArtisticPdfBlob(cv, locale);
+  if (!options.alreadyPrepared) {
+    const pdfBlob = await buildCreativeArtisticPdfBlob(cv, locale);
+    return await saveFileViaPlatform(pdfBlob, `${fileName}.pdf`, 'application/pdf');
+  }
+  const pdfBlob = await buildCreativeArtisticPdfBlob(cv, locale, options);
   return await saveFileViaPlatform(pdfBlob, `${fileName}.pdf`, 'application/pdf');
 }
 
@@ -14249,11 +14265,14 @@ async function prepareCorporateNavyPdfPhotoDataUrl(cv: CVData): Promise<Corporat
 export async function buildCorporateNavyPdfBlob(
   cv: CVData,
   locale: Locale,
+  options: { alreadyPrepared?: boolean } = {},
 ): Promise<Blob> {
   try {
-    const prepared = prepareCorporateNavyExport(cv, locale, {
-      gender: cv.personal?.gender,
-    });
+    const prepared = options.alreadyPrepared
+      ? { cv, projection: { projectionId: 'terminal_experience_presentation' } }
+      : prepareCorporateNavyExport(cv, locale, {
+        gender: cv.personal?.gender,
+      });
     const canonicalPhoto = await prepareCorporateNavyPdfPhotoDataUrl(prepared.cv);
     const blob = await buildCorporateNavyPagedPdfBlob(prepared.cv, locale, {
       photoDataUrl: canonicalPhoto?.dataUrl ?? null,
@@ -14281,9 +14300,18 @@ export async function exportCorporateNavyPdf(
   cv: CVData,
   fileName: string,
   locale: Locale,
+  options: { alreadyPrepared?: boolean } = {},
 ): Promise<SaveFileResult> {
   try {
-    const pdfBlob = await buildCorporateNavyPdfBlob(cv, locale);
+      if (!options.alreadyPrepared) {
+        const pdfBlob = await buildCorporateNavyPdfBlob(cv, locale);
+        try {
+          return await saveFileViaPlatform(pdfBlob, `${fileName}.pdf`, 'application/pdf');
+        } catch (saveErr) {
+          throw saveErr;
+        }
+      }
+      const pdfBlob = await buildCorporateNavyPdfBlob(cv, locale, options);
     try {
       return await saveFileViaPlatform(pdfBlob, `${fileName}.pdf`, 'application/pdf');
     } catch (err) {

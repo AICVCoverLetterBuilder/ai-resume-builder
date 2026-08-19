@@ -134,6 +134,34 @@ export type ExperiencePresentationSnapshot = {
 };
 
 /**
+ * True only when an export-ready CV already carries a complete, validated
+ * per-entry terminal presentation. Dedicated template adapters must use this
+ * contract as their input instead of rebuilding bullets from canonical text;
+ * otherwise a valid target-native current_visible surface can be re-localized
+ * against a foreign immutable description and rejected by a stricter legacy
+ * validator.
+ */
+export function isTerminalExperiencePresentationReady(
+  cv: CVData,
+  records: ExperiencePresentationRecord[] | null | undefined,
+  targetLocale: Locale,
+): boolean {
+  const experiences = cv.experience || [];
+  if (!records || records.length !== experiences.length) return false;
+  const byEntryHash = new Map(records.map((record) => [record.owningEntryHash, record]));
+  return experiences.every((entry) => {
+    const record = byEntryHash.get(hashExperienceLocalizedSurfaceValue(entry.id));
+    if (!record || record.targetLocale !== targetLocale) return false;
+    if (record.presentationAuthority === 'unresolved') return false;
+    if (record.selectedPresentationHash !== hashExperienceLocalizedSurfaceValue(entry.description || '')) return false;
+    if (record.finalPresentationHash !== record.selectedPresentationHash) return false;
+    if (record.factCoveragePassed === false || !record.crossEntryOwnershipPassed) return false;
+    if (record.sourceLanguageLeakageDetected || record.mixedLanguageBulletCount > 0) return false;
+    return true;
+  });
+}
+
+/**
  * Restores the terminal per-entry presentation surface after a consumer has
  * performed unrelated display normalization.  Preview uses this after its
  * quality pass so that a blank unresolved projection cannot be refilled from

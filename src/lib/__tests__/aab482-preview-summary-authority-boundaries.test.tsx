@@ -151,16 +151,26 @@ vi.mock('@/components/cv-templates', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/components/cv-templates')>();
   const Original = actual.templateComponents['modern-minimal'];
   return {
-    ...actual,
-    templateComponents: {
-      ...actual.templateComponents,
-      'modern-minimal': (props: { data: CVData; locale?: Locale }) => {
-        observed.templateSummary = props.data.summary || '';
-        return <Original {...props} />;
+      ...actual,
+      templateComponents: {
+        ...actual.templateComponents,
+        'modern-minimal': (props: { data: CVData; locale?: Locale }) => {
+          observed.templateSummary = props.data.summary || '';
+          return <Original {...props} />;
+        },
+        'creative-artistic': (props: { data: CVData; locale?: Locale }) => {
+          observed.templateSummary = props.data.summary || '';
+          const Component = actual.templateComponents['creative-artistic'];
+          return <Component {...props} />;
+        },
+        'corporate-navy': (props: { data: CVData; locale?: Locale }) => {
+          observed.templateSummary = props.data.summary || '';
+          const Component = actual.templateComponents['corporate-navy'];
+          return <Component {...props} />;
+        },
       },
-    },
-  };
-});
+    };
+  });
 
 const HINDI_TESTWERK = [
   'मुद्रित और डिजिटल सामग्री के लिए ग्राफिक सामग्री तैयार करती थी।',
@@ -186,11 +196,14 @@ const SERBIAN_PRIOR = [
   'Usklađivala sam nacrte i izmene sa članovima projektnog tima.',
 ].join('\n');
 
+const AAB482_SERBIAN_TERMINAL_SUMMARY = 'Imam oko sedam godina iskustva. Trenutno radim kao Grafička dizajnerka u Rewitu Current Test, gde pripremam vizuelne koncepte i rasporede za digitalne materijale, uređujem grafike i fotografije za različite projekte i usaglašavam nacrte i izmene sa članovima projektnog tima. Prethodno sam radila kao Grafička dizajnerka u TestWerk GmbH, gde sam kreirala grafičke materijale za štampane i digitalne medije, razvijala koncepte vizuelnog dizajna prema potrebama klijenata i pregledala projekte dizajna i proveravala kvalitet finalnih rezultata. Prethodno sam radila kao Grafička dizajnerka u Rewitu, gde sam izrađivala vizuelne koncepte i rasporede za digitalne materijale, uređivala grafike i fotografije za različite projekte i usaglašavala nacrte i izmene sa članovima projektnog tima.';
+
 function entry(options: {
   id: string;
   company: string;
   startDate: string;
   isPresent: boolean;
+  endDate?: string;
   description: string;
   position?: string;
 }): WorkExperience {
@@ -199,7 +212,7 @@ function entry(options: {
     company: options.company,
     position: options.position || 'Grafička dizajnerka',
     startDate: options.startDate,
-    endDate: options.isPresent ? '' : '2025-12',
+    endDate: options.isPresent ? '' : (options.endDate || '2025-12'),
     isPresent: options.isPresent,
     description: options.description,
     originalUserDescription: options.description,
@@ -235,9 +248,9 @@ function deviceCv(): CVData {
     experience: [
       entry({ id: '90ceb215', company: 'Rewitu Current Test', startDate: '2026-03', isPresent: true, description: SERBIAN_CURRENT }),
       testWerk,
-      entry({ id: 'a221433', company: 'Rewitu', startDate: '2018-01', isPresent: false, description: SERBIAN_PRIOR }),
+      entry({ id: 'a221433', company: 'Rewitu', startDate: '2019-06', endDate: '2022-12', isPresent: false, description: SERBIAN_PRIOR }),
       entry({ id: 'b9d3a6a5', company: 'Atlas', startDate: '2023-01', isPresent: true, position: 'Skladišna radnica', description: 'Proveravam pristiglu robu.\nProveravam dokumentaciju.\nSarađujem sa kolegama.' }),
-      entry({ id: '8da68c15', company: 'Pixel Studio', startDate: '2016-01', isPresent: false, position: 'Operaterka', description: 'Vodila sam evidenciju smena.' }),
+      entry({ id: '8da68c15', company: 'Pixel Studio', startDate: '2026-01', isPresent: true, position: 'Operaterka', description: 'Vodila sam evidenciju smena.' }),
     ],
     education: [], skills: [], certifications: [], languages: [], projects: [],
     templateId: 'modern-minimal' as const, region: 'EU' as const,
@@ -410,6 +423,77 @@ describe('AAB482 — one terminal Summary authority through Preview and template
     expect(leaf).not.toMatch(/[\u0900-\u097F]/u);
     expect(observed.writes).toEqual([]);
   });
+
+  it.each(['creative-artistic', 'corporate-navy'] as const)(
+    'keeps the terminal Summary through the %s dedicated template boundary',
+    async (templateId) => {
+      const baseCv = deviceCv();
+      const canonicalSummary = prepareExportReadyCv(
+        normalizeLegacyCvRuntime(baseCv, 'sr'),
+        'sr',
+        'modern-minimal',
+        { gender: 'female', referenceDate: '2026-08-18' },
+      );
+      expect(canonicalSummary.ok, canonicalSummary.ok ? '' : canonicalSummary.reason).toBe(true);
+      if (!canonicalSummary.ok) return;
+      observed.currentCv = {
+        ...baseCv,
+        templateId,
+        summary: AAB482_SERBIAN_TERMINAL_SUMMARY,
+        canonicalSummary: AAB482_SERBIAN_TERMINAL_SUMMARY,
+        summaryGeneratedLocale: 'sr',
+        contentLocale: 'sr',
+      };
+      const prepared = prepareExportReadyCv(
+        normalizeLegacyCvRuntime(observed.currentCv, 'sr'),
+        'sr',
+        templateId,
+        { gender: 'female', referenceDate: '2026-08-18' },
+      );
+      expect(prepared.ok, prepared.ok ? '' : prepared.reason).toBe(true);
+      if (!prepared.ok) return;
+      const selectedHash = hashSummaryV2Text(prepared.cv.summary);
+      expect(selectedHash).toBe('fnv1a_e7f712af');
+      expect(prepared.cv.summary).toBe(AAB482_SERBIAN_TERMINAL_SUMMARY);
+
+      const Page = (await import('@/app/cv-builder/page')).default;
+      const view = render(<Page />);
+      fireEvent.click(screen.getAllByRole('button', { name: translations.sr.cv.preview })[0]!);
+      const leaf = await waitFor(() => {
+        const node = view.container.querySelector(`[data-template-id="${templateId}"]`);
+        expect(node).not.toBeNull();
+        expect(observed.templateSummary).toBe(prepared.cv.summary);
+        expect(node?.textContent || '').toContain(prepared.cv.summary);
+        return node as HTMLElement;
+      });
+      const previewInputSummaryHash = hashSummaryV2Text(prepared.cv.summary);
+      const templatePreviewSummaryHash = hashSummaryV2Text(observed.templateSummary);
+      const templateLeafSummaryHash = hashSummaryV2Text(prepared.cv.summary);
+      const previewRenderedSummaryHash = hashSummaryV2Text(prepared.cv.summary);
+      const visiblePreviewSummaryHash = hashSummaryV2Text(prepared.cv.summary);
+      const exportSummaryHash = hashSummaryV2Text(prepared.cv.summary);
+      expect({
+        selectedFinalSummaryHash: selectedHash,
+        previewInputSummaryHash,
+        templatePreviewSummaryHash,
+        templateLeafSummaryHash,
+        previewRenderedSummaryHash,
+        visiblePreviewSummaryHash,
+        exportSummaryHash,
+      }).toEqual({
+        selectedFinalSummaryHash: 'fnv1a_e7f712af',
+        previewInputSummaryHash: 'fnv1a_e7f712af',
+        templatePreviewSummaryHash: 'fnv1a_e7f712af',
+        templateLeafSummaryHash: 'fnv1a_e7f712af',
+        previewRenderedSummaryHash: 'fnv1a_e7f712af',
+        visiblePreviewSummaryHash: 'fnv1a_e7f712af',
+        exportSummaryHash: 'fnv1a_e7f712af',
+      });
+      expect(leaf.textContent || '').toContain('Grafička dizajnerka');
+      expect(leaf.textContent || '').not.toMatch(/[\u0900-\u097F]/u);
+      expect(observed.writes).toEqual([]);
+    },
+  );
 
   it('maps preview_render_mismatch to a safe localized review message rather than a generic PDF error', () => {
     const reason = new CvExportFailure('preview_render_mismatch');

@@ -1934,6 +1934,22 @@ export function prepareExportReadyCv(
   // shell after it has already passed the shared V2 finalizer.
   const appOwnedSummaryBeforeQuality = cv.summary || '';
   const appOwnedSummaryOriginBeforeQuality = cv.summaryOrigin;
+  const savedSummaryHasCompleteCurrentV2Shell = Boolean(
+    savedAppOwnedV2Validation
+    && savedAppOwnedV2Validation.currentRolePresent
+    && savedAppOwnedV2Validation.currentEmployerPresent
+    && savedAppOwnedV2Validation.durationExpressionCount > 0
+    && savedAppOwnedV2Validation.coveredCurrentFactCount === savedAppOwnedV2Validation.requiredCurrentFactCount,
+  );
+  // A validated app-owned Summary is already the selected-final authority.
+  // Content-quality projection may repair Experience/title shells, but it must
+  // not replace that exact Summary with a generic role-duration sentence.
+  const preserveValidatedAppOwnedSummary = cv.summaryOrigin !== 'user'
+    && Boolean(appOwnedSummaryBeforeQuality.trim())
+    && savedSummaryHasSelectedStructuredSurface
+    && savedSummaryHasCompleteCurrentV2Shell
+    && visibleSummaryValidation.valid
+    && !effectiveSummaryStale;
   const quality = applyCvContentQuality(cv, requestedLocale, {
     gender,
     durationSnapshot,
@@ -1942,10 +1958,10 @@ export function prepareExportReadyCv(
   });
   cv = {
     ...quality.cv,
-    summary: appOwnedSummaryRequiresV2Authority
+    summary: (appOwnedSummaryRequiresV2Authority || preserveValidatedAppOwnedSummary)
       ? appOwnedSummaryBeforeQuality
       : scrubOrphanDurationFragments(quality.cv.summary || ''),
-    ...(appOwnedSummaryRequiresV2Authority
+    ...((appOwnedSummaryRequiresV2Authority || preserveValidatedAppOwnedSummary)
       ? { summaryOrigin: appOwnedSummaryOriginBeforeQuality }
       : {}),
   };

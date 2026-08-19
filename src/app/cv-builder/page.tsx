@@ -210,6 +210,7 @@ import {
   applyTerminalExperiencePresentationSnapshot,
   buildExperienceLocalizationSnapshot,
   experienceDescriptionLocalizationLimitViolation,
+  isTerminalExperiencePresentationReady,
   prepareExperienceLocalizedSurfaces,
   resolveExperiencePresentationSnapshot,
   type ExperienceLocalizationProviderResponse,
@@ -1153,9 +1154,11 @@ export default function CVBuilderPage() {
     ? matchingTerminalPreview.cv
     : previewInputCv;
   const previewSourceRuntimeCv = normalizeLegacyCvRuntime(previewInputCv, locale);
-  const previewSourceIsAppOwned = previewSourceRuntimeCv.summaryOrigin === 'deterministic_fallback'
-    || previewSourceRuntimeCv.summaryOrigin === 'ai_generated'
-    || previewSourceRuntimeCv.summaryOrigin === 'ai_repaired';
+  // Any non-user Summary is app-owned terminal material.  Restricting this
+  // to the three historical origin labels let newer deterministic manifest
+  // results render the stale editor Summary while the async terminal snapshot
+  // was still being acquired.
+  const previewSourceIsAppOwned = previewSourceRuntimeCv.summaryOrigin !== 'user';
   const terminalPreviewReady = Boolean(
     matchingTerminalPreview?.status === 'ready' && matchingTerminalPreview.cv,
   );
@@ -4530,6 +4533,20 @@ export default function CVBuilderPage() {
           setCurrentCv(groundingPersisted);
         }
 
+        // All template families consume the same terminal per-entry
+        // presentation selected above. Creative Artistic and Corporate Navy
+        // historically re-ran their legacy canonical-bullet localizers here,
+        // which rejected valid Serbian current_visible/projection surfaces
+        // after the shared resolver had already validated them. Keep those
+        // adapters as a fallback for legacy inputs, but never let them replace
+        // a complete terminal snapshot.
+        const terminalPresentationReady = isTerminalExperiencePresentationReady(
+          exportCv,
+          postTitlePrepared.diagnostics.experiencePresentation,
+          locale,
+        );
+        if (terminalPresentationReady) return exportCv;
+
         if (exportCv.templateId === 'creative-artistic') {
           return prepareCreativeArtisticExport(exportCv, locale, {
             gender: exportCv.personal?.gender,
@@ -4642,8 +4659,19 @@ export default function CVBuilderPage() {
             ...latestCv,
             personal: { ...latestCv.personal, photo: photoForExport },
           });
+          const experiencePresentationReady = isTerminalExperiencePresentationReady(
+            cvForExport,
+            lastExportPrepareRef.current?.diagnostics.experiencePresentation,
+            locale,
+          );
           const exportBaseName = makeCvExportBaseName(cvForExport.personal.fullName);
-          saveResult = await exportToDOCX(cvForExport, exportBaseName, locale, cvForExport.templateId, { elegantFormalPhoto });
+          saveResult = await exportToDOCX(
+            cvForExport,
+            exportBaseName,
+            locale,
+            cvForExport.templateId,
+            { elegantFormalPhoto, experiencePresentationReady },
+          );
           fallbackFileName = `${exportBaseName}.docx`;
           await recordExportDiagnostic({
             format: 'docx',
@@ -4789,6 +4817,11 @@ export default function CVBuilderPage() {
           uiTemplateId: selectedTemplateId,
         });
         const liveCv = pdfResolution.exportCv;
+        const terminalExperiencePresentationReady = isTerminalExperiencePresentationReady(
+          liveCv,
+          lastExportPrepareRef.current?.diagnostics.experiencePresentation,
+          locale,
+        );
         if (pdfResolution.route.kind === 'dedicated-clean-simple') {
           const saveResult = await exportCleanSimplePdf(liveCv, exportFilename, locale);
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
@@ -4808,7 +4841,12 @@ export default function CVBuilderPage() {
           return;
         }
         if (liveCv.templateId === 'creative-artistic') {
-          const saveResult = await exportCreativeArtisticPdf(liveCv, exportFilename, locale);
+          const saveResult = await exportCreativeArtisticPdf(
+            liveCv,
+            exportFilename,
+            locale,
+            { alreadyPrepared: terminalExperiencePresentationReady },
+          );
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
@@ -4845,7 +4883,12 @@ export default function CVBuilderPage() {
           return;
         }
         if (liveCv.templateId === 'corporate-navy') {
-          const saveResult = await exportCorporateNavyPdf(liveCv, exportFilename, locale);
+          const saveResult = await exportCorporateNavyPdf(
+            liveCv,
+            exportFilename,
+            locale,
+            { alreadyPrepared: terminalExperiencePresentationReady },
+          );
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
