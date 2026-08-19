@@ -141,6 +141,20 @@ export type CvExportDiagnosticTrace = {
   requestedLocale: string;
   exportFormat: CvExportFormat;
   runtimeMigrationVersion: number | null;
+  runtimeMigrationVersionBefore?: number;
+  runtimeMigrationVersionAfter?: number;
+  legacyCanonicalSnapshotPresent?: boolean;
+  legacyCanonicalSnapshotStructurallyValid?: boolean;
+  legacyCanonicalSnapshotStructuralUpgradeAttempted?: boolean;
+  legacyCanonicalSnapshotStructuralUpgradeResult?: string;
+  legacyCanonicalSnapshotStructuralUpgradeSkipReason?: string | null;
+  canonicalSnapshotStateBefore?: string;
+  canonicalSnapshotStateAfter?: string;
+  /** True when every applicable migration-authority field is serialized. */
+  migrationDiagnosticsApplicable?: boolean;
+  migrationDiagnosticsComplete?: boolean;
+  diagnosticCompletenessPassed?: boolean;
+  diagnosticCompletenessFailureReasons?: string[];
   experienceCount: number;
   experiences: CvExportExperienceDiag[];
   summaryPresent: boolean;
@@ -163,6 +177,18 @@ export type CvExportDiagnosticTrace = {
   selectedFinalWordBudgetPassed?: boolean | null;
   summaryWordBudgetCompactionRevision?: string;
   summaryCurrentTextAuthorityRevision?: string;
+  canonicalSummaryTopLevelPresent?: boolean;
+  canonicalSummaryTopLevelHash?: string | null;
+  canonicalSnapshotPresent?: boolean;
+  canonicalSnapshotSummaryPresent?: boolean;
+  canonicalSnapshotSummaryHash?: string | null;
+  canonicalSnapshotStateSource?: string;
+  resolvedCanonicalSummaryPresent?: boolean;
+  resolvedCanonicalSummaryHash?: string | null;
+  resolvedCanonicalSummarySource?: string;
+  resolvedCanonicalSummaryRejectionReason?: string | null;
+  summaryAuthorityDecisionBranch?: string;
+  summaryCanonicalCandidateRejectedReason?: string | null;
   summaryStaleMetadataDetected?: boolean;
   summaryVisibleTextAuthorityRebound?: boolean;
   summaryVisibleTextAuthorityReason?: string;
@@ -864,6 +890,31 @@ export function buildAndStoreCvExportDiagnostic(input: BuildCvExportTraceInput):
     && previewSelectedFinalParityPassed !== false
     && (input.saveResult?.result === 'saved' || input.blobProduced === true);
 
+  const migrationDiagnosticsApplicable = Boolean(
+    diag?.legacyCanonicalSnapshotPresent
+    || diag?.legacyCanonicalSnapshotStructuralUpgradeAttempted,
+  );
+  const migrationDiagnosticFields: Array<[string, unknown]> = [
+    ['runtimeMigrationVersionBefore', diag?.runtimeMigrationVersionBefore],
+    ['runtimeMigrationVersionAfter', diag?.runtimeMigrationVersionAfter],
+    ['legacyCanonicalSnapshotPresent', diag?.legacyCanonicalSnapshotPresent],
+    ['legacyCanonicalSnapshotStructurallyValid', diag?.legacyCanonicalSnapshotStructurallyValid],
+    ['legacyCanonicalSnapshotStructuralUpgradeAttempted', diag?.legacyCanonicalSnapshotStructuralUpgradeAttempted],
+    ['legacyCanonicalSnapshotStructuralUpgradeResult', diag?.legacyCanonicalSnapshotStructuralUpgradeResult],
+    ['legacyCanonicalSnapshotStructuralUpgradeSkipReason', diag?.legacyCanonicalSnapshotStructuralUpgradeSkipReason],
+    ['canonicalSnapshotStateBefore', diag?.canonicalSnapshotStateBefore],
+    ['canonicalSnapshotStateAfter', diag?.canonicalSnapshotStateAfter],
+    ['resolvedCanonicalSummarySource', diag?.resolvedCanonicalSummarySource],
+    ['resolvedCanonicalSummaryHash', diag?.resolvedCanonicalSummaryHash],
+    ['summaryAuthorityDecisionBranch', diag?.summaryAuthorityDecisionBranch],
+  ];
+  const migrationDiagnosticFailures = migrationDiagnosticsApplicable
+    ? migrationDiagnosticFields
+      .filter(([, value]) => value === undefined)
+      .map(([name]) => `migration_diagnostic_missing:${name}`)
+    : [];
+  const migrationDiagnosticsComplete = migrationDiagnosticFailures.length === 0;
+
   const durationSnap = buildExperienceDurationSnapshot(
     exportCv.experience || [],
     new Date(),
@@ -879,6 +930,23 @@ export function buildAndStoreCvExportDiagnostic(input: BuildCvExportTraceInput):
     requestedLocale: input.locale,
     exportFormat: input.format,
     runtimeMigrationVersion: Number(exportCv.runtimeMigrationVersion ?? raw.runtimeMigrationVersion ?? null) || null,
+    runtimeMigrationVersionBefore: diag?.runtimeMigrationVersionBefore,
+    runtimeMigrationVersionAfter: diag?.runtimeMigrationVersionAfter,
+    legacyCanonicalSnapshotPresent: diag?.legacyCanonicalSnapshotPresent,
+    legacyCanonicalSnapshotStructurallyValid:
+      diag?.legacyCanonicalSnapshotStructurallyValid,
+    legacyCanonicalSnapshotStructuralUpgradeAttempted:
+      diag?.legacyCanonicalSnapshotStructuralUpgradeAttempted,
+    legacyCanonicalSnapshotStructuralUpgradeResult:
+      diag?.legacyCanonicalSnapshotStructuralUpgradeResult,
+    legacyCanonicalSnapshotStructuralUpgradeSkipReason:
+      diag?.legacyCanonicalSnapshotStructuralUpgradeSkipReason,
+    canonicalSnapshotStateBefore: diag?.canonicalSnapshotStateBefore,
+    canonicalSnapshotStateAfter: diag?.canonicalSnapshotStateAfter,
+    migrationDiagnosticsApplicable,
+    migrationDiagnosticsComplete,
+    diagnosticCompletenessPassed: migrationDiagnosticsComplete,
+    diagnosticCompletenessFailureReasons: migrationDiagnosticFailures,
     experienceCount: (exportCv.experience || []).length,
     experiences,
     summaryPresent: Boolean(summaryText),
@@ -901,6 +969,20 @@ export function buildAndStoreCvExportDiagnostic(input: BuildCvExportTraceInput):
     selectedFinalWordBudgetPassed: diag?.selectedFinalWordBudgetPassed,
     summaryWordBudgetCompactionRevision: diag?.summaryWordBudgetCompactionRevision,
     summaryCurrentTextAuthorityRevision: diag?.summaryCurrentTextAuthorityRevision,
+    canonicalSummaryTopLevelPresent: diag?.canonicalSummaryTopLevelPresent,
+    canonicalSummaryTopLevelHash: diag?.canonicalSummaryTopLevelHash,
+    canonicalSnapshotPresent: diag?.canonicalSnapshotPresent,
+    canonicalSnapshotSummaryPresent: diag?.canonicalSnapshotSummaryPresent,
+    canonicalSnapshotSummaryHash: diag?.canonicalSnapshotSummaryHash,
+    canonicalSnapshotStateSource: diag?.canonicalSnapshotStateSource,
+    resolvedCanonicalSummaryPresent: diag?.resolvedCanonicalSummaryPresent,
+    resolvedCanonicalSummaryHash: diag?.resolvedCanonicalSummaryHash,
+    resolvedCanonicalSummarySource: diag?.resolvedCanonicalSummarySource,
+    resolvedCanonicalSummaryRejectionReason:
+      diag?.resolvedCanonicalSummaryRejectionReason,
+    summaryAuthorityDecisionBranch: diag?.summaryAuthorityDecisionBranch,
+    summaryCanonicalCandidateRejectedReason:
+      diag?.summaryCanonicalCandidateRejectedReason,
     summaryStaleMetadataDetected: diag?.summaryStaleMetadataDetected,
     summaryVisibleTextAuthorityRebound: diag?.summaryVisibleTextAuthorityRebound,
     summaryVisibleTextAuthorityReason:

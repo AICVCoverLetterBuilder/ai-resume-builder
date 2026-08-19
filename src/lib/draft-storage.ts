@@ -86,9 +86,10 @@ export function loadCvDraft(): CvDraftData | null {
     const parsed = JSON.parse(stored) as CvDraftData;
     // Basic validation
     if (!parsed.cv || typeof parsed.cv !== 'object') return null;
+    const normalizedCv = normalizeLegacyCvRuntime(parsed.cv);
     const hydrated = withPersonalPhotoFields({
       ...parsed,
-      cv: normalizeLegacyCvRuntime(parsed.cv),
+      cv: normalizedCv,
       schemaVersion: CV_RUNTIME_MIGRATION_VERSION,
     });
     // Persist the idempotent migration immediately so an export tapped before
@@ -96,6 +97,10 @@ export function loadCvDraft(): CvDraftData | null {
     if (
       parsed.schemaVersion !== CV_RUNTIME_MIGRATION_VERSION
       || parsed.cv.runtimeMigrationVersion !== CV_RUNTIME_MIGRATION_VERSION
+      // A same-version Android draft may still receive an idempotent
+      // structural canonical-state repair. Persist that safe metadata upgrade
+      // immediately so a restart cannot reopen the pre-state authority path.
+      || normalizedCv !== parsed.cv
     ) {
       localStorage.setItem(CV_DRAFT_KEY, JSON.stringify(hydrated));
     }

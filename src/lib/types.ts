@@ -130,6 +130,23 @@ export type CvSummaryOrigin =
   | 'ai_repaired'
   | 'deterministic_fallback';
 
+/**
+ * Privacy-safe evidence that a persisted pre-state canonical snapshot was
+ * structurally repaired on read. It records no CV prose or user identifiers.
+ */
+export type CvRuntimeMigrationRepair = {
+  revision: 1;
+  migrationVersionBefore: number;
+  migrationVersionAfter: number;
+  legacyCanonicalSnapshotPresent: true;
+  legacyCanonicalSnapshotStructurallyValid: true;
+  structuralUpgradeAttempted: true;
+  structuralUpgradeResult: 'accepted';
+  structuralUpgradeSkipReason: null;
+  canonicalSnapshotStateBefore: 'absent';
+  canonicalSnapshotStateAfter: 'valid';
+};
+
 export interface ExportLocalizedTitleSurface {
   bindingKey: string;
   sourceTitle: string;
@@ -158,6 +175,8 @@ export interface CVData {
   summaryGeneratedLocale?: string;
   /** Idempotent persisted-runtime migration marker. */
   runtimeMigrationVersion?: number;
+  /** Privacy-safe persisted trace for a completed structural snapshot repair. */
+  runtimeMigrationRepair?: CvRuntimeMigrationRepair;
   /** Frozen source-locale summary (mirrors canonicalSnapshot when present). */
   canonicalSummary?: string;
   /**

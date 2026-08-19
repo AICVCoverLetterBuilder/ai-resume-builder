@@ -4,7 +4,12 @@
  */
 import type { CVData, TemplateId, WorkExperience } from './types';
 import type { Locale } from './i18n/translations';
-import { normalizeLegacyCvRuntime } from './cv-legacy-runtime-migration';
+import {
+  normalizeLegacyCvRuntimeWithTrace,
+  type CanonicalSnapshotStatePresence,
+  type LegacyCanonicalSnapshotUpgradeResult,
+  type LegacyCanonicalSnapshotUpgradeSkipReason,
+} from './cv-legacy-runtime-migration';
 import { normalizeCvRegion } from './cv-region';
 import {
   buildCvCanonicalFactSet,
@@ -365,6 +370,16 @@ export type ExportReadyDiagnostics = {
   selectedTemplateId: TemplateId | string;
   requestedLocale: Locale;
   runtimeMigrationVersion?: number;
+  /** Privacy-safe persisted-runtime authority trace, emitted before export projection. */
+  runtimeMigrationVersionBefore?: number;
+  runtimeMigrationVersionAfter?: number;
+  legacyCanonicalSnapshotPresent?: boolean;
+  legacyCanonicalSnapshotStructurallyValid?: boolean;
+  legacyCanonicalSnapshotStructuralUpgradeAttempted?: boolean;
+  legacyCanonicalSnapshotStructuralUpgradeResult?: LegacyCanonicalSnapshotUpgradeResult;
+  legacyCanonicalSnapshotStructuralUpgradeSkipReason?: LegacyCanonicalSnapshotUpgradeSkipReason | null;
+  canonicalSnapshotStateBefore?: CanonicalSnapshotStatePresence;
+  canonicalSnapshotStateAfter?: CanonicalSnapshotStatePresence;
   experienceCount: number;
   recoveryInvoked: boolean;
   experienceProvenance: Array<{
@@ -413,7 +428,12 @@ export type ExportReadyDiagnostics = {
   resolvedCanonicalSummaryHash?: string | null;
   resolvedCanonicalSummarySource?: 'top_level' | 'canonical_snapshot' | 'canonical_snapshot_legacy_state_inferred' | 'none';
   resolvedCanonicalSummaryRejectionReason?: 'canonical_snapshot_state_not_valid' | 'canonical_snapshot_summary_missing' | null;
-  summaryAuthorityDecisionBranch?: 'app_owned_canonical_v2_authority' | 'manual_saved_summary' | 'app_owned_saved_summary';
+  summaryAuthorityDecisionBranch?:
+    | 'app_owned_canonical_v2_authority'
+    | 'app_owned_canonical_v2_candidate_rejected'
+    | 'manual_saved_summary'
+    | 'app_owned_saved_summary';
+  summaryCanonicalCandidateRejectedReason?: 'canonical_v2_wrong_locale' | null;
   summaryStaleMetadataDetected?: boolean;
   summaryVisibleTextAuthorityRebound?: boolean;
   summaryVisibleTextAuthorityReason?: string;
@@ -1070,11 +1090,28 @@ export function prepareExportReadyCv(
   // Summary/export failure diagnostic. A later gate may fail the export, but
   // it must not erase the already-evaluated presentation truth.
   let terminalExperiencePresentation: ExperiencePresentationSnapshot | null = null;
+  const runtimeMigration = normalizeLegacyCvRuntimeWithTrace(rawCv, requestedLocale);
+  const runtimeMigrationDiagnostics = {
+    runtimeMigrationVersionBefore: runtimeMigration.trace.fromVersion,
+    runtimeMigrationVersionAfter: runtimeMigration.trace.toVersion,
+    legacyCanonicalSnapshotPresent: runtimeMigration.trace.legacyCanonicalSnapshotPresent,
+    legacyCanonicalSnapshotStructurallyValid:
+      runtimeMigration.trace.legacyCanonicalSnapshotStructurallyValid,
+    legacyCanonicalSnapshotStructuralUpgradeAttempted:
+      runtimeMigration.trace.legacyCanonicalSnapshotStructuralUpgradeAttempted,
+    legacyCanonicalSnapshotStructuralUpgradeResult:
+      runtimeMigration.trace.legacyCanonicalSnapshotStructuralUpgradeResult,
+    legacyCanonicalSnapshotStructuralUpgradeSkipReason:
+      runtimeMigration.trace.legacyCanonicalSnapshotStructuralUpgradeSkipReason,
+    canonicalSnapshotStateBefore: runtimeMigration.trace.canonicalSnapshotStateBefore,
+    canonicalSnapshotStateAfter: runtimeMigration.trace.canonicalSnapshotStateAfter,
+  };
 
   const baseDiagnostics = (): ExportReadyDiagnostics => ({
     selectedTemplateId,
     requestedLocale,
-    runtimeMigrationVersion: undefined,
+    runtimeMigrationVersion: runtimeMigration.trace.toVersion,
+    ...runtimeMigrationDiagnostics,
     experienceCount: (rawCv.experience || []).length,
     recoveryInvoked: false,
     experienceProvenance: [],
@@ -1089,7 +1126,7 @@ export function prepareExportReadyCv(
     stage,
   });
 
-  let cv = normalizeLegacyCvRuntime(rawCv, requestedLocale);
+  let cv = runtimeMigration.cv;
   stage = 'normalize_region';
   cv = { ...cv, region: normalizeCvRegion(cv.region), templateId: selectedTemplateId as TemplateId };
 
@@ -1492,6 +1529,14 @@ export function prepareExportReadyCv(
     )
     : null;
   const canonicalV2AuthorityAvailable = Boolean(canonicalV2Validation?.ok);
+  const staleAppOwnedWrongLocaleCanonicalCandidate = Boolean(
+    cv.summaryOrigin !== 'user'
+    && savedSummaryDiffersFromCanonical
+    && canonicalV2Validation
+    && !canonicalV2Validation.targetLocalePurityPassed
+    && cv.summaryGenerationContextKey
+    && !experienceJobContextsMatch(cv.summaryGenerationContextKey, primaryJobCtx.key),
+  );
   const canonicalHasOccupationalConflict = isSummaryStaleForJobContext(
     savedCanonicalSummary,
     primaryJobCtx,
@@ -1549,11 +1594,17 @@ export function prepareExportReadyCv(
       : null;
     diagnostics.resolvedCanonicalSummarySource = resolvedCanonicalSummarySource;
     diagnostics.resolvedCanonicalSummaryRejectionReason = resolvedCanonicalSummaryRejectionReason;
-    diagnostics.summaryAuthorityDecisionBranch = appOwnedSummaryRequiresV2Authority
+    diagnostics.summaryAuthorityDecisionBranch = staleAppOwnedWrongLocaleCanonicalCandidate
+      ? 'app_owned_canonical_v2_candidate_rejected'
+      : appOwnedSummaryRequiresV2Authority
       ? 'app_owned_canonical_v2_authority'
       : cv.summaryOrigin === 'user'
         ? 'manual_saved_summary'
         : 'app_owned_saved_summary';
+    diagnostics.summaryCanonicalCandidateRejectedReason =
+      staleAppOwnedWrongLocaleCanonicalCandidate
+        ? 'canonical_v2_wrong_locale'
+        : null;
     diagnostics.summaryValidationAuthoritySource = summaryValidationAuthoritySource;
     diagnostics.summarySavedProvenance = rawCv.summaryOrigin || 'user';
     diagnostics.summarySavedSummaryReboundRevalidated = appOwnedSummaryRequiresV2Authority;
@@ -1769,6 +1820,19 @@ export function prepareExportReadyCv(
   let selectedFinalWordCount: number | null = null;
   let selectedFinalWordBudgetPassed: boolean | null = null;
   let durationCompositionSource = 'saved_summary';
+
+  if (staleAppOwnedWrongLocaleCanonicalCandidate) {
+    const diagnostics = baseDiagnostics();
+    diagnostics.recoveryInvoked = recoveryInvoked;
+    diagnostics.runtimeMigrationVersion = cv.runtimeMigrationVersion;
+    diagnostics.experienceProvenance = buildProvenanceRows(cv, groundingById);
+    diagnostics.summaryFactSetSource = factSource;
+    diagnostics.summarySemanticDutyKeys = summaryKeys;
+    diagnostics.summaryInitialValid = false;
+    diagnostics.summaryInitialReason = 'canonical_v2_wrong_locale';
+    assignSummaryOwnershipDiagnostics(diagnostics);
+    return fail('canonical_v2_wrong_locale', stage, diagnostics);
+  }
 
   const rebuildOccupationSummary = (): string => {
     const durationPhrase = formatApproximateDurationPhrase(durationSnapshot.total, requestedLocale);
@@ -2305,6 +2369,7 @@ export function prepareExportReadyCv(
     selectedTemplateId,
     requestedLocale,
     runtimeMigrationVersion: cv.runtimeMigrationVersion,
+    ...runtimeMigrationDiagnostics,
     experienceCount: (cv.experience || []).length,
     recoveryInvoked: true,
     experienceProvenance: buildProvenanceRows(cv, groundingById),

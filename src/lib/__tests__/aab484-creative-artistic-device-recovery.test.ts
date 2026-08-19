@@ -1,4 +1,8 @@
-import { describe, expect, it } from 'vitest';
+/**
+ * @vitest-environment jsdom
+ */
+import { act, render } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { CVData, WorkExperience } from '@/lib/types';
@@ -8,6 +12,23 @@ import { buildCanonicalSnapshotFromCv } from '@/lib/cv-canonical-snapshot';
 import { prepareExportReadyCv } from '@/lib/prepare-export-ready-cv';
 import { applyGeneratedExperienceDescription } from '@/lib/cv-experience-provenance';
 import { templateComponents } from '@/components/cv-templates';
+import { CV_DRAFT_STORAGE_KEY } from '@/lib/draft-storage';
+import { AppProvider, useApp } from '@/lib/store';
+import {
+  buildAndStoreCvExportDiagnostic,
+  clearCvExportDiagnosticsForTests,
+  getLatestCvExportDiagnostic,
+} from '@/lib/cv-export-diagnostics';
+
+const iapMocks = vi.hoisted(() => ({
+  initIAP: vi.fn(),
+  syncProEntitlement: vi.fn(),
+}));
+
+vi.mock('@/lib/iap', () => ({
+  initIAP: iapMocks.initIAP,
+  syncProEntitlement: iapMocks.syncProEntitlement,
+}));
 
 const EXPECTED = 'Imam oko sedam godina iskustva. Trenutno radim kao Grafička dizajnerka u Rewitu Current Test, gde pripremam vizuelne koncepte i rasporede za digitalne materijale, uređujem grafike i fotografije za različite projekte i usaglašavam nacrte i izmene sa članovima projektnog tima. Prethodno sam radila kao Grafička dizajnerka u TestWerk GmbH, gde sam kreirala grafičke materijale za štampane i digitalne medije, razvijala koncepte vizuelnog dizajna prema potrebama klijenata i pregledala projekte dizajna i proveravala kvalitet finalnih rezultata. Prethodno sam radila kao Grafička dizajnerka u Rewitu, gde sam izrađivala vizuelne koncepte i rasporede za digitalne materijale, uređivala grafike i fotografije za različite projekte i usaglašavala nacrte i izmene sa članovima projektnog tima.';
 const STALE = 'Imam oko sedam godina iskustva. Trenutno radim kao Grafička dizajnerka u Rewitu Current Test, pripremam vizuelne koncepte i rasporede za digitalne materijale, uređujem grafike i slike za različite projekte i usklađujem nacrte i izmene sa članovima projektnog tima. Ranije sam radila kao Grafička dizajnerka u TestWerk GmbH, kreirala grafičke materijale za štampane i digitalne medije, razvijala koncepte vizuelnog dizajna prema potrebama klijenata i pregledala projekte dizajna i proveravala kvalitet finalnih rezultata. Prethodno sam radila kao Grafička dizajnerka u Rewitu, pripremala vizuelne koncepte i rasporede za digitalne materijale, uređivala grafike i slike za različite projekte i usklađivala nacrte i izmene sa članovima projektnog tima.';
@@ -69,7 +90,158 @@ function stalePersistedDeviceCv(): CVData {
   };
 }
 
+let hydratedCv: CVData | null = null;
+
+function HydratedDraftProbe() {
+  hydratedCv = useApp().currentCv;
+  return null;
+}
+
 describe('AAB484 Creative Artistic persisted-device recovery', () => {
+  beforeEach(() => {
+    hydratedCv = null;
+    localStorage.clear();
+    clearCvExportDiagnosticsForTests();
+    vi.clearAllMocks();
+    iapMocks.initIAP.mockResolvedValue(undefined);
+    iapMocks.syncProEntitlement.mockResolvedValue({ status: 'not_available' });
+  });
+
+  afterEach(() => {
+    localStorage.clear();
+  });
+
+  it('repairs a fully persisted already-v3 pre-state snapshot through real draft hydration before export and Preview authority', async () => {
+    const persisted = stalePersistedDeviceCv();
+    delete persisted.canonicalSummary;
+    const legacySnapshot = buildCanonicalSnapshotFromCv(
+      { ...deviceCv(), canonicalSummary: EXPECTED },
+      { canonicalLocale: 'sr', createdFrom: 'legacy_migration', revision: 2 },
+    );
+    // Actual pre-state serialized shape: structural evidence predates the
+    // later state/provenance labels.  Keep revision/locale/hash/Summary and
+    // every entry binding intact; do not inject current-schema fields.
+    delete (legacySnapshot as Partial<typeof legacySnapshot>).canonicalState;
+    delete (legacySnapshot as Partial<typeof legacySnapshot>).canonicalCreatedFrom;
+    persisted.canonicalSnapshot = legacySnapshot;
+
+    localStorage.setItem(CV_DRAFT_STORAGE_KEY, JSON.stringify({
+      schemaVersion: 3,
+      savedAt: '2026-08-19T17:41:00.000Z',
+      cv: persisted,
+    }));
+
+    const rendered = render(React.createElement(
+      AppProvider,
+      null,
+      React.createElement(HydratedDraftProbe),
+    ));
+    await act(async () => { await Promise.resolve(); });
+    rendered.unmount();
+
+    expect(hydratedCv?.runtimeMigrationVersion).toBe(3);
+    expect(hydratedCv?.canonicalSnapshot?.canonicalState).toBe('valid');
+    expect(hydratedCv?.canonicalSnapshot?.canonicalStateSource).toBe('legacy_state_inferred');
+    expect(hydratedCv?.canonicalSnapshot?.canonicalSummary).toBe(EXPECTED);
+    expect(hydratedCv?.summary).toBe(STALE);
+
+    const persistedAfterHydration = JSON.parse(localStorage.getItem(CV_DRAFT_STORAGE_KEY) || '{}') as {
+      cv?: CVData;
+    };
+    expect(persistedAfterHydration.cv?.canonicalSnapshot?.canonicalState).toBe('valid');
+    expect(persistedAfterHydration.cv?.canonicalSnapshot?.canonicalStateSource)
+      .toBe('legacy_state_inferred');
+    expect(persistedAfterHydration.cv?.runtimeMigrationRepair).toMatchObject({
+      migrationVersionBefore: 3,
+      migrationVersionAfter: 3,
+      structuralUpgradeAttempted: true,
+      structuralUpgradeResult: 'accepted',
+      canonicalSnapshotStateBefore: 'absent',
+      canonicalSnapshotStateAfter: 'valid',
+    });
+
+    const hydratedBeforeExport = JSON.stringify(hydratedCv);
+    const prepared = prepareExportReadyCv(hydratedCv!, 'sr', 'creative-artistic', {
+      gender: 'female', referenceDate: '2026-08-19',
+    });
+    expect(prepared.ok, prepared.ok ? '' : `${prepared.reason}:${prepared.stage}`).toBe(true);
+    if (!prepared.ok) return;
+    expect(prepared.diagnostics.selectedFinalSource).toBe('deterministic_v2_manifest');
+    expect(hashSummaryV2Text(prepared.cv.summary)).toBe('fnv1a_e7f712af');
+    // Export/Preview authority is a projection only: the hydrated editor
+    // draft must retain the historical app-owned display text until a user
+    // actually edits it.
+    expect(JSON.stringify(hydratedCv)).toBe(hydratedBeforeExport);
+    const Template = templateComponents['creative-artistic'];
+    const previewHtml = renderToStaticMarkup(React.createElement(Template, {
+      data: prepared.cv,
+      locale: 'sr',
+    }));
+    expect(previewHtml).toContain('fotografije');
+    expect(previewHtml).not.toContain('usklađujem nacrte');
+    expect(prepared.diagnostics).toMatchObject({
+      runtimeMigrationVersionBefore: 3,
+      runtimeMigrationVersionAfter: 3,
+      legacyCanonicalSnapshotPresent: true,
+      legacyCanonicalSnapshotStructurallyValid: true,
+      legacyCanonicalSnapshotStructuralUpgradeAttempted: true,
+      legacyCanonicalSnapshotStructuralUpgradeResult: 'accepted',
+      legacyCanonicalSnapshotStructuralUpgradeSkipReason: null,
+      canonicalSnapshotStateBefore: 'absent',
+      canonicalSnapshotStateAfter: 'valid',
+      resolvedCanonicalSummarySource: 'canonical_snapshot_legacy_state_inferred',
+      resolvedCanonicalSummaryHash: 'fnv1a_e7f712af',
+      summaryAuthorityDecisionBranch: 'app_owned_canonical_v2_authority',
+    });
+
+    const trace = buildAndStoreCvExportDiagnostic({
+      format: 'pdf', locale: 'sr', rawCv: hydratedCv!, prepared,
+      rendererReached: true, blobProduced: true,
+    });
+    expect(trace).toMatchObject({
+      runtimeMigrationVersionBefore: 3,
+      runtimeMigrationVersionAfter: 3,
+      legacyCanonicalSnapshotPresent: true,
+      legacyCanonicalSnapshotStructurallyValid: true,
+      legacyCanonicalSnapshotStructuralUpgradeAttempted: true,
+      legacyCanonicalSnapshotStructuralUpgradeResult: 'accepted',
+      legacyCanonicalSnapshotStructuralUpgradeSkipReason: null,
+      canonicalSnapshotStateBefore: 'absent',
+      canonicalSnapshotStateAfter: 'valid',
+      resolvedCanonicalSummarySource: 'canonical_snapshot_legacy_state_inferred',
+      resolvedCanonicalSummaryHash: 'fnv1a_e7f712af',
+      summaryAuthorityDecisionBranch: 'app_owned_canonical_v2_authority',
+      migrationDiagnosticsApplicable: true,
+      migrationDiagnosticsComplete: true,
+      diagnosticCompletenessPassed: true,
+      diagnosticCompletenessFailureReasons: [],
+    });
+    expect(JSON.stringify(trace)).not.toContain(EXPECTED);
+    // Latest Diagnostics is what the device exposes; prove the privacy-safe
+    // migration trace survives that serializer rather than only a local
+    // prepare-export object.
+    expect(getLatestCvExportDiagnostic('pdf')).toMatchObject({
+      legacyCanonicalSnapshotStructuralUpgradeResult: 'accepted',
+      canonicalSnapshotStateBefore: 'absent',
+      canonicalSnapshotStateAfter: 'valid',
+      resolvedCanonicalSummaryHash: 'fnv1a_e7f712af',
+      summaryAuthorityDecisionBranch: 'app_owned_canonical_v2_authority',
+      diagnosticCompletenessPassed: true,
+    });
+
+    hydratedCv = null;
+    const restarted = render(React.createElement(
+      AppProvider,
+      null,
+      React.createElement(HydratedDraftProbe),
+    ));
+    await act(async () => { await Promise.resolve(); });
+    restarted.unmount();
+    const restartedCv = hydratedCv as CVData | null;
+    expect(restartedCv?.canonicalSnapshot?.canonicalState).toBe('valid');
+    expect(restartedCv?.canonicalSnapshot?.canonicalStateSource).toBe('legacy_state_inferred');
+  });
+
   it('does not promote a stale app-owned unstructured Summary over a divergent canonical V2 terminal surface', () => {
     const hydrated = normalizeLegacyCvRuntime(stalePersistedDeviceCv(), 'sr');
     const prepared = prepareExportReadyCv(hydrated, 'sr', 'creative-artistic', {
@@ -225,6 +397,134 @@ describe('AAB484 Creative Artistic persisted-device recovery', () => {
       resolvedCanonicalSummaryRejectionReason: 'canonical_snapshot_state_not_valid',
       selectedFinalSource: 'saved_summary',
     });
+  });
+
+  it('keeps explicit user-authored and user-edited Summary authority over legacy canonical repair', () => {
+    const canonicalSnapshot = buildCanonicalSnapshotFromCv(
+      { ...deviceCv(), canonicalSummary: EXPECTED },
+      { canonicalLocale: 'sr', createdFrom: 'legacy_migration', revision: 2 },
+    );
+    const authored: CVData = {
+      ...stalePersistedDeviceCv(),
+      summary: STALE,
+      summaryOrigin: 'user',
+      canonicalSnapshot,
+    };
+    const editedAfterAi: CVData = {
+      ...authored,
+      summaryGeneratedLocale: 'sr',
+      summaryGenerationContextKey: 'fnv1a_user_edited_after_ai',
+    };
+
+    for (const current of [authored, editedAfterAi]) {
+      const prepared = prepareExportReadyCv(current, 'sr', 'modern-minimal', {
+        gender: 'female', referenceDate: '2026-08-19',
+      });
+      expect(prepared.ok, prepared.ok ? '' : `${prepared.reason}:${prepared.stage}`).toBe(true);
+      if (!prepared.ok) continue;
+      // The shared duration composition can add a sourced date phrase, but
+      // manual authority must never be displaced by the canonical V2 e7
+      // surface selected for stale app-owned content.
+      expect(prepared.cv.summary).toContain('Ranije sam radila');
+      expect(prepared.cv.summary).not.toContain('fotografije');
+      expect(prepared.diagnostics.summaryAuthorityDecisionBranch).toBe('manual_saved_summary');
+      expect(prepared.diagnostics.selectedFinalSource).toBe('saved_summary');
+    }
+  });
+
+  it('repairs only structurally eligible snapshots idempotently, including a non-Creative template and another locale normalization', () => {
+    const persisted = stalePersistedDeviceCv();
+    delete persisted.canonicalSummary;
+    const preState = buildCanonicalSnapshotFromCv(
+      { ...deviceCv(), canonicalSummary: EXPECTED },
+      { canonicalLocale: 'sr', createdFrom: 'legacy_migration', revision: 2 },
+    );
+    delete (preState as Partial<typeof preState>).canonicalState;
+    delete (preState as Partial<typeof preState>).canonicalCreatedFrom;
+    persisted.canonicalSnapshot = preState;
+
+    const first = normalizeLegacyCvRuntime(persisted, 'hr');
+    const second = normalizeLegacyCvRuntime(first, 'hr');
+    expect(first.canonicalSnapshot?.canonicalState).toBe('valid');
+    expect(first.runtimeMigrationRepair?.structuralUpgradeResult).toBe('accepted');
+    expect(second).toEqual(first);
+
+    const prepared = prepareExportReadyCv(first, 'sr', 'modern-minimal', {
+      gender: 'female', referenceDate: '2026-08-19',
+    });
+    expect(prepared.ok, prepared.ok ? '' : `${prepared.reason}:${prepared.stage}`).toBe(true);
+    if (!prepared.ok) return;
+    expect(prepared.diagnostics.selectedFinalSource).toBe('deterministic_v2_manifest');
+    expect(hashSummaryV2Text(prepared.cv.summary)).toBe('fnv1a_e7f712af');
+  });
+
+  it('does not rewrite an empty saved Summary while canonical V2 authority selects the terminal export surface', () => {
+    const empty = stalePersistedDeviceCv();
+    empty.summary = '';
+    delete empty.canonicalSummary;
+    empty.canonicalSnapshot = buildCanonicalSnapshotFromCv(
+      { ...deviceCv(), canonicalSummary: EXPECTED },
+      { canonicalLocale: 'sr', createdFrom: 'legacy_migration', revision: 2 },
+    );
+    const before = JSON.stringify(empty);
+    const prepared = prepareExportReadyCv(empty, 'sr', 'modern-minimal', {
+      gender: 'female', referenceDate: '2026-08-19',
+    });
+    expect(prepared.ok, prepared.ok ? '' : `${prepared.reason}:${prepared.stage}`).toBe(true);
+    if (!prepared.ok) return;
+    expect(prepared.cv.summary).toBe(EXPECTED);
+    expect(empty.summary).toBe('');
+    expect(JSON.stringify(empty)).toBe(before);
+  });
+
+  it('fails the internal diagnostics-completeness gate when an applicable migration field is absent', () => {
+    const persisted = stalePersistedDeviceCv();
+    delete persisted.canonicalSummary;
+    const snapshot = buildCanonicalSnapshotFromCv(
+      { ...deviceCv(), canonicalSummary: EXPECTED },
+      { canonicalLocale: 'sr', createdFrom: 'legacy_migration', revision: 2 },
+    );
+    delete (snapshot as Partial<typeof snapshot>).canonicalState;
+    persisted.canonicalSnapshot = snapshot;
+    const prepared = prepareExportReadyCv(normalizeLegacyCvRuntime(persisted, 'sr'), 'sr', 'modern-minimal', {
+      gender: 'female', referenceDate: '2026-08-19',
+    });
+    expect(prepared.ok, prepared.ok ? '' : `${prepared.reason}:${prepared.stage}`).toBe(true);
+    if (!prepared.ok) return;
+    const incomplete = {
+      ...prepared,
+      diagnostics: {
+        ...prepared.diagnostics,
+        runtimeMigrationVersionBefore: undefined,
+      },
+    };
+    const trace = buildAndStoreCvExportDiagnostic({
+      format: 'pdf', locale: 'sr', rawCv: persisted, prepared: incomplete,
+      rendererReached: true, blobProduced: true,
+    });
+    expect(trace.migrationDiagnosticsApplicable).toBe(true);
+    expect(trace.migrationDiagnosticsComplete).toBe(false);
+    expect(trace.diagnosticCompletenessPassed).toBe(false);
+    expect(trace.diagnosticCompletenessFailureReasons).toContain(
+      'migration_diagnostic_missing:runtimeMigrationVersionBefore',
+    );
+  });
+
+  it('fails closed when stale app-owned prose has only a wrong-locale canonical snapshot candidate', () => {
+    const persisted = stalePersistedDeviceCv();
+    delete persisted.canonicalSummary;
+    const foreignSnapshot = buildCanonicalSnapshotFromCv(
+      { ...deviceCv(), canonicalSummary: 'Experienced graphic designer with seven years of experience.' },
+      { canonicalLocale: 'en', createdFrom: 'legacy_migration', revision: 2 },
+    );
+    persisted.canonicalSnapshot = foreignSnapshot;
+
+    const prepared = prepareExportReadyCv(persisted, 'sr', 'creative-artistic', {
+      gender: 'female', referenceDate: '2026-08-19',
+    });
+    expect(prepared.ok).toBe(false);
+    if (prepared.ok) return;
+    expect(prepared.reason).toMatch(/canonical|locale|summary/i);
   });
 
   it('keeps an app-owned Summary when its canonical terminal surface and context are genuinely aligned', () => {

@@ -1,4 +1,9 @@
-import type { CVData, CvSummaryOrigin, WorkExperience } from './types';
+import type {
+  CVData,
+  CvRuntimeMigrationRepair,
+  CvSummaryOrigin,
+  WorkExperience,
+} from './types';
 import { normalizeCvRegion } from './cv-region';
 import type { Locale } from './i18n/translations';
 import {
@@ -36,29 +41,143 @@ function sameText(a?: string, b?: string): boolean {
   return Boolean(normalized(a)) && normalized(a) === normalized(b);
 }
 
+export type LegacyCanonicalSnapshotUpgradeResult =
+  | 'accepted'
+  | 'already_accepted'
+  | 'rejected'
+  | 'not_applicable';
+
+export type LegacyCanonicalSnapshotUpgradeSkipReason =
+  | 'snapshot_absent'
+  | 'canonical_state_present'
+  | 'canonical_summary_missing'
+  | 'canonical_entries_missing'
+  | 'canonical_entry_binding_invalid'
+  | 'canonical_locale_invalid'
+  | 'canonical_revision_invalid'
+  | 'canonical_source_hash_missing';
+
+export type CanonicalSnapshotStatePresence =
+  | 'valid'
+  | 'needs_rebuild'
+  | 'absent'
+  | 'invalid';
+
+type LegacyCanonicalSnapshotInspection = {
+  present: boolean;
+  canonicalStateBefore: CanonicalSnapshotStatePresence;
+  structurallyValid: boolean;
+  upgradeAttempted: boolean;
+  upgradeResult: LegacyCanonicalSnapshotUpgradeResult;
+  skipReason: LegacyCanonicalSnapshotUpgradeSkipReason | null;
+};
+
+function canonicalStatePresence(snapshot: CanonicalCvSnapshot | undefined): CanonicalSnapshotStatePresence {
+  if (!snapshot || snapshot.canonicalState === undefined || snapshot.canonicalState === null) return 'absent';
+  if (snapshot.canonicalState === 'valid' || snapshot.canonicalState === 'needs_rebuild') {
+    return snapshot.canonicalState;
+  }
+  return 'invalid';
+}
+
+/**
+ * Persisted snapshots from before state/provenance labels still have enough
+ * immutable evidence to be trusted.  Do not require a later descriptive
+ * label: trust is based on the revisioned Summary and entry bindings only.
+ */
+function inspectPreStateCanonicalSnapshot(
+  snapshot: CanonicalCvSnapshot | undefined,
+  experience: WorkExperience[],
+): LegacyCanonicalSnapshotInspection {
+  if (!snapshot) {
+    return {
+      present: false,
+      canonicalStateBefore: 'absent',
+      structurallyValid: false,
+      upgradeAttempted: false,
+      upgradeResult: 'not_applicable',
+      skipReason: 'snapshot_absent',
+    };
+  }
+
+  const state = canonicalStatePresence(snapshot);
+  if (state !== 'absent') {
+    const alreadyAccepted = state === 'valid'
+      && snapshot.canonicalStateSource === 'legacy_state_inferred';
+    return {
+      present: true,
+      canonicalStateBefore: state,
+      structurallyValid: alreadyAccepted,
+      upgradeAttempted: false,
+      upgradeResult: alreadyAccepted ? 'already_accepted' : 'not_applicable',
+      skipReason: 'canonical_state_present',
+    };
+  }
+
+  const canonicalEntries = Array.isArray(snapshot.canonicalExperiences)
+    ? snapshot.canonicalExperiences
+    : [];
+  const liveIds = new Set((experience || []).map((item) => item.id));
+  const snapshotIds = canonicalEntries.map((item) => normalized(item.experienceId));
+  const bindingsValid = canonicalEntries.length > 0
+    && snapshotIds.every(Boolean)
+    && new Set(snapshotIds).size === snapshotIds.length
+    && snapshotIds.length === liveIds.size
+    && snapshotIds.every((id) => liveIds.has(id))
+    && canonicalEntries.every((item) => (
+      Array.isArray(item.bullets)
+      && item.bullets.every((bullet) => (
+        Boolean(normalized(bullet.factId))
+        && Boolean(normalized(bullet.sourceText))
+      ))
+    ));
+
+  const skipReason: LegacyCanonicalSnapshotUpgradeSkipReason | null =
+    !normalized(snapshot.canonicalSummary)
+      ? 'canonical_summary_missing'
+      : canonicalEntries.length === 0
+        ? 'canonical_entries_missing'
+        : !bindingsValid
+          ? 'canonical_entry_binding_invalid'
+          : !asLocale(snapshot.canonicalLocale)
+            ? 'canonical_locale_invalid'
+            : !Number.isInteger(snapshot.canonicalRevision) || snapshot.canonicalRevision < 1
+              ? 'canonical_revision_invalid'
+              : !normalized(snapshot.canonicalSourceHash)
+                ? 'canonical_source_hash_missing'
+                : null;
+  const structurallyValid = skipReason === null;
+  return {
+    present: true,
+    canonicalStateBefore: 'absent',
+    structurallyValid,
+    upgradeAttempted: true,
+    upgradeResult: structurallyValid ? 'accepted' : 'rejected',
+    skipReason,
+  };
+}
+
 /**
  * Older persisted snapshots predate `canonicalState`. Promote only a complete
  * revisioned, locale-bound snapshot; partial data remains untrusted.
  */
 function isStructurallyValidPreStateCanonicalSnapshot(
   snapshot: CanonicalCvSnapshot | undefined,
+  experience: WorkExperience[],
 ): snapshot is CanonicalCvSnapshot {
-  return Boolean(
-    snapshot
-    && snapshot.canonicalState === undefined
-    && normalized(snapshot.canonicalSummary)
-    && Array.isArray(snapshot.canonicalExperiences)
-    && snapshot.canonicalExperiences.length > 0
-    && snapshot.canonicalExperiences.every((experience) => (
-      Boolean(normalized(experience.experienceId)) && Array.isArray(experience.bullets)
-    ))
-    && asLocale(snapshot.canonicalLocale)
-    && Number.isInteger(snapshot.canonicalRevision)
-    && snapshot.canonicalRevision >= 1
-    && normalized(snapshot.canonicalSourceHash)
-    && ['user_structured_input', 'validated_ai_result', 'legacy_migration']
-      .includes(snapshot.canonicalCreatedFrom),
-  );
+  return inspectPreStateCanonicalSnapshot(snapshot, experience).structurallyValid;
+}
+
+function acceptedStructuralRepair(input: CVData, canonicalSnapshot: CanonicalCvSnapshot | undefined):
+  CvRuntimeMigrationRepair | undefined {
+  const repair = input.runtimeMigrationRepair;
+  return repair
+    && repair.revision === 1
+    && repair.structuralUpgradeResult === 'accepted'
+    && canonicalSnapshot?.canonicalState === 'valid'
+    && canonicalSnapshot.canonicalStateSource === 'legacy_state_inferred'
+    ? repair
+    : undefined;
 }
 
 function snapshotDuties(cv: CVData, exp: WorkExperience): string {
@@ -144,6 +263,13 @@ export type LegacyCvMigrationTrace = {
   applied: boolean;
   fromVersion: number;
   toVersion: number;
+  legacyCanonicalSnapshotPresent: boolean;
+  legacyCanonicalSnapshotStructurallyValid: boolean;
+  legacyCanonicalSnapshotStructuralUpgradeAttempted: boolean;
+  legacyCanonicalSnapshotStructuralUpgradeResult: LegacyCanonicalSnapshotUpgradeResult;
+  legacyCanonicalSnapshotStructuralUpgradeSkipReason: LegacyCanonicalSnapshotUpgradeSkipReason | null;
+  canonicalSnapshotStateBefore: CanonicalSnapshotStatePresence;
+  canonicalSnapshotStateAfter: CanonicalSnapshotStatePresence;
   contentLocaleBefore?: string;
   contentLocaleAfter?: string;
   summaryOriginBefore?: string;
@@ -161,14 +287,62 @@ export function normalizeLegacyCvRuntimeWithTrace(
   const fromVersion = Number(input.runtimeMigrationVersion || 0);
   const normalizedRegion = normalizeCvRegion(input.region);
   const persistedCanonicalSnapshot = input.canonicalSnapshot;
-  const canonicalSnapshot = isStructurallyValidPreStateCanonicalSnapshot(persistedCanonicalSnapshot)
+  const structuralInspection = inspectPreStateCanonicalSnapshot(
+    persistedCanonicalSnapshot,
+    input.experience || [],
+  );
+  const canonicalSnapshot = isStructurallyValidPreStateCanonicalSnapshot(
+    persistedCanonicalSnapshot,
+    input.experience || [],
+  )
     ? {
       ...persistedCanonicalSnapshot,
+      canonicalCreatedFrom: persistedCanonicalSnapshot.canonicalCreatedFrom
+        || 'legacy_migration' as const,
       canonicalState: 'valid' as const,
       canonicalStateSource: 'legacy_state_inferred' as const,
     }
     : persistedCanonicalSnapshot;
   const canonicalSnapshotWasUpgraded = canonicalSnapshot !== persistedCanonicalSnapshot;
+  const structuralRepair = canonicalSnapshotWasUpgraded
+    ? {
+      revision: 1 as const,
+      migrationVersionBefore: fromVersion,
+      migrationVersionAfter: fromVersion,
+      legacyCanonicalSnapshotPresent: true as const,
+      legacyCanonicalSnapshotStructurallyValid: true as const,
+      structuralUpgradeAttempted: true as const,
+      structuralUpgradeResult: 'accepted' as const,
+      structuralUpgradeSkipReason: null,
+      canonicalSnapshotStateBefore: 'absent' as const,
+      canonicalSnapshotStateAfter: 'valid' as const,
+    }
+    : acceptedStructuralRepair(input, canonicalSnapshot);
+  const traceStructuralFields = structuralRepair
+    ? {
+      legacyCanonicalSnapshotPresent: structuralRepair.legacyCanonicalSnapshotPresent,
+      legacyCanonicalSnapshotStructurallyValid:
+        structuralRepair.legacyCanonicalSnapshotStructurallyValid,
+      legacyCanonicalSnapshotStructuralUpgradeAttempted:
+        structuralRepair.structuralUpgradeAttempted,
+      legacyCanonicalSnapshotStructuralUpgradeResult:
+        structuralRepair.structuralUpgradeResult as LegacyCanonicalSnapshotUpgradeResult,
+      legacyCanonicalSnapshotStructuralUpgradeSkipReason:
+        structuralRepair.structuralUpgradeSkipReason as LegacyCanonicalSnapshotUpgradeSkipReason | null,
+      canonicalSnapshotStateBefore:
+        structuralRepair.canonicalSnapshotStateBefore as CanonicalSnapshotStatePresence,
+      canonicalSnapshotStateAfter:
+        structuralRepair.canonicalSnapshotStateAfter as CanonicalSnapshotStatePresence,
+    }
+    : {
+      legacyCanonicalSnapshotPresent: structuralInspection.present,
+      legacyCanonicalSnapshotStructurallyValid: structuralInspection.structurallyValid,
+      legacyCanonicalSnapshotStructuralUpgradeAttempted: structuralInspection.upgradeAttempted,
+      legacyCanonicalSnapshotStructuralUpgradeResult: structuralInspection.upgradeResult,
+      legacyCanonicalSnapshotStructuralUpgradeSkipReason: structuralInspection.skipReason,
+      canonicalSnapshotStateBefore: structuralInspection.canonicalStateBefore,
+      canonicalSnapshotStateAfter: canonicalStatePresence(canonicalSnapshot),
+    };
   const canRecoverMissingGrounding = (input.experience || []).some((exp) => {
     if ((exp.originalUserDescription || '').trim()) return false;
     const visible = (exp.description || '').trim();
@@ -188,6 +362,7 @@ export function normalizeLegacyCvRuntimeWithTrace(
           applied: false,
           fromVersion,
           toVersion: fromVersion,
+          ...traceStructuralFields,
           contentLocaleBefore: input.contentLocale,
           contentLocaleAfter: input.contentLocale,
           summaryOriginBefore: input.summaryOrigin,
@@ -204,11 +379,13 @@ export function normalizeLegacyCvRuntimeWithTrace(
         ...input,
         region: normalizedRegion,
         ...(canonicalSnapshotWasUpgraded ? { canonicalSnapshot } : {}),
+        ...(canonicalSnapshotWasUpgraded ? { runtimeMigrationRepair: structuralRepair } : {}),
       },
       trace: {
         applied: true,
         fromVersion,
         toVersion: fromVersion,
+        ...traceStructuralFields,
         contentLocaleBefore: input.contentLocale,
         contentLocaleAfter: input.contentLocale,
         summaryOriginBefore: input.summaryOrigin,
@@ -303,6 +480,7 @@ export function normalizeLegacyCvRuntimeWithTrace(
     summaryOrigin,
     canonicalSummary,
     ...(canonicalSnapshot !== persistedCanonicalSnapshot ? { canonicalSnapshot } : {}),
+    ...(canonicalSnapshotWasUpgraded ? { runtimeMigrationRepair: structuralRepair } : {}),
     runtimeMigrationVersion: CV_RUNTIME_MIGRATION_VERSION,
   };
 
@@ -369,6 +547,7 @@ export function normalizeLegacyCvRuntimeWithTrace(
       applied: true,
       fromVersion,
       toVersion: CV_RUNTIME_MIGRATION_VERSION,
+      ...traceStructuralFields,
       contentLocaleBefore: input.contentLocale,
       contentLocaleAfter: next.contentLocale,
       summaryOriginBefore: input.summaryOrigin,
