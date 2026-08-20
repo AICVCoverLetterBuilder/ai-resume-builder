@@ -288,42 +288,36 @@ export type CvExportDiagnosticTrace = {
 const STORAGE_KEY_PDF = 'cvpro-export-diag-pdf';
 const STORAGE_KEY_DOCX = 'cvpro-export-diag-docx';
 
+/** Same-window notification for a completed PDF/DOCX diagnostic commit. */
+export const CV_EXPORT_DIAGNOSTICS_CHANGED_EVENT =
+  'cvpro-export-diagnostics-changed-v493' as const;
+
 export const CV_EXPORT_LATEST_DIAGNOSTIC_REVISION =
   'cv-export-latest-diagnostic-410-v1' as const;
 
-function storedCvExportDiagnosticCapturedAt(
-  format: CvExportFormat,
-): number {
-  if (typeof window === 'undefined') {
+let exportDiagnosticsRevision = 0;
+
+function diagnosticCapturedAt(trace: CvExportDiagnosticTrace | null): number {
+  if (!trace || typeof trace.capturedAt !== 'string') {
     return Number.NEGATIVE_INFINITY;
   }
+  const timestamp = Date.parse(trace.capturedAt);
+  return Number.isFinite(timestamp) ? timestamp : Number.NEGATIVE_INFINITY;
+}
 
-  const key = format === 'pdf'
-    ? STORAGE_KEY_PDF
-    : STORAGE_KEY_DOCX;
-
-  try {
-    const raw = window.localStorage.getItem(key);
-    if (!raw) return Number.NEGATIVE_INFINITY;
-
-    const parsed = JSON.parse(raw) as { capturedAt?: unknown };
-    if (typeof parsed.capturedAt !== 'string') {
-      return Number.NEGATIVE_INFINITY;
-    }
-
-    const timestamp = Date.parse(parsed.capturedAt);
-    return Number.isFinite(timestamp)
-      ? timestamp
-      : Number.NEGATIVE_INFINITY;
-  } catch {
-    return Number.NEGATIVE_INFINITY;
-  }
+function newestDiagnostic(
+  left: CvExportDiagnosticTrace | null,
+  right: CvExportDiagnosticTrace | null,
+): CvExportDiagnosticTrace | null {
+  if (!left) return right;
+  if (!right) return left;
+  return diagnosticCapturedAt(right) >= diagnosticCapturedAt(left) ? right : left;
 }
 
 export function resolveLatestCvExportDiagnosticFormat():
   CvExportFormat | null {
-  const pdfAt = storedCvExportDiagnosticCapturedAt('pdf');
-  const docxAt = storedCvExportDiagnosticCapturedAt('docx');
+  const pdfAt = diagnosticCapturedAt(getLatestCvExportDiagnostic('pdf'));
+  const docxAt = diagnosticCapturedAt(getLatestCvExportDiagnostic('docx'));
 
   if (
     pdfAt === Number.NEGATIVE_INFINITY
@@ -345,6 +339,40 @@ export async function copyLatestCvExportDiagnosticsToClipboard():
 
 let latestPdf: CvExportDiagnosticTrace | null = null;
 let latestDocx: CvExportDiagnosticTrace | null = null;
+
+function emitCvExportDiagnosticsChanged(): void {
+  exportDiagnosticsRevision += 1;
+  if (typeof window === 'undefined') return;
+  try {
+    window.dispatchEvent(new CustomEvent(CV_EXPORT_DIAGNOSTICS_CHANGED_EVENT));
+  } catch {
+    /* A persisted/in-memory record remains readable if event delivery is unavailable. */
+  }
+}
+
+/** Revision for useSyncExternalStore consumers; increments after every terminal commit. */
+export function getCvExportDiagnosticsRevision(): number {
+  return exportDiagnosticsRevision;
+}
+
+/** Subscribe to current-window commits and cross-window persisted diagnostic changes. */
+export function subscribeCvExportDiagnosticsChanged(
+  onStoreChange: () => void,
+): () => void {
+  if (typeof window === 'undefined') return () => {};
+  const onCustom = () => onStoreChange();
+  const onStorage = (event: StorageEvent) => {
+    if (event.key === STORAGE_KEY_PDF || event.key === STORAGE_KEY_DOCX) {
+      onStoreChange();
+    }
+  };
+  window.addEventListener(CV_EXPORT_DIAGNOSTICS_CHANGED_EVENT, onCustom);
+  window.addEventListener('storage', onStorage);
+  return () => {
+    window.removeEventListener(CV_EXPORT_DIAGNOSTICS_CHANGED_EVENT, onCustom);
+    window.removeEventListener('storage', onStorage);
+  };
+}
 
 /** Stable one-way fingerprint — never reversible to original text. */
 export function fingerprintText(value: string | undefined | null): string {
@@ -594,19 +622,25 @@ export function resolveNextBuildId(): string | null {
 function persist(trace: CvExportDiagnosticTrace): void {
   if (trace.exportFormat === 'pdf') latestPdf = trace;
   else latestDocx = trace;
-  if (typeof localStorage === 'undefined') return;
-  try {
-    const key = trace.exportFormat === 'pdf' ? STORAGE_KEY_PDF : STORAGE_KEY_DOCX;
-    localStorage.setItem(key, JSON.stringify(trace));
-  } catch {
-    /* quota — keep in-memory only */
+  if (typeof localStorage !== 'undefined') {
+    try {
+      const key = trace.exportFormat === 'pdf' ? STORAGE_KEY_PDF : STORAGE_KEY_DOCX;
+      localStorage.setItem(key, JSON.stringify(trace));
+    } catch {
+      /* quota — keep in-memory only */
+    }
   }
+  // Commit is observable even if persistence is unavailable; latest means the
+  // most recently completed attempt, including terminal failures.
+  emitCvExportDiagnosticsChanged();
 }
 
 export function getLatestCvExportDiagnostic(format?: CvExportFormat): CvExportDiagnosticTrace | null {
-  if (format === 'pdf') return latestPdf || readStored('pdf');
-  if (format === 'docx') return latestDocx || readStored('docx');
-  return latestPdf || latestDocx || readStored('pdf') || readStored('docx');
+  const pdf = newestDiagnostic(latestPdf, readStored('pdf'));
+  const docx = newestDiagnostic(latestDocx, readStored('docx'));
+  if (format === 'pdf') return pdf;
+  if (format === 'docx') return docx;
+  return newestDiagnostic(pdf, docx);
 }
 
 function readStored(format: CvExportFormat): CvExportDiagnosticTrace | null {
@@ -1105,4 +1139,5 @@ export function clearCvExportDiagnosticsForTests(): void {
   } catch {
     /* ignore */
   }
+  emitCvExportDiagnosticsChanged();
 }

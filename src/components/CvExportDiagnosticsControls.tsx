@@ -1,11 +1,13 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import { toast } from 'sonner';
 import {
   copyLatestCvExportDiagnosticsToClipboard,
   copyCvExportDiagnosticsToClipboard,
+  getCvExportDiagnosticsRevision,
   getLatestCvExportDiagnostic,
+  subscribeCvExportDiagnosticsChanged,
   type CvExportFormat,
 } from '@/lib/cv-export-diagnostics';
 import {
@@ -25,15 +27,12 @@ export function CvExportCopyDiagnosticsButton({
   format?: CvExportFormat;
   label?: string;
 }) {
-  const [hasTrace, setHasTrace] = useState(false);
-
-  useEffect(() => {
-    setHasTrace(Boolean(getLatestCvExportDiagnostic(format)));
-    const id = window.setInterval(() => {
-      setHasTrace(Boolean(getLatestCvExportDiagnostic(format)));
-    }, 800);
-    return () => window.clearInterval(id);
-  }, [format]);
+  useSyncExternalStore(
+    subscribeCvExportDiagnosticsChanged,
+    getCvExportDiagnosticsRevision,
+    () => 0,
+  );
+  const hasTrace = Boolean(getLatestCvExportDiagnostic(format));
 
   if (!hasTrace) return null;
 
@@ -99,20 +98,23 @@ export function CvExportDiagnosticsModal({
   open: boolean;
   onClose: () => void;
 }) {
-  const [json, setJson] = useState('');
-  const [panelTick, setPanelTick] = useState(0);
   const [showJson, setShowJson] = useState(false);
   const [EnabledPanel, setEnabledPanel] = useState<null | typeof import('./InternalAiUsageResetPanel').InternalAiUsageResetPanel>(null);
   const [ExpAiPanel, setExpAiPanel] = useState<null | typeof import('./InternalExperienceAiDiagnosticsPanel').InternalExperienceAiDiagnosticsPanel>(null);
   const [SumAiPanel, setSumAiPanel] = useState<null | typeof import('./InternalSummaryAiDiagnosticsPanel').InternalSummaryAiDiagnosticsPanel>(null);
 
+  const diagnosticsRevision = useSyncExternalStore(
+    subscribeCvExportDiagnosticsChanged,
+    getCvExportDiagnosticsRevision,
+    () => 0,
+  );
+  const json = JSON.stringify({
+    pdf: getLatestCvExportDiagnostic('pdf'),
+    docx: getLatestCvExportDiagnostic('docx'),
+  }, null, 2);
+
   useEffect(() => {
-    if (!open) return;
-    const pdf = getLatestCvExportDiagnostic('pdf');
-    const docx = getLatestCvExportDiagnostic('docx');
-    setJson(JSON.stringify({ pdf, docx }, null, 2));
-    setPanelTick((n) => n + 1);
-    setShowJson(!INTERNAL_AI_RESET_ENABLED);
+    if (open) setShowJson(!INTERNAL_AI_RESET_ENABLED);
   }, [open]);
 
   useEffect(() => {
@@ -177,16 +179,16 @@ export function CvExportDiagnosticsModal({
             <div className="mb-4 border-b border-border pb-4">
               <span className="sr-only">{INTERNAL_AI_RESET_BUNDLE_MARKER}</span>
               <span className="sr-only">{INTERNAL_AI_DIAGNOSTICS_REVISION}</span>
-              <EnabledPanel refreshToken={panelTick} />
+              <EnabledPanel refreshToken={diagnosticsRevision} />
             </div>
           ) : null}
 
           {INTERNAL_AI_RESET_ENABLED && ExpAiPanel ? (
-            <ExpAiPanel refreshToken={panelTick} />
+            <ExpAiPanel refreshToken={diagnosticsRevision} />
           ) : null}
 
           {INTERNAL_AI_RESET_ENABLED && SumAiPanel ? (
-            <SumAiPanel refreshToken={panelTick} />
+            <SumAiPanel refreshToken={diagnosticsRevision} />
           ) : null}
 
           <p className="text-xs text-muted-foreground">
