@@ -1161,7 +1161,7 @@ export function CorporateNavyTemplate({ data, locale }: TemplateProps) {
               <div key={exp.id} className="mb-5">
                 <div className="flex justify-between items-baseline">
                   <h3 className="font-bold text-gray-900">{exp.position}</h3>
-                  <span className="text-xs text-gray-400">{exp.startDate} – {exp.isPresent ? L.present : exp.endDate}</span>
+                  <span className="text-xs text-gray-400">{formatExperienceDateRange(exp.startDate, exp.endDate, exp.isPresent, L.present)}</span>
                 </div>
                 <p className="text-blue-700 text-xs font-medium mt-0.5">{exp.company}</p>
                 <p className="mt-2 text-gray-600 whitespace-pre-line">{exp.description}</p>

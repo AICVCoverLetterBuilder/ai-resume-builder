@@ -113,6 +113,18 @@ const expectedRows = [
   ['8da68c15', 'Pixel Studio', 'Grafička dizajnerka', '2026-01 - Trenutno', 3],
 ] as const;
 
+function corporateNavyPreviewDates(html: string): Map<string, string> {
+  const host = document.createElement('div');
+  host.innerHTML = html;
+  const dates = new Map<string, string>();
+  for (const row of host.querySelectorAll('[data-template-id="corporate-navy"] .mb-5')) {
+    const company = row.querySelector('p.text-blue-700')?.textContent?.trim();
+    const date = row.querySelector('span.text-gray-400')?.textContent?.trim();
+    if (company && date !== undefined) dates.set(company, date);
+  }
+  return dates;
+}
+
 describe('AAB491 incoherent canonical snapshot downstream closure', () => {
   beforeEach(() => {
     localStorage.clear();
@@ -127,6 +139,7 @@ describe('AAB491 incoherent canonical snapshot downstream closure', () => {
   afterEach(() => {
     clearCvDraft();
     localStorage.clear();
+    vi.doUnmock('jspdf');
   });
 
   it('repairs only the contradicted stale app-owned known title provenance', () => {
@@ -222,6 +235,18 @@ describe('AAB491 incoherent canonical snapshot downstream closure', () => {
       expect(witness.previewSelectedFinalParityPassed).toBe(true);
       expect(html).not.toContain('RadWerk');
       expect(html).not.toContain('Grafički dizajner');
+      if (templateId === 'corporate-navy') {
+        // Actual Preview leaves must follow the already-correct dedicated PDF
+        // contract for every persisted entry, not merely formatter internals.
+        expect([...corporateNavyPreviewDates(html)]).toEqual([
+          ['Rewitu Current Test', '2026-03 - Trenutno'],
+          ['TestWerk GmbH', '2024-01'],
+          ['Rewitu', '2019-06 - 2022-12'],
+          ['Atlas', '2023-01 - Trenutno'],
+          ['Pixel Studio', '2026-01 - Trenutno'],
+        ]);
+        expect(html).not.toMatch(/2024-01\s*[–\-|]\s*(?:<|$)/u);
+      }
 
       expect(prepared.cv.experience).toHaveLength(5);
       for (const [id, company, title, date, bullets] of expectedRows) {
@@ -273,4 +298,38 @@ describe('AAB491 incoherent canonical snapshot downstream closure', () => {
     },
     120_000,
   );
+
+  it('keeps all five Corporate Navy PDF date leaves identical to the prepared terminal Preview rows', async () => {
+    const persisted = incoherentFiveEntryDraft('corporate-navy');
+    const normalized = normalizeLegacyCvRuntime(persisted, 'sr');
+    const prepared = prepareExportReadyCv(normalized, 'sr', 'corporate-navy', {
+      gender: 'female', referenceDate: '2026-08-19',
+    });
+    expect(prepared.ok, prepared.ok ? '' : `${prepared.reason}:${prepared.stage}`).toBe(true);
+    if (!prepared.ok) return;
+
+    const drawnText: string[] = [];
+    vi.resetModules();
+    vi.doMock('jspdf', () => ({
+      jsPDF: class MockPdf {
+        setFont = vi.fn(); setFontSize = vi.fn(); setTextColor = vi.fn();
+        setFillColor = vi.fn(); setDrawColor = vi.fn(); setLineWidth = vi.fn();
+        rect = vi.fn(); line = vi.fn(); circle = vi.fn(); addPage = vi.fn();
+        addImage = vi.fn(); addFileToVFS = vi.fn(); addFont = vi.fn();
+        text = vi.fn((value: string | string[]) => drawnText.push(...(Array.isArray(value) ? value : [value])));
+        splitTextToSize = vi.fn((value: string) => [value]);
+        getTextWidth = vi.fn((value: string) => value.length * 1.8);
+        output = vi.fn(() => new Blob(['%PDF-1.7'], { type: 'application/pdf' }));
+      },
+    }));
+    const { buildCorporateNavyPagedPdfBlob } = await import('@/lib/corporate-navy-pdf-renderer');
+    const blob = await buildCorporateNavyPagedPdfBlob(prepared.cv, 'sr', { alreadyPrepared: true });
+    expect(blob.size).toBeGreaterThan(0);
+
+    for (const [, company, , date] of expectedRows) {
+      expect(drawnText, `${company} PDF date`).toContain(date);
+    }
+    expect(drawnText).not.toContain('2024-01 -');
+    expect(drawnText).not.toContain('2024-01 –');
+  });
 });

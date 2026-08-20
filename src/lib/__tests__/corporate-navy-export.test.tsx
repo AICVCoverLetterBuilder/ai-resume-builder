@@ -566,6 +566,42 @@ describe('Corporate Navy export', () => {
     expect(calls.filter((c) => c.text === '-').length).toBe(1);
   });
 
+  test('dedicated Corporate Navy PDF preserves start-only, completed, and current Experience date semantics', async () => {
+    const { instances } = installDirectPdfMocks();
+    const mod = await import('@/lib/export');
+    await mod.buildCorporateNavyPagedPdfBlob(cv({
+      personal: {
+        fullName: 'Date Contract',
+        email: 'dragan@example.com',
+        phone: '+381 60 123 456',
+        address: 'Brace Abafi 4',
+        jobTitle: 'Education Lead',
+        photoEnabled: false,
+      },
+      summary: '', education: [], skills: [], languages: [],
+      experience: [
+        {
+          id: 'start-only', company: 'Start Only', position: 'Role',
+          startDate: '2024-01', endDate: '', isPresent: false, description: '',
+        },
+        {
+          id: 'completed', company: 'Completed', position: 'Role',
+          startDate: '2019-06', endDate: '2022-12', isPresent: false, description: '',
+        },
+        {
+          id: 'current', company: 'Current', position: 'Role',
+          startDate: '2023-01', endDate: '', isPresent: true, description: '',
+        },
+      ],
+    }), 'en');
+
+    const drawn = instances[0]?.drawnText ?? [];
+    expect(drawn).toContain('2024-01');
+    expect(drawn).not.toContain('2024-01 -');
+    expect(drawn).toContain('2019-06 - 2022-12');
+    expect(drawn).toContain('2023-01 - Present');
+  });
+
   test('long QA Tester bullet does not render "- and API layers" on continuation line', async () => {
     const { instances } = installDirectPdfMocks();
     const mod = await import('@/lib/export');
