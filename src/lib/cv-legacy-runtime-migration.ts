@@ -10,6 +10,7 @@ import {
   buildExperienceSnapshotFromText,
   computeCanonicalSourceHash,
   detectContentLocale,
+  inspectCanonicalSnapshotCoherence,
   type CanonicalCvSnapshot,
 } from './cv-canonical-snapshot';
 import {
@@ -270,6 +271,11 @@ export type LegacyCvMigrationTrace = {
   legacyCanonicalSnapshotStructuralUpgradeSkipReason: LegacyCanonicalSnapshotUpgradeSkipReason | null;
   canonicalSnapshotStateBefore: CanonicalSnapshotStatePresence;
   canonicalSnapshotStateAfter: CanonicalSnapshotStatePresence;
+  canonicalSnapshotStructurallyPopulated: boolean;
+  canonicalSnapshotStructurallyVerified: boolean | null;
+  canonicalSnapshotSemanticallyCoherent: boolean | null;
+  canonicalSnapshotSemanticFailureReasons: string[];
+  canonicalSnapshotCoherenceRebuildAttempted: boolean;
   contentLocaleBefore?: string;
   contentLocaleAfter?: string;
   summaryOriginBefore?: string;
@@ -303,7 +309,25 @@ export function normalizeLegacyCvRuntimeWithTrace(
       canonicalStateSource: 'legacy_state_inferred' as const,
     }
     : persistedCanonicalSnapshot;
+  const canonicalCoherence = inspectCanonicalSnapshotCoherence(input, canonicalSnapshot);
+  // A valid state label and a self-consistent hash are not proof that the
+  // Summary still belongs to these entry-bound facts.  Only app-owned Summary
+  // authority is eligible for automatic rebuild; user-authored text remains
+  // explicitly preserved and is evaluated at the normal final boundary.
+  const canonicalSnapshotCoherenceRejected = Boolean(
+    canonicalSnapshot?.canonicalState === 'valid'
+    && input.summaryOrigin !== 'user'
+    && canonicalCoherence.structurallyValid
+    && !canonicalCoherence.semanticallyCoherent
+    && canonicalCoherence.summaryForeignEmployerAnchorDetected,
+  );
+  // Do not rewrite the persisted snapshot merely to record the verdict: the
+  // existing export-only Experience projection may still need its immutable
+  // source facts. The final Summary authority resolver consumes this explicit
+  // coherence verdict and excludes only the stale app-owned Summary surface.
+  const coherenceAdjustedCanonicalSnapshot = canonicalSnapshot;
   const canonicalSnapshotWasUpgraded = canonicalSnapshot !== persistedCanonicalSnapshot;
+  const canonicalSnapshotWasAdjusted = canonicalSnapshotWasUpgraded;
   const structuralRepair = canonicalSnapshotWasUpgraded
     ? {
       revision: 1 as const,
@@ -341,7 +365,7 @@ export function normalizeLegacyCvRuntimeWithTrace(
       legacyCanonicalSnapshotStructuralUpgradeResult: structuralInspection.upgradeResult,
       legacyCanonicalSnapshotStructuralUpgradeSkipReason: structuralInspection.skipReason,
       canonicalSnapshotStateBefore: structuralInspection.canonicalStateBefore,
-      canonicalSnapshotStateAfter: canonicalStatePresence(canonicalSnapshot),
+      canonicalSnapshotStateAfter: canonicalStatePresence(coherenceAdjustedCanonicalSnapshot),
     };
   const canRecoverMissingGrounding = (input.experience || []).some((exp) => {
     if ((exp.originalUserDescription || '').trim()) return false;
@@ -355,7 +379,7 @@ export function normalizeLegacyCvRuntimeWithTrace(
   if (fromVersion >= CV_RUNTIME_MIGRATION_VERSION && !canRecoverMissingGrounding) {
     // Idempotent safety: even after a prior migration, never leave an invalid region
     // that crashes Corporate Navy PDF/DOCX on regionSettings[region].showAddress.
-    if (normalizedRegion === input.region && !canonicalSnapshotWasUpgraded) {
+    if (normalizedRegion === input.region && !canonicalSnapshotWasAdjusted) {
       return {
         cv: input,
         trace: {
@@ -363,6 +387,15 @@ export function normalizeLegacyCvRuntimeWithTrace(
           fromVersion,
           toVersion: fromVersion,
           ...traceStructuralFields,
+          canonicalSnapshotStructurallyPopulated: canonicalCoherence.structurallyPopulated,
+          canonicalSnapshotStructurallyVerified: canonicalSnapshot
+            ? canonicalCoherence.structurallyValid
+            : null,
+          canonicalSnapshotSemanticallyCoherent: canonicalSnapshot
+            ? canonicalCoherence.semanticallyCoherent
+            : null,
+          canonicalSnapshotSemanticFailureReasons: canonicalCoherence.failureReasons,
+          canonicalSnapshotCoherenceRebuildAttempted: canonicalSnapshotCoherenceRejected,
           contentLocaleBefore: input.contentLocale,
           contentLocaleAfter: input.contentLocale,
           summaryOriginBefore: input.summaryOrigin,
@@ -378,7 +411,7 @@ export function normalizeLegacyCvRuntimeWithTrace(
       cv: {
         ...input,
         region: normalizedRegion,
-        ...(canonicalSnapshotWasUpgraded ? { canonicalSnapshot } : {}),
+        ...(canonicalSnapshotWasAdjusted ? { canonicalSnapshot: coherenceAdjustedCanonicalSnapshot } : {}),
         ...(canonicalSnapshotWasUpgraded ? { runtimeMigrationRepair: structuralRepair } : {}),
       },
       trace: {
@@ -386,6 +419,15 @@ export function normalizeLegacyCvRuntimeWithTrace(
         fromVersion,
         toVersion: fromVersion,
         ...traceStructuralFields,
+        canonicalSnapshotStructurallyPopulated: canonicalCoherence.structurallyPopulated,
+        canonicalSnapshotStructurallyVerified: canonicalSnapshot
+          ? canonicalCoherence.structurallyValid
+          : null,
+        canonicalSnapshotSemanticallyCoherent: canonicalSnapshot
+          ? canonicalCoherence.semanticallyCoherent
+          : null,
+        canonicalSnapshotSemanticFailureReasons: canonicalCoherence.failureReasons,
+        canonicalSnapshotCoherenceRebuildAttempted: canonicalSnapshotCoherenceRejected,
         contentLocaleBefore: input.contentLocale,
         contentLocaleAfter: input.contentLocale,
         summaryOriginBefore: input.summaryOrigin,
@@ -479,7 +521,9 @@ export function normalizeLegacyCvRuntimeWithTrace(
     ...(summaryGeneratedLocale ? { summaryGeneratedLocale } : {}),
     summaryOrigin,
     canonicalSummary,
-    ...(canonicalSnapshot !== persistedCanonicalSnapshot ? { canonicalSnapshot } : {}),
+    ...(coherenceAdjustedCanonicalSnapshot !== persistedCanonicalSnapshot
+      ? { canonicalSnapshot: coherenceAdjustedCanonicalSnapshot }
+      : {}),
     ...(canonicalSnapshotWasUpgraded ? { runtimeMigrationRepair: structuralRepair } : {}),
     runtimeMigrationVersion: CV_RUNTIME_MIGRATION_VERSION,
   };
@@ -487,7 +531,7 @@ export function normalizeLegacyCvRuntimeWithTrace(
   const hasAuthoritativeDuties = experience.some((exp) => Boolean((exp.canonicalDescription || '').trim()));
   const authoritativeSourceText = experience.map((exp) => exp.canonicalDescription || '').join('\n');
   const detectedAuthoritativeLocale = detectContentLocale(authoritativeSourceText);
-  const canonicalSnapshotState = canonicalSnapshot?.canonicalState as CanonicalCvSnapshot['canonicalState'] | undefined;
+  const canonicalSnapshotState = coherenceAdjustedCanonicalSnapshot?.canonicalState as CanonicalCvSnapshot['canonicalState'] | undefined;
   const hasTrustedExistingLocale = canonicalSnapshotState === 'valid';
   const summaryCanSupportRecovery = validateSummaryCompleteness(input.summary || '', {
     locale: contentLocale || localeHint || 'en',
@@ -498,7 +542,7 @@ export function normalizeLegacyCvRuntimeWithTrace(
     || staleLocale
     || !canonicalSnapshot
     || canonicalSnapshotState !== 'valid'
-  ) && (
+  ) && !canonicalSnapshotCoherenceRejected && (
     canonicalSnapshotState !== 'needs_rebuild'
     || summaryCanSupportRecovery
   ) && (Boolean(detectedAuthoritativeLocale) || hasTrustedExistingLocale)) {
@@ -548,6 +592,15 @@ export function normalizeLegacyCvRuntimeWithTrace(
       fromVersion,
       toVersion: CV_RUNTIME_MIGRATION_VERSION,
       ...traceStructuralFields,
+      canonicalSnapshotStructurallyPopulated: canonicalCoherence.structurallyPopulated,
+      canonicalSnapshotStructurallyVerified: canonicalSnapshot
+        ? canonicalCoherence.structurallyValid
+        : null,
+      canonicalSnapshotSemanticallyCoherent: canonicalSnapshot
+        ? canonicalCoherence.semanticallyCoherent
+        : null,
+      canonicalSnapshotSemanticFailureReasons: canonicalCoherence.failureReasons,
+      canonicalSnapshotCoherenceRebuildAttempted: canonicalSnapshotCoherenceRejected,
       contentLocaleBefore: input.contentLocale,
       contentLocaleAfter: next.contentLocale,
       summaryOriginBefore: input.summaryOrigin,

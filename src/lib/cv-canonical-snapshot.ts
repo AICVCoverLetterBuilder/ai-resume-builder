@@ -31,6 +31,9 @@ import { refreshProvenanceAfterMaterialUserEdit } from './cv-experience-ai-outpu
 import type { CvExperienceDescriptionOrigin } from './types';
 import { buildExperienceJobContext } from './cv-experience-job-context';
 import { hashExperienceSourceLocaleText } from './cv-experience-source-locale';
+import { captureSummaryV2Snapshot } from './cv-summary-v2/snapshot';
+import { buildSummaryV2SelectionManifest } from './cv-summary-v2/manifest';
+import { analyzeSummaryV2FinalUnitOwnership } from './cv-summary-v2/unit-ownership';
 
 export type CanonicalCreatedFrom =
   | 'user_structured_input'
@@ -71,6 +74,30 @@ export type CanonicalCvSnapshot = {
   canonicalState: CanonicalState;
   /** Privacy-safe provenance for a structurally valid pre-state migration. */
   canonicalStateSource?: 'persisted' | 'legacy_state_inferred';
+};
+
+/**
+ * A snapshot hash binds the serialized snapshot as a whole, but cannot prove
+ * that a historically persisted Summary and Experience set describe the same
+ * CV when both were written together.  Keep that semantic check separate from
+ * structural/hash integrity so callers can fail closed or rebuild app-owned
+ * state without reclassifying user-authored text.
+ */
+export type CanonicalSnapshotCoherence = {
+  structurallyPopulated: boolean;
+  structurallyValid: boolean;
+  canonicalSourceHashMatches: boolean;
+  canonicalSummaryLocale: Locale | null;
+  canonicalLocaleCoherent: boolean;
+  summaryEntryOwnershipAssessed: boolean;
+  summaryEntryOwnershipPassed: boolean;
+  summaryForeignEmployerAnchorDetected: boolean;
+  semanticallyCoherent: boolean;
+  failureReasons: Array<
+    | 'canonical_source_hash_mismatch'
+    | 'canonical_summary_locale_mismatch'
+    | 'canonical_summary_entry_ownership_mismatch'
+  >;
 };
 
 export type LocalizedProjectionBullet = {
@@ -154,6 +181,151 @@ export function computeCanonicalSourceHash(parts: {
     education: parts.education || [],
     languages: parts.languages || [],
   }));
+}
+
+/**
+ * Validate the relationship between a persisted canonical Summary and the
+ * exact canonical Experience facts it names.  This deliberately does not
+ * compare the source canonical locale to an export target: cross-locale
+ * projection remains valid.  It only rejects a snapshot whose own claimed
+ * locale or selected role/employer/fact ownership is internally inconsistent.
+ */
+export function inspectCanonicalSnapshotCoherence(
+  cv: CVData,
+  snapshot: CanonicalCvSnapshot | undefined,
+): CanonicalSnapshotCoherence {
+  // Persisted drafts predate the canonical-snapshot type contract. Treat a
+  // malformed legacy field as an unpopulated snapshot, never as a reason for
+  // export preparation itself to throw.
+  const canonicalSummary = typeof snapshot?.canonicalSummary === 'string'
+    ? snapshot.canonicalSummary
+    : '';
+  const canonicalExperiences = snapshot?.canonicalExperiences || [];
+  const structurallyPopulated = Boolean(
+    snapshot
+    && canonicalSummary.trim()
+    && canonicalExperiences.length > 0,
+  );
+  if (!snapshot || !structurallyPopulated) {
+    return {
+      structurallyPopulated,
+      structurallyValid: false,
+      canonicalSourceHashMatches: false,
+      canonicalSummaryLocale: null,
+      canonicalLocaleCoherent: false,
+      summaryEntryOwnershipAssessed: false,
+      summaryEntryOwnershipPassed: false,
+      summaryForeignEmployerAnchorDetected: false,
+      semanticallyCoherent: false,
+      failureReasons: ['canonical_summary_entry_ownership_mismatch'],
+    };
+  }
+
+  const canonicalSourceHashMatches = computeCanonicalSourceHash({
+    canonicalLocale: snapshot.canonicalLocale,
+    canonicalSummary,
+    canonicalExperiences,
+    skills: cv.skills || [],
+    education: (cv.education || []).map((entry) => ({
+      degree: entry.degree,
+      school: entry.school,
+      description: entry.description,
+    })),
+    languages: cv.languages || [],
+  }) === snapshot.canonicalSourceHash;
+  const liveIds = new Set((cv.experience || []).map((entry) => entry.id));
+  const ids = canonicalExperiences.map((entry) => entry.experienceId);
+  const bindingsValid = ids.length === liveIds.size
+    && ids.length > 0
+    && ids.every(Boolean)
+    && new Set(ids).size === ids.length
+    && ids.every((id) => liveIds.has(id));
+  const structurallyValid = canonicalSourceHashMatches && bindingsValid;
+  const canonicalSummaryLocale = detectContentLocale(canonicalSummary);
+  const canonicalLocaleCoherent = !canonicalSummaryLocale
+    || canonicalSummaryLocale === snapshot.canonicalLocale;
+
+  // A canonical Summary can legitimately be localized while its immutable
+  // fact snapshot remains in one or more source locales. In that case exact
+  // role-title surfaces are not comparable until the ordinary target
+  // presentation projector runs, so leave direct ownership as N/A rather
+  // than falsely rejecting a valid cross-locale canonical source.
+  const directRoleOwnershipAssessable = canonicalExperiences.every((entry) => (
+    !entry.sourceLocale || entry.sourceLocale === snapshot.canonicalLocale
+  ));
+  const canonicalCv: CVData = {
+    ...cv,
+    contentLocale: snapshot.canonicalLocale,
+    summary: canonicalSummary,
+    canonicalSummary,
+    experience: canonicalExperiences.map((entry) => ({
+      id: entry.experienceId,
+      company: entry.company,
+      position: entry.role,
+      startDate: entry.startDate || '',
+      endDate: entry.endDate || '',
+      isPresent: Boolean(entry.current),
+      description: entry.bullets.map((bullet) => bullet.sourceText).join('\n'),
+      descriptionOrigin: 'user' as const,
+      descriptionSourceLocale: entry.sourceLocale,
+    })),
+  };
+  const snapshotForOwnership = captureSummaryV2Snapshot({
+    cv: canonicalCv,
+    locale: snapshot.canonicalLocale,
+    gender: cv.personal?.gender || '',
+    referenceDateIso: cv.updatedAt || cv.createdAt || '2000-01-01T00:00:00.000Z',
+  });
+  const manifest = buildSummaryV2SelectionManifest(snapshotForOwnership);
+  const ownership = directRoleOwnershipAssessable
+    ? analyzeSummaryV2FinalUnitOwnership(canonicalSummary, manifest)
+    : null;
+  // Employer identity is not translated by the presentation layer. Unlike a
+  // role title, it remains a cross-locale relational anchor, so it is safe to
+  // require each selected canonical entry's employer whenever one exists.
+  const selectedEntries = [manifest.current, ...manifest.priors].filter(
+    (entry): entry is NonNullable<typeof entry> => Boolean(entry),
+  );
+  const normalizedSummary = canonicalSummary.normalize('NFKC').toLocaleLowerCase();
+  const employerOwnershipAssessed = selectedEntries.some((entry) => Boolean(entry.employer.trim()));
+  const employerOwnershipPassed = selectedEntries.every((entry) => (
+    !entry.employer.trim()
+    || normalizedSummary.includes(entry.employer.normalize('NFKC').toLocaleLowerCase())
+  ));
+  const summaryEntryOwnershipAssessed = directRoleOwnershipAssessable || employerOwnershipAssessed;
+  const summaryEntryOwnershipPassed = employerOwnershipPassed && (ownership?.passed ?? true);
+  const knownEmployers = new Set(selectedEntries.map((entry) => (
+    entry.employer.normalize('NFKC').replace(/[^\p{L}\p{N}]+/gu, '').toLocaleLowerCase()
+  )).filter(Boolean));
+  // Strong stale-context evidence: an explicit employer-like name after a
+  // common role-affiliation marker that belongs to none of the bound entries.
+  // A vague wrong-locale Summary remains fail-closed; only a positively
+  // unrelated app-owned context is eligible for deterministic rebuilding.
+  const summaryForeignEmployerAnchorDetected = Array.from(
+    canonicalSummary.matchAll(/\b(?:at|bei|im|in|u|kod|presso|chez|en)\s+([\p{Lu}][\p{L}\p{N}&.-]*)/giu),
+  ).some((match) => {
+    const candidate = (match[1] || '').normalize('NFKC')
+      .replace(/[^\p{L}\p{N}]+/gu, '').toLocaleLowerCase();
+    return Boolean(candidate) && !knownEmployers.has(candidate);
+  });
+  const failureReasons: CanonicalSnapshotCoherence['failureReasons'] = [];
+  if (!canonicalSourceHashMatches) failureReasons.push('canonical_source_hash_mismatch');
+  if (!canonicalLocaleCoherent) failureReasons.push('canonical_summary_locale_mismatch');
+  if (!summaryEntryOwnershipPassed) {
+    failureReasons.push('canonical_summary_entry_ownership_mismatch');
+  }
+  return {
+    structurallyPopulated,
+    structurallyValid,
+    canonicalSourceHashMatches,
+    canonicalSummaryLocale,
+    canonicalLocaleCoherent,
+    summaryEntryOwnershipAssessed,
+    summaryEntryOwnershipPassed,
+    summaryForeignEmployerAnchorDetected,
+    semanticallyCoherent: structurallyValid && canonicalLocaleCoherent && summaryEntryOwnershipPassed,
+    failureReasons,
+  };
 }
 
 export function buildProjectionId(projection: Omit<ValidatedLocalizedCvProjection, 'projectionId'>): string {

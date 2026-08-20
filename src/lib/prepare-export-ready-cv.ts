@@ -380,6 +380,11 @@ export type ExportReadyDiagnostics = {
   legacyCanonicalSnapshotStructuralUpgradeSkipReason?: LegacyCanonicalSnapshotUpgradeSkipReason | null;
   canonicalSnapshotStateBefore?: CanonicalSnapshotStatePresence;
   canonicalSnapshotStateAfter?: CanonicalSnapshotStatePresence;
+  canonicalSnapshotStructurallyPopulated?: boolean;
+  canonicalSnapshotStructurallyVerified?: boolean | null;
+  canonicalSnapshotSemanticallyCoherent?: boolean | null;
+  canonicalSnapshotSemanticFailureReasons?: string[];
+  canonicalSnapshotCoherenceRebuildAttempted?: boolean;
   experienceCount: number;
   recoveryInvoked: boolean;
   experienceProvenance: Array<{
@@ -431,9 +436,13 @@ export type ExportReadyDiagnostics = {
   summaryAuthorityDecisionBranch?:
     | 'app_owned_canonical_v2_authority'
     | 'app_owned_canonical_v2_candidate_rejected'
+    | 'app_owned_canonical_snapshot_rebuilt'
     | 'manual_saved_summary'
     | 'app_owned_saved_summary';
-  summaryCanonicalCandidateRejectedReason?: 'canonical_v2_wrong_locale' | null;
+  summaryCanonicalCandidateRejectedReason?:
+    | 'canonical_v2_wrong_locale'
+    | 'canonical_snapshot_semantically_incoherent'
+    | null;
   summaryStaleMetadataDetected?: boolean;
   summaryVisibleTextAuthorityRebound?: boolean;
   summaryVisibleTextAuthorityReason?: string;
@@ -610,6 +619,10 @@ export function applyAppOwnedSummaryPreviewTerminalSnapshot(
     summary: prepared.cv.summary,
     summaryOrigin: prepared.cv.summaryOrigin,
     summaryGeneratedLocale: prepared.cv.summaryGeneratedLocale,
+    // Preview must consume the same terminal Experience presentation as the
+    // export renderers.  Replacing only Summary would reintroduce a stale raw
+    // title after the export preparer had safely localized its known title.
+    experience: prepared.cv.experience,
   };
 }
 
@@ -1105,6 +1118,16 @@ export function prepareExportReadyCv(
       runtimeMigration.trace.legacyCanonicalSnapshotStructuralUpgradeSkipReason,
     canonicalSnapshotStateBefore: runtimeMigration.trace.canonicalSnapshotStateBefore,
     canonicalSnapshotStateAfter: runtimeMigration.trace.canonicalSnapshotStateAfter,
+    canonicalSnapshotStructurallyPopulated:
+      runtimeMigration.trace.canonicalSnapshotStructurallyPopulated,
+    canonicalSnapshotStructurallyVerified:
+      runtimeMigration.trace.canonicalSnapshotStructurallyVerified,
+    canonicalSnapshotSemanticallyCoherent:
+      runtimeMigration.trace.canonicalSnapshotSemanticallyCoherent,
+    canonicalSnapshotSemanticFailureReasons:
+      runtimeMigration.trace.canonicalSnapshotSemanticFailureReasons,
+    canonicalSnapshotCoherenceRebuildAttempted:
+      runtimeMigration.trace.canonicalSnapshotCoherenceRebuildAttempted,
   };
 
   const baseDiagnostics = (): ExportReadyDiagnostics => ({
@@ -1487,6 +1510,15 @@ export function prepareExportReadyCv(
   const topLevelCanonicalSummary = (cv.canonicalSummary || '').trim();
   const canonicalSnapshotSummary = (cv.canonicalSnapshot?.canonicalSummary || '').trim();
   const canonicalSnapshotIsValid = cv.canonicalSnapshot?.canonicalState === 'valid';
+  const canonicalSnapshotSemanticallyRejected = Boolean(
+    cv.summaryOrigin !== 'user'
+    && runtimeMigration.trace.canonicalSnapshotStructurallyVerified === true
+    && runtimeMigration.trace.canonicalSnapshotSemanticallyCoherent === false
+    && runtimeMigration.trace.canonicalSnapshotCoherenceRebuildAttempted === true,
+  );
+  const canonicalSummarySourceLocale = canonicalSnapshotSemanticallyRejected
+    ? undefined
+    : cv.canonicalSnapshot?.canonicalLocale;
   const resolvedCanonicalSummarySource: NonNullable<ExportReadyDiagnostics['resolvedCanonicalSummarySource']> =
     topLevelCanonicalSummary
       ? 'top_level'
@@ -1503,8 +1535,13 @@ export function prepareExportReadyCv(
         : !canonicalSnapshotSummary
           ? 'canonical_snapshot_summary_missing'
           : null;
-  const savedCanonicalSummary = topLevelCanonicalSummary
-    || (canonicalSnapshotIsValid ? canonicalSnapshotSummary : '');
+  // Preserve rejected canonical prose as diagnostics evidence, but never let
+  // an app-owned snapshot whose Summary belongs to different entry facts become
+  // a selected candidate. The deterministic V2 manifest below is rebuilt from
+  // the current authoritative Experience state instead.
+  const savedCanonicalSummary = canonicalSnapshotSemanticallyRejected
+    ? ''
+    : (topLevelCanonicalSummary || (canonicalSnapshotIsValid ? canonicalSnapshotSummary : ''));
   const savedSummaryText = (cv.summary || '').trim();
   const savedSummaryDiffersFromCanonical = Boolean(
     cv.summaryOrigin !== 'user'
@@ -1550,6 +1587,8 @@ export function prepareExportReadyCv(
     && !canonicalHasOccupationalConflict,
   );
   const appOwnedSummaryRequiresV2Authority = Boolean(
+    canonicalSnapshotSemanticallyRejected
+    ||
     (savedAppOwnedV2Validation
       && savedAppOwnedV2Validation.relationalOwnershipFailureReasons.length > 0)
     || appOwnedSummaryHasStaleCanonicalSurface,
@@ -1594,7 +1633,9 @@ export function prepareExportReadyCv(
       : null;
     diagnostics.resolvedCanonicalSummarySource = resolvedCanonicalSummarySource;
     diagnostics.resolvedCanonicalSummaryRejectionReason = resolvedCanonicalSummaryRejectionReason;
-    diagnostics.summaryAuthorityDecisionBranch = staleAppOwnedWrongLocaleCanonicalCandidate
+    diagnostics.summaryAuthorityDecisionBranch = canonicalSnapshotSemanticallyRejected
+      ? 'app_owned_canonical_snapshot_rebuilt'
+      : staleAppOwnedWrongLocaleCanonicalCandidate
       ? 'app_owned_canonical_v2_candidate_rejected'
       : appOwnedSummaryRequiresV2Authority
       ? 'app_owned_canonical_v2_authority'
@@ -1602,7 +1643,9 @@ export function prepareExportReadyCv(
         ? 'manual_saved_summary'
         : 'app_owned_saved_summary';
     diagnostics.summaryCanonicalCandidateRejectedReason =
-      staleAppOwnedWrongLocaleCanonicalCandidate
+      canonicalSnapshotSemanticallyRejected
+        ? 'canonical_snapshot_semantically_incoherent'
+        : staleAppOwnedWrongLocaleCanonicalCandidate
         ? 'canonical_v2_wrong_locale'
         : null;
     diagnostics.summaryValidationAuthoritySource = summaryValidationAuthoritySource;
@@ -1768,7 +1811,7 @@ export function prepareExportReadyCv(
     requestedLocale,
     gender,
     savedCanonicalSummary,
-    cv.canonicalSnapshot?.canonicalLocale,
+    canonicalSummarySourceLocale,
     cv,
     durationSnapshot.total,
   );
@@ -1799,6 +1842,15 @@ export function prepareExportReadyCv(
   });
   const effectiveSummaryStale = summaryStale && !summaryCurrentTextAuthority.rebound;
   let initialSummaryValidation = visibleSummaryValidation;
+  if (canonicalSnapshotSemanticallyRejected) {
+    initialSummaryValidation = {
+      valid: false,
+      reason: 'canonical_snapshot_semantically_incoherent',
+      violations: runtimeMigration.trace.canonicalSnapshotSemanticFailureReasons.length > 0
+        ? runtimeMigration.trace.canonicalSnapshotSemanticFailureReasons
+        : ['canonical_summary_entry_ownership_mismatch'],
+    };
+  }
   if (effectiveSummaryStale) {
     staleSummaryExcluded = true;
     initialSummaryValidation = {
@@ -1871,7 +1923,7 @@ export function prepareExportReadyCv(
           requestedLocale,
           gender,
           savedCanonicalSummary,
-          cv.canonicalSnapshot?.canonicalLocale,
+          canonicalSummarySourceLocale,
           cv,
           durationSnapshot.total,
         ).valid,
@@ -1974,7 +2026,7 @@ export function prepareExportReadyCv(
       requestedLocale,
       gender,
       savedCanonicalSummary,
-      cv.canonicalSnapshot?.canonicalLocale,
+      canonicalSummarySourceLocale,
       cv,
       durationSnapshot.total,
     );

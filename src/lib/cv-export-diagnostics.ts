@@ -150,6 +150,11 @@ export type CvExportDiagnosticTrace = {
   legacyCanonicalSnapshotStructuralUpgradeSkipReason?: string | null;
   canonicalSnapshotStateBefore?: string;
   canonicalSnapshotStateAfter?: string;
+  canonicalSnapshotStructurallyPopulated?: boolean;
+  canonicalSnapshotStructurallyVerified?: boolean | null;
+  canonicalSnapshotSemanticallyCoherent?: boolean | null;
+  canonicalSnapshotSemanticFailureReasons?: string[];
+  canonicalSnapshotCoherenceRebuildAttempted?: boolean;
   /** True when every applicable migration-authority field is serialized. */
   migrationDiagnosticsApplicable?: boolean;
   migrationDiagnosticsComplete?: boolean;
@@ -904,6 +909,11 @@ export function buildAndStoreCvExportDiagnostic(input: BuildCvExportTraceInput):
     ['legacyCanonicalSnapshotStructuralUpgradeSkipReason', diag?.legacyCanonicalSnapshotStructuralUpgradeSkipReason],
     ['canonicalSnapshotStateBefore', diag?.canonicalSnapshotStateBefore],
     ['canonicalSnapshotStateAfter', diag?.canonicalSnapshotStateAfter],
+    ['canonicalSnapshotStructurallyPopulated', diag?.canonicalSnapshotStructurallyPopulated],
+    ['canonicalSnapshotStructurallyVerified', diag?.canonicalSnapshotStructurallyVerified],
+    ['canonicalSnapshotSemanticallyCoherent', diag?.canonicalSnapshotSemanticallyCoherent],
+    ['canonicalSnapshotSemanticFailureReasons', diag?.canonicalSnapshotSemanticFailureReasons],
+    ['canonicalSnapshotCoherenceRebuildAttempted', diag?.canonicalSnapshotCoherenceRebuildAttempted],
     ['resolvedCanonicalSummarySource', diag?.resolvedCanonicalSummarySource],
     ['resolvedCanonicalSummaryHash', diag?.resolvedCanonicalSummaryHash],
     ['summaryAuthorityDecisionBranch', diag?.summaryAuthorityDecisionBranch],
@@ -943,6 +953,12 @@ export function buildAndStoreCvExportDiagnostic(input: BuildCvExportTraceInput):
       diag?.legacyCanonicalSnapshotStructuralUpgradeSkipReason,
     canonicalSnapshotStateBefore: diag?.canonicalSnapshotStateBefore,
     canonicalSnapshotStateAfter: diag?.canonicalSnapshotStateAfter,
+    canonicalSnapshotStructurallyPopulated: diag?.canonicalSnapshotStructurallyPopulated,
+    canonicalSnapshotStructurallyVerified: diag?.canonicalSnapshotStructurallyVerified,
+    canonicalSnapshotSemanticallyCoherent: diag?.canonicalSnapshotSemanticallyCoherent,
+    canonicalSnapshotSemanticFailureReasons: diag?.canonicalSnapshotSemanticFailureReasons,
+    canonicalSnapshotCoherenceRebuildAttempted:
+      diag?.canonicalSnapshotCoherenceRebuildAttempted,
     migrationDiagnosticsApplicable,
     migrationDiagnosticsComplete,
     diagnosticCompletenessPassed: migrationDiagnosticsComplete,

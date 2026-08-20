@@ -3,7 +3,7 @@
  * Display localization must never mutate the canonical stored title.
  * Conflict handling is category-based (not Kuvar/logistics-hardcoded).
  */
-import type { Locale } from './i18n/translations';
+import { languages, resolveLocaleCandidate, type Locale } from './i18n/translations';
 import { normalizeCoverLetterGender } from './cover-letter-gender';
 
 const PLACEHOLDER_TITLE = /^(n\/a|na|tbd|test|xxx|position|role|job|title|none|unknown)$/i;
@@ -523,6 +523,48 @@ export function matchesGraphicDesignerOccupationalTitle(text: string): boolean {
   return false;
 }
 
+function sameExperienceTitleSurface(left: string, right: string): boolean {
+  return left.normalize('NFKC').trim().localeCompare(
+    right.normalize('NFKC').trim(),
+    undefined,
+    { sensitivity: 'accent' },
+  ) === 0;
+}
+
+/**
+ * Old app-owned localized titles could be persisted as manual while retaining
+ * a foreign source-locale declaration. Reclaim only a known title that
+ * contradicts its declared source locale; free text and a genuine manual
+ * title remain exact user authority.
+ */
+function hasStaleAppOwnedGraphicDesignerProvenance(
+  exp: {
+    positionSourceLocale?: string;
+    descriptionOrigin?: string;
+  },
+  raw: string,
+): boolean {
+  const sourceLocale = resolveLocaleCandidate(exp.positionSourceLocale);
+  const appOwnedDescription = exp.descriptionOrigin === 'ai_generated'
+    || exp.descriptionOrigin === 'ai_repaired'
+    || exp.descriptionOrigin === 'deterministic_fallback';
+  if (!sourceLocale || !appOwnedDescription || !matchesGraphicDesignerOccupationalTitle(raw)) {
+    return false;
+  }
+  const matchesKnownSurface = (candidateLocale: Locale) =>
+    ['female', 'male', undefined].some((gender) =>
+      sameExperienceTitleSurface(raw, localizeGraphicDesigner(candidateLocale, gender)),
+    );
+
+  // A manual title that agrees with its declared source locale is genuine
+  // user authority. A known title that instead matches another locale is the
+  // stale app-owned localization contradiction and may be reprojected.
+  return !matchesKnownSurface(sourceLocale)
+    && languages.some((language) => (
+      language.code !== sourceLocale && matchesKnownSurface(language.code)
+    ));
+}
+
 /**
  * Authoritative Experience title for preview / PDF / DOCX.
  * Preserves explicit manual free-text; re-projects app-localized known occupations.
@@ -534,6 +576,7 @@ export function resolveExperienceTitleForDisplay(
     positionProvenance?: string;
     positionUserEdited?: boolean;
     positionSourceLocale?: string;
+    descriptionOrigin?: string;
   },
   locale: Locale,
   gender?: string,
@@ -546,7 +589,10 @@ export function resolveExperienceTitleForDisplay(
   const userEdited = Boolean(exp.positionUserEdited);
 
   // Explicit user text wins — including intentional foreign-script titles.
-  if (userEdited || provenance === 'manual') {
+  // A known Graphic Designer surface contradicting its declared source locale
+  // is the legacy stale app-owned contradiction.
+  if ((userEdited || provenance === 'manual')
+    && !hasStaleAppOwnedGraphicDesignerProvenance(exp, raw)) {
     return raw;
   }
 
