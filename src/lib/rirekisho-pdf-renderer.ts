@@ -19,6 +19,8 @@ import {
   type PdfI18nRegistry,
 } from './pdf-i18n-text';
 import { type CVData } from './types';
+import { formatRirekishoDateRange } from './rirekisho-date-format';
+import { projectRirekishoGenderDisplay } from './rirekisho-gender-display';
 import {
   buildCvExportRenderProjection,
   collectCvStructuredTextTokens,
@@ -183,11 +185,6 @@ function wrap(
 
 export function rkMeasureWrappedLines(ctx: RirekishoDirectPdfContext, text: string, maxW: number): string[] {
   return wrap(ctx, text, maxW);
-}
-
-function dateRange(start?: string, end?: string, present?: boolean): string {
-  if (!start && !end && !present) return '';
-  return `${start ?? ''}${start ? '〜' : ''}${present ? L.present : end ?? ''}`;
 }
 
 export function rkSplitIntoCleanBullets(
@@ -396,7 +393,7 @@ export function rkDrawPersonalInfoTable(
         { t: L.dob, label: true },
         { t: ctx.cv.personal.dateOfBirth || '' },
         { t: L.gender, label: true },
-        { t: ctx.cv.personal.gender || '' },
+        { t: projectRirekishoGenderDisplay(ctx.cv.personal.gender) },
       ],
     },
     {
@@ -500,7 +497,9 @@ function rkDrawCompactEducationSection(ctx: RirekishoDirectPdfContext): void {
     let detail = rkNormalizePdfText([edu.school, edu.degree].filter(Boolean).join('\u3000'), ctx.locale);
     if (edu.description) detail = `${detail}\n${rkNormalizePdfText(edu.description, ctx.locale)}`;
     const dLines = detail.split('\n').flatMap((p) => wrap(ctx, p, dw - PAD_H * 2, ds));
-    const pLines = wrap(ctx, dateRange(edu.startDate, edu.endDate), pw - PAD_H * 2, ps);
+    const period = formatRirekishoDateRange(edu.startDate, edu.endDate, false);
+    const periodCtx = period.includes('〜') ? { ...ctx, locale: 'ja' as Locale } : ctx;
+    const pLines = wrap(periodCtx, period, pw - PAD_H * 2, ps);
     const rh = Math.max(
       PAD_V * 2 + dLines.length * ds.lineH,
       PAD_V * 2 + pLines.length * ps.lineH,
@@ -511,8 +510,8 @@ function rkDrawCompactEducationSection(ctx: RirekishoDirectPdfContext): void {
     border(ctx, ctx.contentX + pw, y, dw, rh);
     let cy = y + PAD_V + ps.size * 0.32;
     for (const ln of pLines) {
-      applyStyle(ctx, ps, ln);
-      drawText(ctx, ln, ctx.contentX + PAD_H, cy, ps);
+      applyStyle(periodCtx, ps, ln);
+      drawText(periodCtx, ln, ctx.contentX + PAD_H, cy, ps);
       cy += ps.lineH;
     }
     cy = y + PAD_V + ds.size * 0.32;
@@ -532,7 +531,9 @@ function buildBulletUnits(ctx: RirekishoDirectPdfContext, raw: string, maxW: num
     ctx.locale,
     collectCvStructuredTextTokens(ctx.cv),
   ).map((b) => ({
-    lines: wrap(ctx, `\u30fb${b}`, maxW),
+    // The Japanese marker must not make the localized duty select a Japanese
+    // font: that direct-PDF mixed run drops Serbian extended-Latin glyphs.
+    lines: wrap(ctx, b, Math.max(4, maxW - 4)),
   }));
 }
 
@@ -580,7 +581,11 @@ function rkDrawWorkLeadBlock(
   const ps: Style = { size: 8, color: C_MUTED, lineH: LINE };
   const cs: Style = { size: 8.6, color: C_TEXT, bold: true, lineH: LINE };
   const rs: Style = { size: 8.3, color: C_LABEL, lineH: LINE };
-  const periodLines = wrap(ctx, dateRange(entry.startDate, entry.endDate, entry.isPresent), pw - PAD_H * 2, ps);
+  const period = formatRirekishoDateRange(entry.startDate, entry.endDate, entry.isPresent);
+  // U+301C is Japanese punctuation, not an ideograph. Completed/current
+  // Rirekisho date ranges must therefore explicitly select the Japanese font.
+  const periodCtx = period.includes('〜') ? { ...ctx, locale: 'ja' as Locale } : ctx;
+  const periodLines = wrap(periodCtx, period, pw - PAD_H * 2, ps);
   const companyLines = entry.company ? wrap(ctx, entry.company, dw - PAD_H * 2, cs) : [];
   const roleLines = entry.position ? wrap(ctx, entry.position, dw - PAD_H * 2, rs) : [];
   const detailH = PAD_V * 2 + (companyLines.length + roleLines.length) * LINE;
@@ -594,8 +599,8 @@ function rkDrawWorkLeadBlock(
 
   let cy = y + PAD_V + ps.size * 0.32;
   for (const ln of periodLines) {
-    applyStyle(ctx, ps, ln);
-    drawText(ctx, ln, ctx.contentX + PAD_H, cy, ps);
+    applyStyle(periodCtx, ps, ln);
+    drawText(periodCtx, ln, ctx.contentX + PAD_H, cy, ps);
     cy += ps.lineH;
   }
 
@@ -657,11 +662,15 @@ function rkDrawAtomicWrappedBullet(
     const take = Math.min(remaining, linesFit);
     const chunk = unit.lines.slice(lineIdx, lineIdx + take);
     for (const ln of chunk) {
+      if (lineIdx === 0) {
+        applyStyle(ctx, style, '\u30fb');
+        drawText(ctx, '\u30fb', x, ctx.y + style.size * 0.32, style);
+      }
       applyStyle(ctx, style, ln);
-      drawText(ctx, ln, x, ctx.y + style.size * 0.32, style);
+      drawText(ctx, ln, x + 4, ctx.y + style.size * 0.32, style);
       ctx.y += style.lineH;
+      lineIdx += 1;
     }
-    lineIdx += take;
 
     if (lineIdx < unit.lines.length) {
       rkAddPage(ctx);

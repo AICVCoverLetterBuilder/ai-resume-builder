@@ -5,6 +5,8 @@ import type { CVData } from '@/lib/types';
 import { getRegionSettings } from '@/lib/cv-region';
 import { translations, type Locale } from '@/lib/i18n/translations';
 import { ELEGANT_FORMAL_PHOTO_HEIGHT, ELEGANT_FORMAL_PHOTO_WIDTH } from '@/lib/elegant-formal-photo';
+import { formatRirekishoDateRange } from '@/lib/rirekisho-date-format';
+import { projectRirekishoGenderDisplay } from '@/lib/rirekisho-gender-display';
 
 
 interface TemplateProps {
@@ -1219,7 +1221,7 @@ export function CorporateNavyTemplate({ data, locale }: TemplateProps) {
 // --- Rirekisho: Standard Japanese CV format ---
 export function RirekishoTemplate({ data }: TemplateProps) {
   const showPhoto = data.personal.photoEnabled !== undefined ? data.personal.photoEnabled : true;
-  const gender = data.personal.gender;
+  const gender = projectRirekishoGenderDisplay(data.personal.gender);
   const dob = data.personal.dateOfBirth;
   const coverLetter = (data as CVData & { coverLetterContent?: string }).coverLetterContent;
 
@@ -1352,7 +1354,7 @@ export function RirekishoTemplate({ data }: TemplateProps) {
               {data.experience.map((exp) => (
                 <tr key={exp.id}>
                   <td className="border border-gray-300 px-2 py-1.5 text-gray-600 whitespace-nowrap">
-                    {exp.startDate}{exp.startDate ? '〜' : ''}{exp.isPresent ? '現在' : exp.endDate}
+                    {formatRirekishoDateRange(exp.startDate, exp.endDate, exp.isPresent)}
                   </td>
                   <td className="border border-gray-300 px-2 py-1.5">
                     <p className="font-medium">{exp.company}</p>
