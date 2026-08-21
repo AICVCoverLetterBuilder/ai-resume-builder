@@ -144,6 +144,7 @@ export {
   parseSummaryV2LocalizationProviderJson,
   acceptSummaryV2LocalizationResponse,
   buildSameLocaleLocalizedManifest,
+  projectSummaryV2AuthoritativeRoleTitle,
   projectLocalizedSummaryV2Manifest,
   buildSummaryV2ProviderExperienceEntries,
   classifySummaryV2EntrySurfaceAuthority,

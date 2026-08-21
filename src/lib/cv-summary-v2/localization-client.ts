@@ -4,6 +4,7 @@ import {
   buildSummaryV2EntrySurfaceTransportPlan,
   buildSameLocaleLocalizedManifest,
   classifySummaryV2EntrySurfaceAuthority,
+  projectSummaryV2AuthoritativeRoleTitle,
   SUMMARY_V2_LOCALIZED_MANIFEST_REVISION,
   type SummaryV2LocalizedEntry,
   type SummaryV2LocalizedManifest,
@@ -300,9 +301,10 @@ function mergeAuthoritativeEntrySurfaces(options: {
       entries: [{
         entryId: options.entry.entryId,
         localizedRoleTitle: options.plan.role.authority === 'target_native_authoritative'
-          ? (options.entry.presentationRoleTrusted && options.entry.presentationRole
-            ? options.entry.presentationRole
-            : options.entry.role)
+          ? projectSummaryV2AuthoritativeRoleTitle({
+            manifest: options.manifest,
+            entry: options.entry,
+          })
           : options.cached.role?.localizedText || String(providerEntry?.localizedRoleTitle || ''),
         facts: mergedFacts,
       }],

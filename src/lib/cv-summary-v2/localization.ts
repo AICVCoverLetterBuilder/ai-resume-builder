@@ -10,6 +10,10 @@ import { analyzeSpanishCoordinatedPredicateMorphology } from './native-surface';
 import { dutyTokenStems, hashSummaryV2Text } from './facts';
 import { detectDominantLocale, localesAreDetectionCompatible } from './locale-authority';
 import { validateLocalizedSummaryRoleTitleGender } from '@/lib/cv-summary-structured-role-localization';
+import {
+  localizeGraphicDesigner,
+  matchesGraphicDesignerOccupationalTitle,
+} from '@/lib/cv-role-title';
 import type { SummaryV2EntryOwned, SummaryV2SelectionManifest } from './types';
 
 export const SUMMARY_V2_LOCALIZED_MANIFEST_REVISION =
@@ -22,6 +26,25 @@ export type SummaryV2LocalizationSource =
   | 'validated_cache'
   | 'summary_provider_recovery'
   | 'mixed_authoritative';
+
+/**
+ * A title can be target-native yet still need deterministic occupational
+ * morphology for the selected profile.  This is display projection only: the
+ * immutable source title remains on the entry and user-authored titles win.
+ */
+export function projectSummaryV2AuthoritativeRoleTitle(options: {
+  manifest: SummaryV2SelectionManifest;
+  entry: SummaryV2EntryOwned;
+}): string {
+  const { manifest, entry } = options;
+  if (entry.rolePresentationIsUserAuthoritative) return entry.role;
+  if (manifest.locale === 'sr' && matchesGraphicDesignerOccupationalTitle(entry.role)) {
+    return localizeGraphicDesigner('sr', manifest.gender);
+  }
+  return entry.presentationRoleTrusted && entry.presentationRole
+    ? entry.presentationRole
+    : entry.role;
+}
 
 export type SummaryV2LocalizedFact = {
   factId: string;
@@ -759,9 +782,7 @@ export function buildSameLocaleLocalizedManifest(
     targetLocale: manifest.locale,
     entries: entries.map((entry) => ({
       entryId: entry.entryId,
-      localizedRoleTitle: entry.presentationRoleTrusted && entry.presentationRole
-        ? entry.presentationRole
-        : entry.role,
+      localizedRoleTitle: projectSummaryV2AuthoritativeRoleTitle({ manifest, entry }),
       facts: entry.facts.slice(0, 3).map((fact) => ({
         factId: fact.factId,
         localizedText: fact.presentationTrusted && fact.presentationText

@@ -1768,6 +1768,10 @@ export type FinalizeCvAiFieldResult = {
       targetLocaleNativeSurfacePassed: boolean;
       localizedTitleHash: string;
       sourceRoleTitleHash: string;
+      genderValidationPassed?: boolean;
+      genderValidationApplicable?: boolean;
+      genderValidationReason?: string | null;
+      expectedRoleTitleHash?: string | null;
       provenance: string;
     }>;
     roleTitleGenderValidationPassed?: boolean | null;

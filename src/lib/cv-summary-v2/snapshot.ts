@@ -168,6 +168,9 @@ export function captureSummaryV2Snapshot(options: {
       sourceRoleTitleHash: hashSummaryV2Text((exp.position || '').trim()),
       roleSourceLocale: roleLocale.sourceLocale,
       roleSourceLocaleResolvedFrom: roleLocale.resolvedFrom,
+      rolePresentationIsUserAuthoritative: Boolean(
+        exp.positionUserEdited || exp.positionProvenance === 'manual',
+      ),
       sourceLocale: entryLocale,
       descriptionHash: hashSummaryV2Text(live),
       facts,

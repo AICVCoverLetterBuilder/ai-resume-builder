@@ -160,6 +160,9 @@ export type SummaryV2EntryOwned = {
   presentationRoleLocale?: Locale;
   presentationRoleTrusted?: boolean;
   presentationSource?: 'validated_unedited_ai_output';
+  /** A user-authored role surface is presentation-authoritative and never
+   * replaced by deterministic occupation morphology. */
+  rolePresentationIsUserAuthoritative?: boolean;
   /** Authoritative locale of this entry's visible source material. */
   sourceLocale: Locale;
   /** Hash of live description used at snapshot time. */

@@ -56,6 +56,7 @@ export function buildSummaryV2SelectionManifest(
         e.endDate,
         e.employmentState,
         e.sourceLocale,
+        e.rolePresentationIsUserAuthoritative ? 'user_role_surface' : 'derived_role_surface',
         e.descriptionHash,
         ...e.facts.map((f) => `${f.sourceLocale}:${f.sourceFactHash}`),
       ].join('|')),

@@ -21,6 +21,7 @@ import {
   classifySummaryV2EntrySurfaceAuthority,
 } from './localization';
 import { validateLocalizedSummaryRoleTitleGender } from '@/lib/cv-summary-structured-role-localization';
+import { matchesGraphicDesignerOccupationalTitle } from '@/lib/cv-role-title';
 import { auditSummaryV2MaterialClaims } from './material-claims';
 import { analyzeSummaryV2FinalUnitOwnership } from './unit-ownership';
 import { fingerprintText } from '../cv-export-diagnostics';
@@ -395,6 +396,11 @@ export function validateSummaryV2AgainstManifest(
           && entry.roleTitleLocalizationSource !== 'same_locale_authoritative'
           && entry.sourceRoleTitle
           && entry.sourceRoleTitle !== entry.role,
+        )
+        || (
+          manifest.locale === 'sr'
+          && !entry.rolePresentationIsUserAuthoritative
+          && matchesGraphicDesignerOccupationalTitle(entry.sourceRoleTitle || entry.role)
         ),
     });
     const surface = inspectSummaryV2TranslatableSurface({
