@@ -56,6 +56,12 @@ export type SummaryV2PipelineDiagnostics = {
   candidateTransformationAfterHash: string | null;
   styleFulfillment: SummaryV2StyleFulfillment | null;
   styleNoSafeMaterialChange: boolean;
+  /** A persisted Summary still rendered a deterministic, non-manual role in
+   * the wrong app-owned presentation surface. Such content is never a no-op. */
+  appOwnedKnownRolePresentationViolation: boolean;
+  /** The selected deterministic candidate repaired that presentation before
+   * style/no-op classification could terminate the operation. */
+  appOwnedKnownRolePresentationRepairApplied: boolean;
   crossLocaleLocalizationRequired: boolean;
   localizationAttempted: boolean;
   localizationRepairAttempted: boolean;
@@ -127,6 +133,30 @@ function deterministicManifestRoleMetadata(manifest: SummaryV2SelectionManifest)
 }
 
 /**
+ * A rewrite may be a true style no-op only after app-owned role presentation is
+ * already correct.  This deliberately ignores manual role surfaces and does
+ * not inspect duties, employers, or user-authored free text.
+ */
+function hasAppOwnedKnownRolePresentationViolation(
+  sourceSummary: string,
+  manifest: SummaryV2SelectionManifest,
+): boolean {
+  const source = (sourceSummary || '').replace(/\s+/g, ' ').trim();
+  if (!source) return false;
+  const entries = [...(manifest.current ? [manifest.current] : []), ...manifest.priors];
+  return entries.some((entry) => {
+    if (entry.rolePresentationIsUserAuthoritative) return false;
+    const sourceRole = (entry.sourceRoleTitle || entry.role || '').trim();
+    const expectedRole = (entry.role || '').trim();
+    if (!sourceRole || !expectedRole || sourceRole.localeCompare(expectedRole, undefined, {
+      sensitivity: 'accent',
+    }) === 0) return false;
+    return new RegExp(`(?:^|[^\\p{L}])${escapeRegExp(sourceRole)}(?=$|[^\\p{L}])`, 'iu')
+      .test(source);
+  });
+}
+
+/**
  * Repair duty tense to match each manifest entry's employmentState.
  * Does not invent facts — only swaps present↔past clause forms already owned
  * by the selection manifest.
@@ -179,6 +209,8 @@ function emptyPipelineDiag(
     candidateTransformationAfterHash: null,
     styleFulfillment: null,
     styleNoSafeMaterialChange: false,
+    appOwnedKnownRolePresentationViolation: false,
+    appOwnedKnownRolePresentationRepairApplied: false,
     crossLocaleLocalizationRequired: false,
     localizationAttempted: false,
     localizationRepairAttempted: false,
@@ -280,6 +312,11 @@ export function runSummaryV2(options: RunSummaryV2Options): SummaryV2PipelineRes
       pipelineDiagnostics: diag,
     };
   }
+  const appOwnedKnownRolePresentationViolation = hasAppOwnedKnownRolePresentationViolation(
+    sourceSummary,
+    manifest,
+  );
+  diag.appOwnedKnownRolePresentationViolation = appOwnedKnownRolePresentationViolation;
   void SUMMARY_V2_LOCALIZED_MANIFEST_REVISION;
   const deterministicRoleMetadata = deterministicManifestRoleMetadata(manifest);
   diag.deterministicCandidateRoleSlots = deterministicRoleMetadata.roleSlots;
@@ -354,7 +391,11 @@ export function runSummaryV2(options: RunSummaryV2Options): SummaryV2PipelineRes
           frenchStructuredStronger
           && hashNorm(sourceSummary) !== hashNorm(frenchStructuredStronger.text),
         );
-        if (saturated.noSafeMaterialChange && !frenchCanonicalDiffers) {
+        if (
+          saturated.noSafeMaterialChange
+          && !frenchCanonicalDiffers
+          && !appOwnedKnownRolePresentationViolation
+        ) {
           const validation = validateSummaryV2AgainstManifest(sourceSummary, manifest, {
             candidateSource: 'final_selected',
           });
@@ -480,7 +521,7 @@ export function runSummaryV2(options: RunSummaryV2Options): SummaryV2PipelineRes
       diag.candidateTransformationBeforeHash = transformed.beforeHash;
       diag.candidateTransformationAfterHash = transformed.afterHash;
       diag.styleNoSafeMaterialChange = transformed.noSafeMaterialChange;
-      if (transformed.noSafeMaterialChange) {
+      if (transformed.noSafeMaterialChange && !appOwnedKnownRolePresentationViolation) {
         const validation = validateSummaryV2AgainstManifest(sourceSummary, manifest, {
           candidateSource: 'final_selected',
         });
@@ -504,7 +545,10 @@ export function runSummaryV2(options: RunSummaryV2Options): SummaryV2PipelineRes
           },
         };
       }
-      const styledQ = validateSummaryV2AgainstManifest(transformed.text, manifest, {
+      const selectedDeterministicCandidate = transformed.noSafeMaterialChange
+        ? buildSummaryV2StyledDeterministicText(manifest, style)
+        : transformed.text;
+      const styledQ = validateSummaryV2AgainstManifest(selectedDeterministicCandidate, manifest, {
         candidateSource: 'deterministic',
         // Rewrite styles are built from this immutable manifest.  Preserve its
         // duration/current/prior construction order instead of attempting to
@@ -512,11 +556,20 @@ export function runSummaryV2(options: RunSummaryV2Options): SummaryV2PipelineRes
         preserveConstructionOrder: true,
         trustedConstructionAuthority: true,
       });
-      const styleFulfilled = transformed.styleFulfilled || styleOk(transformed.text);
-      if (styledQ.ok && styleFulfilled) {
-        text = transformed.text;
+      const styleFulfilled = !transformed.noSafeMaterialChange
+        && (transformed.styleFulfilled || styleOk(selectedDeterministicCandidate));
+      const applyingKnownRolePresentationRepair = Boolean(
+        transformed.noSafeMaterialChange && appOwnedKnownRolePresentationViolation,
+      );
+      if (styledQ.ok && (styleFulfilled || applyingKnownRolePresentationRepair)) {
+        text = selectedDeterministicCandidate;
         origin = 'deterministic_fallback';
         deterministicConstructionOrder = true;
+        if (applyingKnownRolePresentationRepair) {
+          diag.appOwnedKnownRolePresentationRepairApplied = true;
+          diag.candidateTransformationKind = 'v2_known_role_presentation_repair';
+          diag.candidateTransformationAfterHash = hashNorm(text);
+        }
         diag.styleFulfillment = evaluateSummaryV2StyleFulfillment({
           style,
           sourceText: sourceSummary,
@@ -736,7 +789,11 @@ export function runSummaryV2(options: RunSummaryV2Options): SummaryV2PipelineRes
 
   if (style) {
     const sf = diag.styleFulfillment;
-    if (!sf.styleValidationPassed && sourceSummary) {
+    if (
+      !sf.styleValidationPassed
+      && sourceSummary
+      && !diag.appOwnedKnownRolePresentationRepairApplied
+    ) {
       return {
         blocked: true,
         reason: sf.styleRejectionReasons[0] || 'style_not_fulfilled',

@@ -3356,6 +3356,9 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       : null;
     const v2OperationMode = resolveAiOperationMode({ targetContent: liveSummary });
     const v2EnhanceExisting = v2OperationMode === 'enhance_existing_content';
+    const v2KnownRolePresentationRepairApplied = Boolean(
+      v2Pd?.appOwnedKnownRolePresentationRepairApplied,
+    );
     // Style-fulfilled rewrites are material even when the legacy semantic Jaccard
     // gate would classify them as paraphrase no-ops (soft wording / framing).
     const styleMaterialSuccess = Boolean(
@@ -3375,14 +3378,20 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       && hashSummaryCandidate(normalizeSummaryCandidateText(v2Text))
         !== hashSummaryCandidate(normalizeSummaryCandidateText(liveSummary)),
     );
-    const meaningfulEffective = (styleMaterialSuccess || balancedEnhanceMaterialSuccess)
+    const meaningfulEffective = (
+      styleMaterialSuccess
+      || balancedEnhanceMaterialSuccess
+      || v2KnownRolePresentationRepairApplied
+    )
       ? {
         ...meaningful,
         finalMatchesSourceAfterNormalization: false,
         meaningfulChangeDetected: true,
         meaningfulChangeReason: styleMaterialSuccess
           ? `rewrite_style_${requestedRewriteStyle}`
-          : 'v2_balanced_enhance',
+          : (v2KnownRolePresentationRepairApplied
+            ? 'app_owned_known_role_presentation_repair'
+            : 'v2_balanced_enhance'),
         noOpDetected: false,
         noOpRejectionReason: null as string | null,
       }
@@ -3698,7 +3707,11 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       professionalStyleFulfilled: Boolean(v2Pd?.styleFulfillment?.professionalStyleFulfilled),
       styleValidationPassed: requestedRewriteStyle
         ? Boolean(
-          (!v2EnhanceExisting || v2Pd?.styleFulfillment?.styleValidationPassed)
+          (
+            !v2EnhanceExisting
+            || v2Pd?.styleFulfillment?.styleValidationPassed
+            || v2KnownRolePresentationRepairApplied
+          )
           && success
           && !v2CleanNoOp,
         )
@@ -4123,7 +4136,10 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     }
     const styleOkForSuccess = !requestedRewriteStyle
       || !v2EnhanceExisting
-      || Boolean(v2Pd?.styleFulfillment?.styleValidationPassed);
+      || Boolean(
+        v2Pd?.styleFulfillment?.styleValidationPassed
+        || v2KnownRolePresentationRepairApplied,
+      );
     return {
       blocked: false,
       text: v2.text,
@@ -4134,7 +4150,13 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         ...diagBase,
         styleValidationPassed: !requestedRewriteStyle
           || !v2EnhanceExisting
-          || Boolean(v2Pd?.styleFulfillment?.styleValidationPassed && !v2CleanNoOp),
+          || Boolean(
+            (
+              v2Pd?.styleFulfillment?.styleValidationPassed
+              || v2KnownRolePresentationRepairApplied
+            )
+            && !v2CleanNoOp,
+          ),
       } as unknown as FinalizeCvAiFieldResult['diagnostics'],
     };
   }

@@ -304,6 +304,8 @@ export type SummaryV2PipelineResult = {
     candidateTransformationKind: string | null;
     candidateTransformationBeforeHash: string | null;
     candidateTransformationAfterHash: string | null;
+    appOwnedKnownRolePresentationViolation?: boolean;
+    appOwnedKnownRolePresentationRepairApplied?: boolean;
     crossLocaleLocalizationRequired: boolean;
     localizationAttempted: boolean;
     localizationRepairAttempted: boolean;

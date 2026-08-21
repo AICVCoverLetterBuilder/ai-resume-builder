@@ -3,6 +3,7 @@ import type { CVData, WorkExperience } from '@/lib/types';
 import {
   buildSameLocaleLocalizedManifest,
   buildSummaryV2ManifestForCv,
+  buildSummaryV2StyledDeterministicText,
   clearSummaryV2LocalizationCacheForTests,
   localizeSummaryV2Manifest,
   projectLocalizedSummaryV2Manifest,
@@ -216,4 +217,85 @@ describe('AAB495 Serbian Summary female-role same-locale regression', () => {
     expect(enhanced.text).toContain('Nova Firma SR Test');
     expect(enhanced.text).not.toContain('Rewitu Current Test');
   });
+
+  it('repairs a known female role before Stronger may classify a rejected provider path as a no-op', () => {
+    const cv = deviceCv();
+    const selection = buildSummaryV2ManifestForCv({
+      cv, locale: 'sr', gender: 'female', referenceDateIso: REF,
+    });
+    const localized = buildSameLocaleLocalizedManifest(selection)!;
+    const projected = projectLocalizedSummaryV2Manifest({ manifest: selection, localized })!;
+    const correctStronger = buildSummaryV2StyledDeterministicText(projected, 'stronger');
+    const legacyIncorrect = correctStronger.replaceAll(ROLE_FEMALE, ROLE_MALE);
+    const persisted = { ...cv, summary: legacyIncorrect } as CVData;
+
+    expect(legacyIncorrect).toContain(ROLE_MALE);
+    expect(legacyIncorrect).not.toContain(ROLE_FEMALE);
+
+    const pipeline = runSummaryV2({
+      cv: persisted, locale: 'sr', gender: 'female', candidate: legacyIncorrect,
+      referenceDateIso: REF, localizedManifest: localized, rewriteStyle: 'stronger',
+    });
+    expect(pipeline.pipelineDiagnostics?.appOwnedKnownRolePresentationViolation).toBe(true);
+    expect(pipeline.blocked).toBe(false);
+
+    const finalized = finalizeCvAiFieldForApply({
+      field: 'summary',
+      action: 'summary_stronger',
+      requestedLocale: 'sr',
+      gender: 'female',
+      cv: persisted,
+      // The rejected provider candidate is the same persisted legacy surface.
+      candidate: legacyIncorrect,
+      referenceDateIso: REF,
+      durationSnapshot: buildExperienceDurationSnapshot(persisted.experience || [], REF),
+      localizedSummaryManifest: localized,
+      rewriteStyle: 'stronger',
+    });
+
+    expect(finalized.blocked).toBe(false);
+    expect(finalized.countedAsSuccess).toBe(true);
+    expect(finalized.origin).toBe('deterministic_fallback');
+    expect(finalized.diagnostics?.providerAccepted).toBe(false);
+    expect(finalized.diagnostics?.noOpDetected).toBe(false);
+    expect(finalized.diagnostics?.meaningfulChangeDetected).toBe(true);
+    expect(finalized.text).toContain(ROLE_FEMALE);
+    expect(finalized.text).not.toContain(ROLE_MALE);
+
+    const applied = applyFinalizedSummaryToCv(persisted, 'sr', finalized);
+    expect(applied.summary).toBe(finalized.text);
+    expect(applied.summary).toContain(ROLE_FEMALE);
+  });
+
+  it.each(['stronger', 'professional', 'shorter'] as const)(
+    'keeps a true no-op for an already-correct saturated %s Summary',
+    (rewriteStyle) => {
+      const cv = deviceCv();
+      const selection = buildSummaryV2ManifestForCv({
+        cv, locale: 'sr', gender: 'female', referenceDateIso: REF,
+      });
+      const localized = buildSameLocaleLocalizedManifest(selection)!;
+      const projected = projectLocalizedSummaryV2Manifest({ manifest: selection, localized })!;
+      const correct = buildSummaryV2StyledDeterministicText(projected, rewriteStyle);
+      const persisted = { ...cv, summary: correct } as CVData;
+      const action = rewriteStyle === 'stronger'
+        ? 'summary_stronger'
+        : rewriteStyle === 'professional'
+          ? 'summary_professional'
+          : 'summary_shorter';
+
+      const finalized = finalizeCvAiFieldForApply({
+        field: 'summary', action, requestedLocale: 'sr', gender: 'female', cv: persisted,
+        candidate: correct, referenceDateIso: REF,
+        durationSnapshot: buildExperienceDurationSnapshot(persisted.experience || [], REF),
+        localizedSummaryManifest: localized, rewriteStyle,
+      });
+
+      expect(finalized.blocked).toBe(true);
+      expect(finalized.countedAsSuccess).toBe(false);
+      expect(finalized.reason).toBe('style_no_safe_material_change');
+      expect(finalized.text).toBe(correct);
+      expect(finalized.diagnostics?.noOpDetected).toBe(true);
+    },
+  );
 });
