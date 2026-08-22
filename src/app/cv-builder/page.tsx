@@ -86,6 +86,13 @@ import {
   isCvSimpleV1Enabled,
   materializeSimpleV1ContentLocale,
 } from '@/lib/cv-simple-v1';
+import {
+  hashSimpleSummaryText,
+  runSimpleSummaryOperation,
+  storeSimpleSummaryDiagnostic,
+  type SimpleSummaryOperation,
+  type SimpleSummaryStyle,
+} from '@/lib/cv-summary-simple-v1';
 import type { CVData, WorkExperience, Education, Region, TemplateId } from '@/lib/types';
 import { templateInfo, recommendTemplate } from '@/lib/types';
 import {
@@ -1460,7 +1467,116 @@ export default function CVBuilderPage() {
     return aiGate.status === 'ready' ? aiGate.token : null;
   };
 
+  const handleSimpleSummaryOperation = async (
+    operation: SimpleSummaryOperation,
+    style?: SimpleSummaryStyle,
+  ) => {
+    if (isSummaryGenerating || rewritingStyle) return;
+    const liveCvAtPress = cvRef.current;
+    if (operation === 'rewrite' && !String(liveCvAtPress.summary || '').trim()) {
+      // Simple V1 deliberately has no hidden rewrite-to-generate fallback.
+      toast.error(aiErrorMessage('summary_rewrite_failed', locale));
+      return;
+    }
+    const proToken = getCurrentProTokenOrToast(() => setSummaryAiModal(true));
+    if (!proToken) return;
+
+    if (operation === 'generate') setIsSummaryGenerating(true);
+    else setRewritingStyle(style || 'professional');
+    const controller = new AbortController();
+    const timer = setTimeout(
+      () => controller.abort(),
+      resolveClientAbortTimeoutMs(AI_CLIENT_TIMEOUT_MS),
+    );
+    try {
+      const result = await runSimpleSummaryOperation({
+        operation,
+        ...(style ? { style } : {}),
+        cv: liveCvAtPress,
+        uiLocale: locale,
+        transport: async (request) => {
+          const { data, response } = await apiFetch<{
+            result?: unknown;
+            error?: string;
+            code?: string;
+            providerResultKind?: string;
+          }>('/api/generate', {
+            body: {
+              action: 'summary-simple-v1',
+              proToken,
+              ...request,
+            },
+            signal: controller.signal,
+          });
+          if (!response.ok || data.error) {
+            return {
+              ok: false,
+              resultKind: data.providerResultKind || 'provider_failure',
+              httpStatus: response.status,
+              errorCode: data.code,
+            };
+          }
+          return {
+            ok: true,
+            candidate: data.result,
+            httpStatus: response.status,
+          };
+        },
+        getCurrentCv: () => cvRef.current,
+        applyCv: (nextCv) => {
+          if (!persistCurrentCvTransactionally(nextCv)) return false;
+          cvRef.current = nextCv;
+          setCv(nextCv);
+          return hashSimpleSummaryText(cvRef.current.summary || '')
+            === hashSimpleSummaryText(nextCv.summary || '');
+        },
+        getUsageCount: getProAiUsageCount,
+        incrementUsage: recordProAiSuccess,
+        recordDiagnostic: storeSimpleSummaryDiagnostic,
+      });
+
+      if (result.outcome === 'applied') {
+        if (operation === 'generate') toast.success(t.cv.genSuccess);
+        else toast.success(`${t.cv.rewriteSuccess} (${t.cv[style === 'shorter' ? 'short' : style === 'stronger' ? 'strong' : 'professional']})`);
+        return;
+      }
+      if (result.outcome === 'no_op') {
+        toast.error(aiErrorMessage('ai_noop', locale));
+        return;
+      }
+      if (result.outcome === 'stale') {
+        toast.error(aiErrorMessage('ai_request_stale', locale));
+        return;
+      }
+      const providerCode = result.errorCode === 'request_timeout'
+        ? 'request_timeout'
+        : result.errorCode === 'provider_rate_limited'
+          ? 'provider_rate_limited'
+          : result.errorCode === 'provider_credit_exhausted'
+            ? 'provider_credit_exhausted'
+            : result.errorCode === 'provider_auth_error'
+              ? 'provider_auth_error'
+              : result.errorCode === 'server_rate_limited'
+                ? 'server_rate_limited'
+                : null;
+      toast.error(aiErrorMessage(
+        providerCode || (operation === 'generate' ? 'summary_generation_failed' : 'summary_rewrite_failed'),
+        locale,
+      ));
+    } catch {
+      toast.error(aiErrorMessage('provider_temporarily_unavailable', locale));
+    } finally {
+      clearTimeout(timer);
+      if (operation === 'generate') setIsSummaryGenerating(false);
+      else setRewritingStyle(null);
+    }
+  };
+
   const handleGenSummary = async () => {
+    if (simpleCvV1Enabled) {
+      await handleSimpleSummaryOperation('generate');
+      return;
+    }
     const proToken = getCurrentProTokenOrToast(() => setSummaryAiModal(true));
     if (!proToken) return;
     if (isSummaryGenerating) return;
@@ -3474,6 +3590,10 @@ export default function CVBuilderPage() {
   };
 
   const handleRewrite = async (style: 'shorter' | 'stronger' | 'professional') => {
+    if (simpleCvV1Enabled) {
+      await handleSimpleSummaryOperation('rewrite', style);
+      return;
+    }
     if (rewritingStyle) return;
     const liveCvAtPress = cvRef.current;
     const liveSummaryAtPress = (liveCvAtPress.summary || '').trim();
