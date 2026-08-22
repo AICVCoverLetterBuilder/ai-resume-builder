@@ -8,6 +8,9 @@ export const CV_SIMPLE_V1_RENDER_MODEL_REVISION =
 
 export type CvRenderFormat = 'preview' | 'pdf' | 'docx';
 
+export const CV_SIMPLE_V1_EXPORT_DIAGNOSTIC_REVISION =
+  'cv-simple-v1-export-diagnostic-m3-v1' as const;
+
 export type CvRenderModel = Pick<
   CVData,
   | 'id'
@@ -32,6 +35,39 @@ export interface CvRenderSnapshot {
   readonly renderModelHash: string;
   readonly summaryHash: string;
   readonly experienceHash: string;
+}
+
+export interface CvRenderTargetDescriptor<Format extends CvRenderFormat = CvRenderFormat> {
+  readonly simpleV1: true;
+  readonly format: Format;
+  readonly templateId: CVData['templateId'];
+  readonly contentLocale: Locale;
+  readonly renderModelHash: string;
+  readonly summaryHash: string;
+  readonly experienceHash: string;
+}
+
+export type CvExportRenderTargetDescriptor = CvRenderTargetDescriptor<'pdf' | 'docx'>;
+
+export interface CvSimpleV1ExportLifecycle {
+  rendererReached: boolean;
+  rendererStarted: boolean;
+  rendererSucceeded: boolean;
+  blobProduced: boolean;
+  blobSucceeded: boolean;
+  saveReached: boolean;
+  saveSucceeded: boolean;
+  failureReason?: string;
+}
+
+export interface CvSimpleV1ExportDiagnostic extends CvExportRenderTargetDescriptor,
+  CvSimpleV1ExportLifecycle {
+  readonly schemaVersion: 1;
+  readonly revision: typeof CV_SIMPLE_V1_EXPORT_DIAGNOSTIC_REVISION;
+  readonly capturedAt: string;
+  readonly ok: boolean;
+  readonly sourceCommitShort?: string;
+  readonly nextBuildId?: string;
 }
 
 function hashExactValue(value: unknown): string {
@@ -161,18 +197,10 @@ export function withCvRenderModelPhoto(
   };
 }
 
-export function describeCvRenderTarget(
+export function describeCvRenderTarget<Format extends CvRenderFormat>(
   snapshot: CvRenderSnapshot,
-  format: CvRenderFormat,
-): Readonly<{
-  simpleV1: true;
-  format: CvRenderFormat;
-  templateId: CVData['templateId'];
-  contentLocale: Locale;
-  renderModelHash: string;
-  summaryHash: string;
-  experienceHash: string;
-}> {
+  format: Format,
+): Readonly<CvRenderTargetDescriptor<Format>> {
   return Object.freeze({
     simpleV1: true,
     format,
@@ -181,5 +209,40 @@ export function describeCvRenderTarget(
     renderModelHash: snapshot.renderModelHash,
     summaryHash: snapshot.summaryHash,
     experienceHash: snapshot.experienceHash,
+  });
+}
+
+/**
+ * Completes the captured M3 descriptor with only the terminal export lifecycle.
+ * Hashes and content locale are never recomputed from mutable live CV state.
+ */
+export function buildCvSimpleV1ExportDiagnostic(
+  descriptor: CvExportRenderTargetDescriptor,
+  lifecycle: CvSimpleV1ExportLifecycle,
+  metadata: {
+    capturedAt?: string;
+    sourceCommitShort?: string | null;
+    nextBuildId?: string | null;
+  } = {},
+): Readonly<CvSimpleV1ExportDiagnostic> {
+  const sourceCommitShort = String(metadata.sourceCommitShort || '').trim();
+  const nextBuildId = String(metadata.nextBuildId || '').trim();
+  const ok = lifecycle.rendererReached
+    && lifecycle.rendererStarted
+    && lifecycle.rendererSucceeded
+    && lifecycle.blobProduced
+    && lifecycle.blobSucceeded
+    && lifecycle.saveReached
+    && lifecycle.saveSucceeded;
+
+  return Object.freeze({
+    schemaVersion: 1,
+    revision: CV_SIMPLE_V1_EXPORT_DIAGNOSTIC_REVISION,
+    capturedAt: metadata.capturedAt || new Date().toISOString(),
+    ...descriptor,
+    ...lifecycle,
+    ok,
+    ...(sourceCommitShort ? { sourceCommitShort: sourceCommitShort.slice(0, 7).toLowerCase() } : {}),
+    ...(nextBuildId ? { nextBuildId } : {}),
   });
 }

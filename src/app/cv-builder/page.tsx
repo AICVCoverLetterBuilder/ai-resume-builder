@@ -45,6 +45,7 @@ import {
   fingerprintText,
   resolveAppVersionInfo,
   resolveNextBuildId,
+  storeSimpleV1CvExportDiagnostic,
 } from '@/lib/cv-export-diagnostics';
 import {
   copyExperienceAiDiagnosticsToClipboard,
@@ -94,9 +95,13 @@ import {
   type SimpleSummaryStyle,
 } from '@/lib/cv-summary-simple-v1';
 import {
+  buildCvSimpleV1ExportDiagnostic,
   captureCvRenderSnapshot,
+  describeCvRenderTarget,
   withCvRenderModelPhoto,
+  type CvExportRenderTargetDescriptor,
   type CvRenderSnapshot,
+  type CvSimpleV1ExportLifecycle,
 } from '@/lib/cv-render-model-simple-v1';
 import { clearKnownRoleIdentityForManualPositionEdit } from '@/lib/cv-known-role-simple-v1';
 import type { CVData, WorkExperience, Education, Region, TemplateId } from '@/lib/types';
@@ -4263,6 +4268,58 @@ export default function CVBuilderPage() {
       setExportDiagTick((n) => n + 1);
     };
 
+    const recordSimpleV1ExportDiagnostic = (
+      descriptor: CvExportRenderTargetDescriptor,
+      lifecycle: CvSimpleV1ExportLifecycle,
+    ) => {
+      const trace = buildCvSimpleV1ExportDiagnostic(descriptor, lifecycle, {
+        sourceCommitShort: process.env.NEXT_PUBLIC_SOURCE_COMMIT_SHORT,
+        nextBuildId: resolveNextBuildId(),
+      });
+      storeSimpleV1CvExportDiagnostic(trace);
+      setExportDiagTick((n) => n + 1);
+      return trace;
+    };
+
+    const runExportWithSimpleV1Diagnostic = async (
+      descriptor: CvExportRenderTargetDescriptor | null,
+      exportAction: () => Promise<SaveFileResult>,
+      onDiagnosticRecorded: () => void,
+    ): Promise<SaveFileResult> => {
+      if (!descriptor) return exportAction();
+
+      try {
+        const saveResult = await exportAction();
+        recordSimpleV1ExportDiagnostic(descriptor, {
+          rendererReached: true,
+          rendererStarted: true,
+          rendererSucceeded: true,
+          blobProduced: true,
+          blobSucceeded: true,
+          saveReached: true,
+          saveSucceeded: saveResult.result === 'saved',
+          ...(saveResult.result === 'saved'
+            ? {}
+            : { failureReason: `save_result_${saveResult.result}` }),
+        });
+        onDiagnosticRecorded();
+        return saveResult;
+      } catch (error) {
+        recordSimpleV1ExportDiagnostic(descriptor, {
+          rendererReached: true,
+          rendererStarted: true,
+          rendererSucceeded: false,
+          blobProduced: false,
+          blobSucceeded: false,
+          saveReached: false,
+          saveSucceeded: false,
+          failureReason: extractCvExportFailureReason(error),
+        });
+        onDiagnosticRecorded();
+        throw error;
+      }
+    };
+
     const prepareFinalLocaleSafeCv = async (
       sourceCv: CVData,
       options?: { purpose?: 'export' | 'preview' },
@@ -4819,10 +4876,22 @@ export default function CVBuilderPage() {
       exportInFlightRef.current = true;
       setShowDownloadMenu(false);
       setIsWordExporting(true);
+      let simpleDocxDescriptor: CvExportRenderTargetDescriptor | null = null;
+      let simpleDocxDiagnosticRecorded = false;
       try {
         const simpleDocxSnapshot = simpleCvV1Enabled
           ? captureCvRenderSnapshot(resolveCvExportSourceAuthority(cvRef.current, cv.templateId))
           : null;
+        simpleDocxDescriptor = simpleDocxSnapshot
+          ? describeCvRenderTarget(simpleDocxSnapshot, 'docx')
+          : null;
+        const runDocxExport = (exportAction: () => Promise<SaveFileResult>) => (
+          runExportWithSimpleV1Diagnostic(
+            simpleDocxDescriptor,
+            exportAction,
+            () => { simpleDocxDiagnosticRecorded = true; },
+          )
+        );
         const liveCv = simpleDocxSnapshot?.model ?? cvRef.current;
         const docxRenderLocale = simpleDocxSnapshot?.contentLocale ?? locale;
         let saveResult: SaveFileResult;
@@ -4831,7 +4900,9 @@ export default function CVBuilderPage() {
           const cvForExport = simpleDocxSnapshot?.model
             ?? await prepareFinalLocaleSafeCv(liveCv);
           const exportBaseName = cvForExport.personal.fullName || '履歴書';
-          saveResult = await exportRirekishoToDOCX(cvForExport, exportBaseName);
+          saveResult = await runDocxExport(
+            () => exportRirekishoToDOCX(cvForExport, exportBaseName),
+          );
           fallbackFileName = `${exportBaseName}.docx`;
         } else {
           // For rect-photo templates, use rectangularPhotoDataUrl (derived from original upload).
@@ -4877,28 +4948,32 @@ export default function CVBuilderPage() {
             locale,
           );
           const exportBaseName = makeCvExportBaseName(cvForExport.personal.fullName);
-          saveResult = await exportToDOCX(
-            cvForExport,
-            exportBaseName,
-            docxRenderLocale,
-            cvForExport.templateId,
-            { elegantFormalPhoto, experiencePresentationReady },
+          saveResult = await runDocxExport(
+            () => exportToDOCX(
+              cvForExport,
+              exportBaseName,
+              docxRenderLocale,
+              cvForExport.templateId,
+              { elegantFormalPhoto, experiencePresentationReady },
+            ),
           );
           fallbackFileName = `${exportBaseName}.docx`;
-          await recordExportDiagnostic({
-            format: 'docx',
-            rawCv: lastExportRawCvRef.current || latestCv,
-            prepared: lastExportPrepareRef.current,
-            rendererReached: true,
-            blobProduced: true,
-            blobMimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-            androidSaveReached: true,
-            saveResult,
-            extraStages: [
-              { stage: 'render_blob', result: 'ok' },
-              { stage: 'android_save', result: saveResult.result === 'saved' ? 'ok' : 'fail' },
-            ],
-          });
+          if (!simpleDocxDescriptor) {
+            await recordExportDiagnostic({
+              format: 'docx',
+              rawCv: lastExportRawCvRef.current || latestCv,
+              prepared: lastExportPrepareRef.current,
+              rendererReached: true,
+              blobProduced: true,
+              blobMimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+              androidSaveReached: true,
+              saveResult,
+              extraStages: [
+                { stage: 'render_blob', result: 'ok' },
+                { stage: 'android_save', result: saveResult.result === 'saved' ? 'ok' : 'fail' },
+              ],
+            });
+          }
         }
         showCvExportSuccessToast(saveResult, 'docx', fallbackFileName);
         incrementDownloads('cv');
@@ -4909,21 +4984,36 @@ export default function CVBuilderPage() {
         const originalReason = prepared && !prepared.ok ? prepared.reason : undefined;
         const terminalReason = extractCvExportFailureReason(err);
         const previewParityBlocked = /preview_render_mismatch/iu.test(terminalReason);
-        await recordExportDiagnostic({
-          format: 'docx',
-          rawCv: lastExportRawCvRef.current || cvRef.current,
-          prepared,
-          originalFailureReason: originalReason,
-          finalError: err,
-          rendererReached: previewParityBlocked ? false : Boolean(prepared?.ok),
-          blobProduced: false,
-          androidSaveReached: /android_file_save_failed/i.test(extractCvExportFailureReason(err)),
-          extraStages: previewParityBlocked
-            ? [{ stage: 'same_snapshot_preview_parity', result: 'fail', reason: terminalReason }]
-            : prepared?.ok
-              ? [{ stage: 'render_blob', result: 'fail', reason: terminalReason }]
-            : undefined,
-        });
+        if (simpleCvV1Enabled) {
+          if (simpleDocxDescriptor && !simpleDocxDiagnosticRecorded) {
+            recordSimpleV1ExportDiagnostic(simpleDocxDescriptor, {
+              rendererReached: false,
+              rendererStarted: false,
+              rendererSucceeded: false,
+              blobProduced: false,
+              blobSucceeded: false,
+              saveReached: false,
+              saveSucceeded: false,
+              failureReason: terminalReason,
+            });
+          }
+        } else {
+          await recordExportDiagnostic({
+            format: 'docx',
+            rawCv: lastExportRawCvRef.current || cvRef.current,
+            prepared,
+            originalFailureReason: originalReason,
+            finalError: err,
+            rendererReached: previewParityBlocked ? false : Boolean(prepared?.ok),
+            blobProduced: false,
+            androidSaveReached: /android_file_save_failed/i.test(extractCvExportFailureReason(err)),
+            extraStages: previewParityBlocked
+              ? [{ stage: 'same_snapshot_preview_parity', result: 'fail', reason: terminalReason }]
+              : prepared?.ok
+                ? [{ stage: 'render_blob', result: 'fail', reason: terminalReason }]
+                : undefined,
+          });
+        }
         showExportFailureToast(err, 'docx');
       } finally {
         exportInFlightRef.current = false;
@@ -4940,6 +5030,8 @@ export default function CVBuilderPage() {
       exportInFlightRef.current = true;
       setShowDownloadMenu(false);
       setIsPdfExporting(true);
+      let simplePdfDescriptor: CvExportRenderTargetDescriptor | null = null;
+      let simplePdfDiagnosticRecorded = false;
       try {
         // selectedTemplateId is the live UI selection and is authoritative over any
         // stale cvRef.current/localStorage templateId (hard requirement — do not
@@ -4954,6 +5046,16 @@ export default function CVBuilderPage() {
         const simplePdfSnapshot = simpleCvV1Enabled
           ? captureCvRenderSnapshot(exportSourceCv)
           : null;
+        simplePdfDescriptor = simplePdfSnapshot
+          ? describeCvRenderTarget(simplePdfSnapshot, 'pdf')
+          : null;
+        const runPdfExport = (exportAction: () => Promise<SaveFileResult>) => (
+          runExportWithSimpleV1Diagnostic(
+            simplePdfDescriptor,
+            exportAction,
+            () => { simplePdfDiagnosticRecorded = true; },
+          )
+        );
         const pdfRenderLocale = simplePdfSnapshot?.contentLocale ?? locale;
         if (cvRefTemplateId !== selectedTemplateId) {
           console.error(
@@ -5009,23 +5111,27 @@ export default function CVBuilderPage() {
             toast.error(t.cv.pdfExportFailed);
             throw new Error(`Modern Minimal preview mismatch: ${previewTemplateId}`);
           }
-          const saveResult = simplePdfSnapshot
-            ? await exportModernMinimalPdf(cvForExport, exportFilename, pdfRenderLocale)
-            : await exportModernMinimalPdf(cvForExport, exportFilename, locale);
-          await recordExportDiagnostic({
-            format: 'pdf',
-            rawCv: lastExportRawCvRef.current || cvForExport,
-            prepared: lastExportPrepareRef.current,
-            rendererReached: true,
-            blobProduced: true,
-            blobMimeType: 'application/pdf',
-            androidSaveReached: true,
-            saveResult,
-            extraStages: [
-              { stage: 'render_blob', result: 'ok' },
-              { stage: 'android_save', result: saveResult.result === 'saved' ? 'ok' : 'fail' },
-            ],
-          });
+          const saveResult = await runPdfExport(() => (
+            simplePdfSnapshot
+              ? exportModernMinimalPdf(cvForExport, exportFilename, pdfRenderLocale)
+              : exportModernMinimalPdf(cvForExport, exportFilename, locale)
+          ));
+          if (!simplePdfDescriptor) {
+            await recordExportDiagnostic({
+              format: 'pdf',
+              rawCv: lastExportRawCvRef.current || cvForExport,
+              prepared: lastExportPrepareRef.current,
+              rendererReached: true,
+              blobProduced: true,
+              blobMimeType: 'application/pdf',
+              androidSaveReached: true,
+              saveResult,
+              extraStages: [
+                { stage: 'render_blob', result: 'ok' },
+                { stage: 'android_save', result: saveResult.result === 'saved' ? 'ok' : 'fail' },
+              ],
+            });
+          }
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
@@ -5047,42 +5153,52 @@ export default function CVBuilderPage() {
           locale,
         );
         if (pdfResolution.route.kind === 'dedicated-clean-simple') {
-          const saveResult = await exportCleanSimplePdf(liveCv, exportFilename, pdfRenderLocale);
+          const saveResult = await runPdfExport(
+            () => exportCleanSimplePdf(liveCv, exportFilename, pdfRenderLocale),
+          );
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
         }
         if (liveCv.templateId === 'professional-classic') {
-          const saveResult = await exportProfessionalClassicPdf(liveCv, exportFilename, pdfRenderLocale);
+          const saveResult = await runPdfExport(
+            () => exportProfessionalClassicPdf(liveCv, exportFilename, pdfRenderLocale),
+          );
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
         }
         if (liveCv.templateId === 'creative-bold') {
-          const saveResult = await exportCreativeBoldPdf(liveCv, exportFilename, pdfRenderLocale);
+          const saveResult = await runPdfExport(
+            () => exportCreativeBoldPdf(liveCv, exportFilename, pdfRenderLocale),
+          );
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
         }
         if (liveCv.templateId === 'creative-artistic') {
-          const saveResult = await exportCreativeArtisticPdf(liveCv, exportFilename, pdfRenderLocale, {
-            alreadyPrepared: terminalExperiencePresentationReady,
-          });
+          const saveResult = await runPdfExport(
+            () => exportCreativeArtisticPdf(liveCv, exportFilename, pdfRenderLocale, {
+              alreadyPrepared: terminalExperiencePresentationReady,
+            }),
+          );
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
-          await recordExportDiagnostic({
-            format: 'pdf',
-            rawCv: lastExportRawCvRef.current || cvForExport,
-            prepared: lastExportPrepareRef.current,
-            rendererReached: true,
-            blobProduced: true,
-            blobMimeType: 'application/pdf',
-            androidSaveReached: true,
-            saveResult,
-            extraStages: [
-              { stage: 'render_blob', result: 'ok' },
-              { stage: 'android_save', result: saveResult.result === 'saved' ? 'ok' : 'fail' },
-            ],
-          });
+          if (!simplePdfDescriptor) {
+            await recordExportDiagnostic({
+              format: 'pdf',
+              rawCv: lastExportRawCvRef.current || cvForExport,
+              prepared: lastExportPrepareRef.current,
+              rendererReached: true,
+              blobProduced: true,
+              blobMimeType: 'application/pdf',
+              androidSaveReached: true,
+              saveResult,
+              extraStages: [
+                { stage: 'render_blob', result: 'ok' },
+                { stage: 'android_save', result: saveResult.result === 'saved' ? 'ok' : 'fail' },
+              ],
+            });
+          }
           incrementDownloads('cv');
           return;
         }
@@ -5091,82 +5207,102 @@ export default function CVBuilderPage() {
           const photoDataUrl = simplePdfSnapshot
             ? (renderPhotos.rectangularPhoto ?? renderPhotos.photo ?? null)
             : await prepareElegantFormalPdfPhotoDataUrl();
-          const saveResult = await exportElegantFormalPdf(liveCv, exportFilename, pdfRenderLocale, { photoDataUrl });
+          const saveResult = await runPdfExport(
+            () => exportElegantFormalPdf(liveCv, exportFilename, pdfRenderLocale, { photoDataUrl }),
+          );
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
         }
         if (liveCv.templateId === 'ats-standard') {
-          const saveResult = await exportAtsStandardPdf(liveCv, exportFilename, pdfRenderLocale);
+          const saveResult = await runPdfExport(
+            () => exportAtsStandardPdf(liveCv, exportFilename, pdfRenderLocale),
+          );
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
         }
         if (liveCv.templateId === 'executive-premium') {
-          const saveResult = await exportExecutivePremiumPdf(liveCv, exportFilename, pdfRenderLocale);
+          const saveResult = await runPdfExport(
+            () => exportExecutivePremiumPdf(liveCv, exportFilename, pdfRenderLocale),
+          );
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
         }
         if (liveCv.templateId === 'nordic-clean') {
-          const saveResult = await exportNordicCleanPdf(liveCv, exportFilename, pdfRenderLocale);
+          const saveResult = await runPdfExport(
+            () => exportNordicCleanPdf(liveCv, exportFilename, pdfRenderLocale),
+          );
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
         }
         if (liveCv.templateId === 'tech-sidebar') {
-          const saveResult = await exportTechSidebarPdf(liveCv, exportFilename, pdfRenderLocale);
+          const saveResult = await runPdfExport(
+            () => exportTechSidebarPdf(liveCv, exportFilename, pdfRenderLocale),
+          );
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
         }
         if (liveCv.templateId === 'corporate-navy') {
-          const saveResult = await exportCorporateNavyPdf(
-            liveCv,
-            exportFilename,
-            pdfRenderLocale,
-            { alreadyPrepared: terminalExperiencePresentationReady },
+          const saveResult = await runPdfExport(
+            () => exportCorporateNavyPdf(
+              liveCv,
+              exportFilename,
+              pdfRenderLocale,
+              { alreadyPrepared: terminalExperiencePresentationReady },
+            ),
           );
-          await recordExportDiagnostic({
-            format: 'pdf',
-            rawCv: lastExportRawCvRef.current || cvForExport,
-            prepared: lastExportPrepareRef.current,
-            rendererReached: true,
-            blobProduced: true,
-            blobMimeType: 'application/pdf',
-            androidSaveReached: true,
-            saveResult,
-            extraStages: [
-              { stage: 'render_blob', result: 'ok' },
-              { stage: 'android_save', result: saveResult.result === 'saved' ? 'ok' : 'fail' },
-            ],
-          });
+          if (!simplePdfDescriptor) {
+            await recordExportDiagnostic({
+              format: 'pdf',
+              rawCv: lastExportRawCvRef.current || cvForExport,
+              prepared: lastExportPrepareRef.current,
+              rendererReached: true,
+              blobProduced: true,
+              blobMimeType: 'application/pdf',
+              androidSaveReached: true,
+              saveResult,
+              extraStages: [
+                { stage: 'render_blob', result: 'ok' },
+                { stage: 'android_save', result: saveResult.result === 'saved' ? 'ok' : 'fail' },
+              ],
+            });
+          }
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
         }
         if (liveCv.templateId === 'contemporary-bold') {
-          const saveResult = await exportContemporaryBoldPdf(liveCv, exportFilename, pdfRenderLocale);
+          const saveResult = await runPdfExport(
+            () => exportContemporaryBoldPdf(liveCv, exportFilename, pdfRenderLocale),
+          );
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
         }
         if (liveCv.templateId === 'rirekisho') {
-          const saveResult = await exportRirekishoPdf(liveCv, exportFilename, pdfRenderLocale);
-          await recordExportDiagnostic({
-            format: 'pdf',
-            rawCv: lastExportRawCvRef.current || cvForExport,
-            prepared: lastExportPrepareRef.current,
-            rendererReached: true,
-            blobProduced: true,
-            blobMimeType: 'application/pdf',
-            androidSaveReached: true,
-            saveResult,
-            extraStages: [
-              { stage: 'render_blob', result: 'ok' },
-              { stage: 'android_save', result: saveResult.result === 'saved' ? 'ok' : 'fail' },
-            ],
-          });
+          const saveResult = await runPdfExport(
+            () => exportRirekishoPdf(liveCv, exportFilename, pdfRenderLocale),
+          );
+          if (!simplePdfDescriptor) {
+            await recordExportDiagnostic({
+              format: 'pdf',
+              rawCv: lastExportRawCvRef.current || cvForExport,
+              prepared: lastExportPrepareRef.current,
+              rendererReached: true,
+              blobProduced: true,
+              blobMimeType: 'application/pdf',
+              androidSaveReached: true,
+              saveResult,
+              extraStages: [
+                { stage: 'render_blob', result: 'ok' },
+                { stage: 'android_save', result: saveResult.result === 'saved' ? 'ok' : 'fail' },
+              ],
+            });
+          }
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
@@ -5190,7 +5326,9 @@ export default function CVBuilderPage() {
 
         assertDedicatedPdfRouteWasHandled(pdfResolution);
 
-        const saveResult = await exportToPDF(previewId, exportFilename);
+        const saveResult = await runPdfExport(
+          () => exportToPDF(previewId, exportFilename),
+        );
         showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
         incrementDownloads('cv');
       } catch (err: unknown) {
@@ -5200,21 +5338,36 @@ export default function CVBuilderPage() {
         const originalReason = prepared && !prepared.ok ? prepared.reason : undefined;
         const terminalReason = extractCvExportFailureReason(err);
         const previewParityBlocked = /preview_render_mismatch/iu.test(terminalReason);
-        await recordExportDiagnostic({
-          format: 'pdf',
-          rawCv: lastExportRawCvRef.current || cvRef.current,
-          prepared,
-          originalFailureReason: originalReason,
-          finalError: err,
-          rendererReached: previewParityBlocked ? false : Boolean(prepared?.ok),
-          blobProduced: false,
-          androidSaveReached: /android_file_save_failed/i.test(extractCvExportFailureReason(err)),
-          extraStages: previewParityBlocked
-            ? [{ stage: 'same_snapshot_preview_parity', result: 'fail', reason: terminalReason }]
-            : prepared?.ok
-              ? [{ stage: 'render_blob', result: 'fail', reason: terminalReason }]
-            : undefined,
-        });
+        if (simpleCvV1Enabled) {
+          if (simplePdfDescriptor && !simplePdfDiagnosticRecorded) {
+            recordSimpleV1ExportDiagnostic(simplePdfDescriptor, {
+              rendererReached: false,
+              rendererStarted: false,
+              rendererSucceeded: false,
+              blobProduced: false,
+              blobSucceeded: false,
+              saveReached: false,
+              saveSucceeded: false,
+              failureReason: terminalReason,
+            });
+          }
+        } else {
+          await recordExportDiagnostic({
+            format: 'pdf',
+            rawCv: lastExportRawCvRef.current || cvRef.current,
+            prepared,
+            originalFailureReason: originalReason,
+            finalError: err,
+            rendererReached: previewParityBlocked ? false : Boolean(prepared?.ok),
+            blobProduced: false,
+            androidSaveReached: /android_file_save_failed/i.test(extractCvExportFailureReason(err)),
+            extraStages: previewParityBlocked
+              ? [{ stage: 'same_snapshot_preview_parity', result: 'fail', reason: terminalReason }]
+              : prepared?.ok
+                ? [{ stage: 'render_blob', result: 'fail', reason: terminalReason }]
+                : undefined,
+          });
+        }
         const cv = { templateId: cvRef.current.templateId, personal: { fullName: cvRef.current.personal.fullName } };
         if (cv.templateId === 'modern-minimal' || cv.templateId === 'clean-simple' || cv.templateId === 'professional-classic' || cv.templateId === 'creative-bold' || cv.templateId === 'creative-artistic' || cv.templateId === 'elegant-formal' || cv.templateId === 'ats-standard' || cv.templateId === 'executive-premium' || cv.templateId === 'nordic-clean' || cv.templateId === 'tech-sidebar' || cv.templateId === 'corporate-navy' || cv.templateId === 'contemporary-bold' || cv.templateId === 'rirekisho') {
           toast.error(formatCvExportIntegrityToast(err, locale, 'pdf') || t.cv.pdfExportFailed, {

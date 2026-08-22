@@ -12,6 +12,7 @@ import {
 } from './cv-export-error-message';
 import type { PrepareExportReadyResult, ExportReadyDiagnostics } from './prepare-export-ready-cv';
 import type { SaveFileResult } from './native-save';
+import type { CvSimpleV1ExportDiagnostic } from './cv-render-model-simple-v1';
 import {
   buildExperienceDurationSnapshot,
   durationDisplayBucket,
@@ -285,6 +286,10 @@ export type CvExportDiagnosticTrace = {
   durationDisplayBucket?: string;
 };
 
+export type CvStoredExportDiagnostic =
+  | CvExportDiagnosticTrace
+  | CvSimpleV1ExportDiagnostic;
+
 const STORAGE_KEY_PDF = 'cvpro-export-diag-pdf';
 const STORAGE_KEY_DOCX = 'cvpro-export-diag-docx';
 
@@ -297,7 +302,7 @@ export const CV_EXPORT_LATEST_DIAGNOSTIC_REVISION =
 
 let exportDiagnosticsRevision = 0;
 
-function diagnosticCapturedAt(trace: CvExportDiagnosticTrace | null): number {
+function diagnosticCapturedAt(trace: CvStoredExportDiagnostic | null): number {
   if (!trace || typeof trace.capturedAt !== 'string') {
     return Number.NEGATIVE_INFINITY;
   }
@@ -306,9 +311,9 @@ function diagnosticCapturedAt(trace: CvExportDiagnosticTrace | null): number {
 }
 
 function newestDiagnostic(
-  left: CvExportDiagnosticTrace | null,
-  right: CvExportDiagnosticTrace | null,
-): CvExportDiagnosticTrace | null {
+  left: CvStoredExportDiagnostic | null,
+  right: CvStoredExportDiagnostic | null,
+): CvStoredExportDiagnostic | null {
   if (!left) return right;
   if (!right) return left;
   return diagnosticCapturedAt(right) >= diagnosticCapturedAt(left) ? right : left;
@@ -337,8 +342,8 @@ export async function copyLatestCvExportDiagnosticsToClipboard():
   return copyCvExportDiagnosticsToClipboard(format);
 }
 
-let latestPdf: CvExportDiagnosticTrace | null = null;
-let latestDocx: CvExportDiagnosticTrace | null = null;
+let latestPdf: CvStoredExportDiagnostic | null = null;
+let latestDocx: CvStoredExportDiagnostic | null = null;
 
 function emitCvExportDiagnosticsChanged(): void {
   exportDiagnosticsRevision += 1;
@@ -619,12 +624,19 @@ export function resolveNextBuildId(): string | null {
   return null;
 }
 
-function persist(trace: CvExportDiagnosticTrace): void {
-  if (trace.exportFormat === 'pdf') latestPdf = trace;
+function storedDiagnosticFormat(trace: CvStoredExportDiagnostic): CvExportFormat {
+  return 'format' in trace
+    ? trace.format
+    : trace.exportFormat;
+}
+
+function persist(trace: CvStoredExportDiagnostic): void {
+  const format = storedDiagnosticFormat(trace);
+  if (format === 'pdf') latestPdf = trace;
   else latestDocx = trace;
   if (typeof localStorage !== 'undefined') {
     try {
-      const key = trace.exportFormat === 'pdf' ? STORAGE_KEY_PDF : STORAGE_KEY_DOCX;
+      const key = format === 'pdf' ? STORAGE_KEY_PDF : STORAGE_KEY_DOCX;
       localStorage.setItem(key, JSON.stringify(trace));
     } catch {
       /* quota — keep in-memory only */
@@ -635,7 +647,14 @@ function persist(trace: CvExportDiagnosticTrace): void {
   emitCvExportDiagnosticsChanged();
 }
 
-export function getLatestCvExportDiagnostic(format?: CvExportFormat): CvExportDiagnosticTrace | null {
+/** Stores the compact Simple V1 terminal record without invoking legacy preparation. */
+export function storeSimpleV1CvExportDiagnostic(
+  trace: CvSimpleV1ExportDiagnostic,
+): void {
+  persist(trace);
+}
+
+export function getLatestCvExportDiagnostic(format?: CvExportFormat): CvStoredExportDiagnostic | null {
   const pdf = newestDiagnostic(latestPdf, readStored('pdf'));
   const docx = newestDiagnostic(latestDocx, readStored('docx'));
   if (format === 'pdf') return pdf;
@@ -643,23 +662,23 @@ export function getLatestCvExportDiagnostic(format?: CvExportFormat): CvExportDi
   return newestDiagnostic(pdf, docx);
 }
 
-function readStored(format: CvExportFormat): CvExportDiagnosticTrace | null {
+function readStored(format: CvExportFormat): CvStoredExportDiagnostic | null {
   if (typeof localStorage === 'undefined') return null;
   try {
     const raw = localStorage.getItem(format === 'pdf' ? STORAGE_KEY_PDF : STORAGE_KEY_DOCX);
     if (!raw) return null;
-    return JSON.parse(raw) as CvExportDiagnosticTrace;
+    return JSON.parse(raw) as CvStoredExportDiagnostic;
   } catch {
     return null;
   }
 }
 
-export function formatCvExportDiagnosticForCopy(trace: CvExportDiagnosticTrace): string {
+export function formatCvExportDiagnosticForCopy(trace: CvStoredExportDiagnostic): string {
   return `${JSON.stringify(trace, null, 2)}\n`;
 }
 
 /** Assert a diagnostic payload never includes raw CV prose / PII field names with values. */
-export function assertDiagnosticHasNoCvText(trace: CvExportDiagnosticTrace): string[] {
+export function assertDiagnosticHasNoCvText(trace: CvStoredExportDiagnostic): string[] {
   const json = JSON.stringify(trace);
   const violations: string[] = [];
   // Reject long Devanagari/Latin prose blobs (hashes are short tokens).

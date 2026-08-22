@@ -4,6 +4,11 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { translations, type Locale } from '@/lib/i18n/translations';
 import type { CVData } from '@/lib/types';
+import { captureCvRenderSnapshot } from '@/lib/cv-render-model-simple-v1';
+import {
+  clearCvExportDiagnosticsForTests,
+  getLatestCvExportDiagnostic,
+} from '@/lib/cv-export-diagnostics';
 
 const CURRENT = 'CURRENT_SENTINEL_NOVA_FIRMA stored editor Summary';
 const STALE = 'STALE_SENTINEL_OLD_SUMMARY legacy recovery candidate';
@@ -18,6 +23,9 @@ const runtime = vi.hoisted(() => ({
   pdfLocale: '' as string,
   docx: null as CVData | null,
   docxLocale: '' as string,
+  pdfOutcome: 'saved' as 'saved' | 'renderer_failure' | 'blob_failure' | 'save_failure',
+  docxOutcome: 'saved' as 'saved' | 'save_failure',
+  mutateLiveCvDuringPdf: false,
 }));
 
 vi.mock('@/lib/i18n/context', () => ({
@@ -56,12 +64,28 @@ vi.mock('@/lib/export', async () => {
     exportModernMinimalPdf: vi.fn(async (cv: CVData, fileName: string, locale: Locale) => {
       runtime.pdf = cv;
       runtime.pdfLocale = locale;
-      return { result: 'saved' as const, message: 'saved', platform: 'web' as const, fileName };
+      if (runtime.mutateLiveCvDuringPdf && runtime.currentCv) {
+        runtime.currentCv.summary = 'LIVE_SUMMARY_AFTER_CAPTURE';
+        runtime.currentCv.experience[0].company = 'LIVE_EMPLOYER_AFTER_CAPTURE';
+      }
+      if (runtime.pdfOutcome === 'renderer_failure') throw new Error('renderer_failed');
+      if (runtime.pdfOutcome === 'blob_failure') throw new Error('blob_failed');
+      return {
+        result: runtime.pdfOutcome === 'save_failure' ? 'failed' as const : 'saved' as const,
+        message: runtime.pdfOutcome,
+        platform: 'web' as const,
+        fileName,
+      };
     }),
     exportToDOCX: vi.fn(async (cv: CVData, fileName: string, locale: Locale) => {
       runtime.docx = cv;
       runtime.docxLocale = locale;
-      return { result: 'saved' as const, message: 'saved', platform: 'web' as const, fileName };
+      return {
+        result: runtime.docxOutcome === 'save_failure' ? 'failed' as const : 'saved' as const,
+        message: runtime.docxOutcome,
+        platform: 'web' as const,
+        fileName,
+      };
     }),
   };
 });
@@ -123,8 +147,40 @@ function fixture(): CVData {
   };
 }
 
+function resetRuntime(cv: CVData): void {
+  runtime.currentCv = cv;
+  runtime.aiUsage = 4;
+  runtime.requests = [];
+  runtime.preview = null;
+  runtime.pdf = null;
+  runtime.docx = null;
+  runtime.previewLocale = '';
+  runtime.pdfLocale = '';
+  runtime.docxLocale = '';
+  runtime.pdfOutcome = 'saved';
+  runtime.docxOutcome = 'saved';
+  runtime.mutateLiveCvDuringPdf = false;
+  clearCvExportDiagnosticsForTests();
+  HTMLElement.prototype.scrollIntoView = vi.fn();
+}
+
+async function renderSimpleV1Page(): Promise<void> {
+  const Page = (await import('@/app/cv-builder/page')).default;
+  render(<Page />);
+  fireEvent.click(screen.getAllByRole('button', { name: translations.de.cv.preview })[1]!);
+  await waitFor(() => expect(screen.getByTestId('m3-preview')).toBeTruthy());
+}
+
+async function runPdfFromPage(): Promise<void> {
+  fireEvent.click(screen.getByRole('button', { name: translations.de.cv.downloadCv }));
+  fireEvent.click(screen.getByRole('button', { name: /^PDF/u }));
+  await waitFor(() => expect(getLatestCvExportDiagnostic('pdf')).not.toBeNull());
+}
+
 afterEach(() => {
   cleanup();
+  clearCvExportDiagnosticsForTests();
+  localStorage.clear();
   delete process.env.NEXT_PUBLIC_CV_SIMPLE_V1;
   vi.restoreAllMocks();
   vi.resetModules();
@@ -143,7 +199,13 @@ describe('Simple V1 M3 real page render/export path', () => {
     runtime.previewLocale = '';
     runtime.pdfLocale = '';
     runtime.docxLocale = '';
+    runtime.pdfOutcome = 'saved';
+    runtime.docxOutcome = 'saved';
+    runtime.mutateLiveCvDuringPdf = false;
+    clearCvExportDiagnosticsForTests();
     HTMLElement.prototype.scrollIntoView = vi.fn();
+
+    const expectedSnapshot = captureCvRenderSnapshot(rawCv);
 
     const Page = (await import('@/app/cv-builder/page')).default;
     render(<Page />);
@@ -158,10 +220,12 @@ describe('Simple V1 M3 real page render/export path', () => {
     fireEvent.click(screen.getByRole('button', { name: translations.de.cv.downloadCv }));
     fireEvent.click(screen.getByRole('button', { name: /^PDF/u }));
     await waitFor(() => expect(runtime.pdf).not.toBeNull());
+    await waitFor(() => expect(getLatestCvExportDiagnostic('pdf')).not.toBeNull());
 
     fireEvent.click(screen.getByRole('button', { name: translations.de.cv.downloadCv }));
     fireEvent.click(screen.getByRole('button', { name: /^DOCX/u }));
     await waitFor(() => expect(runtime.docx).not.toBeNull());
+    await waitFor(() => expect(getLatestCvExportDiagnostic('docx')).not.toBeNull());
 
     expect((runtime.pdf as CVData | null)?.summary).toBe(CURRENT);
     expect((runtime.docx as CVData | null)?.summary).toBe(CURRENT);
@@ -175,5 +239,114 @@ describe('Simple V1 M3 real page render/export path', () => {
     expect(runtime.aiUsage).toBe(4);
     expect(rawCv.experience[0].position).toBe('Graphic Designer');
     expect(rawCv.experience[0].positionSourceKey).toBe('graphic_designer');
+
+    const pdfDiagnostic = getLatestCvExportDiagnostic('pdf');
+    const docxDiagnostic = getLatestCvExportDiagnostic('docx');
+    expect(pdfDiagnostic).toMatchObject({
+      simpleV1: true,
+      format: 'pdf',
+      templateId: 'modern-minimal',
+      contentLocale: 'sr',
+      renderModelHash: expectedSnapshot.renderModelHash,
+      summaryHash: expectedSnapshot.summaryHash,
+      experienceHash: expectedSnapshot.experienceHash,
+      rendererSucceeded: true,
+      blobSucceeded: true,
+      saveSucceeded: true,
+      ok: true,
+    });
+    expect(docxDiagnostic).toMatchObject({
+      simpleV1: true,
+      format: 'docx',
+      templateId: 'modern-minimal',
+      contentLocale: 'sr',
+      renderModelHash: expectedSnapshot.renderModelHash,
+      summaryHash: expectedSnapshot.summaryHash,
+      experienceHash: expectedSnapshot.experienceHash,
+      rendererSucceeded: true,
+      blobSucceeded: true,
+      saveSucceeded: true,
+      ok: true,
+    });
+    expect(Buffer.byteLength(JSON.stringify(pdfDiagnostic), 'utf8')).toBeLessThan(2_000);
+    expect(Buffer.byteLength(JSON.stringify(docxDiagnostic), 'utf8')).toBeLessThan(2_000);
+  });
+
+  it.each([
+    ['renderer_failure', 'renderer_failed'],
+    ['blob_failure', 'blob_failed'],
+  ] as const)('31. actual %s records terminal false', async (outcome, failureReason) => {
+    process.env.NEXT_PUBLIC_CV_SIMPLE_V1 = 'true';
+    resetRuntime(fixture());
+    runtime.pdfOutcome = outcome;
+
+    await renderSimpleV1Page();
+    await runPdfFromPage();
+
+    expect(getLatestCvExportDiagnostic('pdf')).toMatchObject({
+      simpleV1: true,
+      format: 'pdf',
+      contentLocale: 'sr',
+      rendererReached: true,
+      rendererStarted: true,
+      rendererSucceeded: false,
+      blobProduced: false,
+      blobSucceeded: false,
+      saveReached: false,
+      saveSucceeded: false,
+      ok: false,
+      failureReason,
+    });
+    expect(runtime.requests).toEqual([]);
+    expect(runtime.aiUsage).toBe(4);
+  });
+
+  it('32. an actual failed save preserves renderer/blob success and records terminal false', async () => {
+    process.env.NEXT_PUBLIC_CV_SIMPLE_V1 = 'true';
+    resetRuntime(fixture());
+    runtime.pdfOutcome = 'save_failure';
+
+    await renderSimpleV1Page();
+    await runPdfFromPage();
+
+    expect(getLatestCvExportDiagnostic('pdf')).toMatchObject({
+      simpleV1: true,
+      format: 'pdf',
+      contentLocale: 'sr',
+      rendererSucceeded: true,
+      blobProduced: true,
+      blobSucceeded: true,
+      saveReached: true,
+      saveSucceeded: false,
+      ok: false,
+      failureReason: 'save_result_failed',
+    });
+    expect(runtime.requests).toEqual([]);
+    expect(runtime.aiUsage).toBe(4);
+  });
+
+  it('33. live mutation after PDF capture cannot change the stored snapshot hashes', async () => {
+    process.env.NEXT_PUBLIC_CV_SIMPLE_V1 = 'true';
+    const liveCv = fixture();
+    resetRuntime(liveCv);
+    runtime.mutateLiveCvDuringPdf = true;
+    const captured = captureCvRenderSnapshot(liveCv);
+
+    await renderSimpleV1Page();
+    await runPdfFromPage();
+
+    const changed = captureCvRenderSnapshot(liveCv);
+    expect(getLatestCvExportDiagnostic('pdf')).toMatchObject({
+      simpleV1: true,
+      renderModelHash: captured.renderModelHash,
+      summaryHash: captured.summaryHash,
+      experienceHash: captured.experienceHash,
+      ok: true,
+    });
+    expect(changed.renderModelHash).not.toBe(captured.renderModelHash);
+    expect(changed.summaryHash).not.toBe(captured.summaryHash);
+    expect(changed.experienceHash).not.toBe(captured.experienceHash);
+    expect(runtime.requests).toEqual([]);
+    expect(runtime.aiUsage).toBe(4);
   });
 });

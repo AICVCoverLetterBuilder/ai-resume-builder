@@ -1287,16 +1287,16 @@ describe('Creative Artistic dedicated PDF renderer/export route (Dragan fixture)
   test('Creative Artistic PDF uses the dedicated direct renderer route, not generic exportToPDF/print fallback', () => {
     const page = cvBuilderSource();
     const branch = page.indexOf("liveCv.templateId === 'creative-artistic'");
-    const exportCall = page.indexOf('exportCreativeArtisticPdf', branch);
-    const genericExport = page.indexOf('exportToPDF(previewId', branch);
+    const nextTemplateBranch = page.indexOf("liveCv.templateId === 'elegant-formal'", branch);
     const fallbackGuard = page.indexOf("cv.templateId === 'creative-artistic'", branch);
     const fallback = page.indexOf('await openPrintFallback', fallbackGuard);
 
     expect(branch).toBeGreaterThan(-1);
-    expect(exportCall).toBeGreaterThan(branch);
-    expect(exportCall).toBeLessThan(genericExport);
-    expect(page.slice(branch, exportCall)).toContain('liveCv');
-    expect(page.slice(branch, branch + 300)).toContain('showCvExportSuccessToast');
+    expect(nextTemplateBranch).toBeGreaterThan(branch);
+    const dedicatedBranch = page.slice(branch, nextTemplateBranch);
+    const satisfiesDedicatedRouteContract = (source: string) => source.includes('exportCreativeArtisticPdf(') && source.includes('showCvExportSuccessToast') && !source.includes('exportToPDF(') && !source.includes('openPrintFallback');
+    expect(satisfiesDedicatedRouteContract(dedicatedBranch)).toBe(true);
+    expect(satisfiesDedicatedRouteContract(dedicatedBranch.replace('exportCreativeArtisticPdf(', 'exportToPDF('))).toBe(false);
     expect(page.slice(fallbackGuard, fallback)).toContain('t.cv.pdfExportFailed');
     expect(page.slice(fallbackGuard, fallback)).toContain('return;');
 
