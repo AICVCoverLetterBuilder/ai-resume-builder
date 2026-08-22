@@ -1,12 +1,14 @@
 import type { CVData } from './types';
+import type { Locale } from './i18n/translations';
 
 /** Production blank CV — no demo/sample personal data. */
-export function createEmptyCv(): CVData {
+export function createEmptyCv(contentLocale?: Locale): CVData {
   return {
     id: crypto.randomUUID(),
     name: '',
     personal: { fullName: '', email: '', phone: '', address: '', jobTitle: '' },
     summary: '',
+    ...(contentLocale ? { contentLocale } : {}),
     experience: [],
     education: [],
     skills: [],

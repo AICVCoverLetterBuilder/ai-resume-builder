@@ -1,3 +1,5 @@
+import type { Locale } from './i18n/translations';
+
 export type Region = 'US' | 'EU' | 'Balkan' | 'MiddleEast' | 'India' | 'Japan';
 
 export type TemplateId = 'modern-minimal' | 'creative-bold' | 'creative-artistic' | 'elegant-formal' | 'clean-simple' | 'professional-classic' | 'ats-standard' | 'executive-premium' | 'nordic-clean' | 'tech-sidebar' | 'corporate-navy' | 'contemporary-bold' | 'rirekisho';
@@ -169,8 +171,8 @@ export interface CVData {
   name: string;
   personal: PersonalInfo;
   summary: string;
-  /** Locale of the visible CV content after apply / legacy hydration. */
-  contentLocale?: string;
+  /** Explicit language of this CV's content. Optional only for legacy drafts. */
+  contentLocale?: Locale;
   /** Locale of the last generated Summary, when the visible Summary is AI-authored. */
   summaryGeneratedLocale?: string;
   /** Idempotent persisted-runtime migration marker. */

@@ -5,6 +5,14 @@ import {
   CV_RUNTIME_MIGRATION_VERSION,
   normalizeLegacyCvRuntime,
 } from './cv-legacy-runtime-migration';
+import {
+  isCvSimpleV1Enabled,
+  materializeSimpleV1ContentLocale,
+} from './cv-simple-v1';
+import {
+  LOCALE_STORAGE_KEY,
+  resolveInitialLocalePreference,
+} from './i18n/translations';
 
 const CV_DRAFT_KEY = 'cvpro-cv-draft';
 const CL_DRAFT_KEY = 'cvpro-cover-letter-draft';
@@ -61,13 +69,24 @@ function isBrowser(): boolean {
   return typeof window !== 'undefined';
 }
 
+function normalizeCvForDraftStorage(cv: CVData): CVData {
+  if (!isCvSimpleV1Enabled()) return normalizeLegacyCvRuntime(cv);
+
+  const uiLocale = isBrowser()
+    ? resolveInitialLocalePreference(localStorage.getItem(LOCALE_STORAGE_KEY))
+    : undefined;
+  return materializeSimpleV1ContentLocale(cv, { uiLocale });
+}
+
 export function saveCvDraft(data: CvDraftData): boolean {
   if (!isBrowser()) return false;
   try {
     const normalized = withPersonalPhotoFields({
       ...data,
-      cv: normalizeLegacyCvRuntime(data.cv),
-      schemaVersion: CV_RUNTIME_MIGRATION_VERSION,
+      cv: normalizeCvForDraftStorage(data.cv),
+      schemaVersion: isCvSimpleV1Enabled()
+        ? data.schemaVersion
+        : CV_RUNTIME_MIGRATION_VERSION,
     });
     localStorage.setItem(CV_DRAFT_KEY, JSON.stringify(normalized));
     return true;
@@ -86,7 +105,7 @@ export function loadCvDraft(): CvDraftData | null {
     const parsed = JSON.parse(stored) as CvDraftData;
     // Basic validation
     if (!parsed.cv || typeof parsed.cv !== 'object') return null;
-    const normalizedCv = normalizeLegacyCvRuntime(parsed.cv);
+    const normalizedCv = normalizeCvForDraftStorage(parsed.cv);
     const hydrated = withPersonalPhotoFields({
       ...parsed,
       cv: normalizedCv,
@@ -95,8 +114,10 @@ export function loadCvDraft(): CvDraftData | null {
     // Persist the idempotent migration immediately so an export tapped before
     // the builder autosave timer cannot re-read the old Android snapshot.
     if (
-      parsed.schemaVersion !== CV_RUNTIME_MIGRATION_VERSION
-      || parsed.cv.runtimeMigrationVersion !== CV_RUNTIME_MIGRATION_VERSION
+      (!isCvSimpleV1Enabled() && (
+        parsed.schemaVersion !== CV_RUNTIME_MIGRATION_VERSION
+        || parsed.cv.runtimeMigrationVersion !== CV_RUNTIME_MIGRATION_VERSION
+      ))
       // A same-version Android draft may still receive an idempotent
       // structural canonical-state repair. Persist that safe metadata upgrade
       // immediately so a restart cannot reopen the pre-state authority path.

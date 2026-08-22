@@ -80,6 +80,12 @@ import {
   type CvSkillOption,
 } from '@/lib/cv-skill-options';
 import { createEmptyCv } from '@/lib/cv-defaults';
+import {
+  getCvEditorContentLocale,
+  getCvSummaryText,
+  isCvSimpleV1Enabled,
+  materializeSimpleV1ContentLocale,
+} from '@/lib/cv-simple-v1';
 import type { CVData, WorkExperience, Education, Region, TemplateId } from '@/lib/types';
 import { templateInfo, recommendTemplate } from '@/lib/types';
 import {
@@ -469,6 +475,7 @@ function recordSummaryLocalizationDiagnostics(
 
 export default function CVBuilderPage() {
   const { t, locale } = useI18n();
+  const simpleCvV1Enabled = isCvSimpleV1Enabled();
   const {
     currentCv,
     setCurrentCv,
@@ -482,7 +489,9 @@ export default function CVBuilderPage() {
     lastCvSavedAt,
     getAiGate,
   } = useApp();
-  const [cv, setCv] = useState<CVData>(currentCv || emptyCV());
+  const [cv, setCv] = useState<CVData>(
+    currentCv || emptyCV(simpleCvV1Enabled ? locale : undefined),
+  );
   const cvRef = useRef<CVData>(cv);
   /** Last prepareExportReadyCv result for release diagnostics (non-PII). */
   const lastExportPrepareRef = useRef<PrepareExportReadyResult | null>(null);
@@ -635,6 +644,14 @@ export default function CVBuilderPage() {
   // so preview/PDF/DOCX cannot read a stale pre-migration snapshot.
   useEffect(() => {
     const source = cvRef.current;
+    if (simpleCvV1Enabled) {
+      const initialized = materializeSimpleV1ContentLocale(source, { uiLocale: locale });
+      if (initialized === source) return;
+      cvRef.current = initialized;
+      setCv(initialized);
+      setCurrentCv(initialized);
+      return;
+    }
     if (Number(source.runtimeMigrationVersion || 0) >= CV_RUNTIME_MIGRATION_VERSION) return;
     const migrated = normalizeLegacyCvRuntime(source, locale);
     cvRef.current = migrated;
@@ -651,7 +668,7 @@ export default function CVBuilderPage() {
         experienceCount: (migrated.experience || []).length,
       });
     }
-  }, [locale, setCurrentCv, cv.id]);
+  }, [locale, setCurrentCv, cv.id, simpleCvV1Enabled]);
 
   // ── Autosave: debounce-save to context (which persists to localStorage) ──────
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -794,7 +811,13 @@ export default function CVBuilderPage() {
     if (field === 'description') {
       releaseExperienceApplyOwnership(experienceApplyOwnershipRef.current, id);
     }
-    commitCvUpdate((prev) => applyCanonicalExperienceEdit(prev, id, field, value, locale));
+    commitCvUpdate((prev) => applyCanonicalExperienceEdit(
+      prev,
+      id,
+      field,
+      value,
+      getCvEditorContentLocale(prev, locale, simpleCvV1Enabled),
+    ));
   };
 
   const addEducation = () => setCv(prev => ({ ...prev, education: [...prev.education, emptyEdu()] }));
@@ -5731,8 +5754,12 @@ export default function CVBuilderPage() {
                       </div>
                     </div>
                     <textarea
-                      value={cv.summary}
-                      onChange={e => setCv(prev => applyCanonicalSummaryEdit(prev, e.target.value, locale))}
+                      value={simpleCvV1Enabled ? getCvSummaryText(cv) : cv.summary}
+                      onChange={e => setCv(prev => applyCanonicalSummaryEdit(
+                        prev,
+                        e.target.value,
+                        getCvEditorContentLocale(prev, locale, simpleCvV1Enabled),
+                      ))}
                       className={textareaClass + ' min-h-[180px]'}
                       placeholder={t.cv.summaryPlaceholder}
                     />
