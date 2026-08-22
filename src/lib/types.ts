@@ -8,6 +8,9 @@ export type ProfessionCategory = 'tech' | 'marketing' | 'executive' | 'student' 
 
 export type Tone = 'formal' | 'confident' | 'friendly';
 
+/** Stable identities for occupations explicitly selected from app-owned data. */
+export type KnownRoleKey = 'graphic_designer' | 'warehouse_worker';
+
 export interface PersonalInfo {
   fullName: string;
   email: string;
@@ -53,7 +56,7 @@ export interface WorkExperience {
   /** Locale in which the app last generated or localized `position`, when known. */
   positionSourceLocale?: string;
   /** Optional stable occupation key when selected from localized options. */
-  positionSourceKey?: string;
+  positionSourceKey?: KnownRoleKey;
   startDate: string;
   endDate: string;
   isPresent: boolean;

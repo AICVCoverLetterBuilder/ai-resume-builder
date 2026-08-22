@@ -101,7 +101,10 @@ function fixture(): CVData {
     experience: [{
       id: 'exp-current',
       company: 'Nova Firma',
-      position: 'Graficki dizajner',
+      position: 'Graphic Designer',
+      positionProvenance: 'occupation_option',
+      positionSourceKey: 'graphic_designer',
+      positionSourceLocale: 'en',
       startDate: '2024-01',
       endDate: '',
       isPresent: true,
@@ -130,7 +133,8 @@ afterEach(() => {
 describe('Simple V1 M3 real page render/export path', () => {
   it('30. Preview, PDF, and DOCX receive current authority with no provider or AI usage', async () => {
     process.env.NEXT_PUBLIC_CV_SIMPLE_V1 = 'true';
-    runtime.currentCv = fixture();
+    const rawCv = fixture();
+    runtime.currentCv = rawCv;
     runtime.aiUsage = 4;
     runtime.requests = [];
     runtime.preview = null;
@@ -147,6 +151,7 @@ describe('Simple V1 M3 real page render/export path', () => {
 
     await waitFor(() => expect(screen.getByTestId('m3-preview').textContent).toBe(CURRENT));
     expect((runtime.preview as CVData | null)?.summary).toBe(CURRENT);
+    expect((runtime.preview as CVData | null)?.experience[0].position).toBe('Grafička dizajnerka');
     expect(JSON.stringify(runtime.preview)).not.toContain(STALE);
     expect(runtime.previewLocale).toBe('sr');
 
@@ -160,11 +165,15 @@ describe('Simple V1 M3 real page render/export path', () => {
 
     expect((runtime.pdf as CVData | null)?.summary).toBe(CURRENT);
     expect((runtime.docx as CVData | null)?.summary).toBe(CURRENT);
+    expect((runtime.pdf as CVData | null)?.experience[0].position).toBe('Grafička dizajnerka');
+    expect((runtime.docx as CVData | null)?.experience[0].position).toBe('Grafička dizajnerka');
     expect((runtime.pdf as CVData | null)?.experience[0].description).toBe('CURRENT_EXPERIENCE_SENTINEL');
     expect((runtime.docx as CVData | null)?.experience[0].description).toBe('CURRENT_EXPERIENCE_SENTINEL');
     expect(runtime.pdfLocale).toBe('sr');
     expect(runtime.docxLocale).toBe('sr');
     expect(runtime.requests).toEqual([]);
     expect(runtime.aiUsage).toBe(4);
+    expect(rawCv.experience[0].position).toBe('Graphic Designer');
+    expect(rawCv.experience[0].positionSourceKey).toBe('graphic_designer');
   });
 });

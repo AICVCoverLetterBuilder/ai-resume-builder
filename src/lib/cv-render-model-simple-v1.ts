@@ -1,6 +1,7 @@
 import type { Locale } from './i18n/translations';
 import type { CVData, Education, PersonalInfo, WorkExperience } from './types';
 import { getCvContentLocale, getCvSummaryText } from './cv-simple-v1';
+import { resolveExperienceRoleDisplayTitle } from './cv-known-role-simple-v1';
 
 export const CV_SIMPLE_V1_RENDER_MODEL_REVISION =
   'cv-simple-v1-render-model-m3-v1' as const;
@@ -76,11 +77,15 @@ function projectPersonal(personal: PersonalInfo): PersonalInfo {
   };
 }
 
-function projectExperience(entry: WorkExperience): WorkExperience {
+function projectExperience(
+  entry: WorkExperience,
+  contentLocale: Locale,
+  gender?: string,
+): WorkExperience {
   return {
     id: entry.id,
     company: entry.company,
-    position: entry.position,
+    position: resolveExperienceRoleDisplayTitle(entry, contentLocale, gender),
     startDate: entry.startDate,
     endDate: entry.endDate,
     isPresent: entry.isPresent,
@@ -104,13 +109,18 @@ function projectEducation(entry: Education): Education {
  * deliberately omits every legacy canonical, generated, recovery, and AI field.
  */
 export function buildCvRenderModel(cv: CVData): CvRenderModel {
+  const contentLocale = getCvContentLocale(cv);
   const model: CvRenderModel = {
     id: cv.id,
     name: cv.name,
     personal: projectPersonal(cv.personal),
     summary: getCvSummaryText(cv),
     contentLocale: getCvContentLocale(cv),
-    experience: (cv.experience || []).map(projectExperience),
+    experience: (cv.experience || []).map((entry) => projectExperience(
+      entry,
+      contentLocale,
+      cv.personal?.gender,
+    )),
     education: (cv.education || []).map(projectEducation),
     skills: [...(cv.skills || [])],
     certifications: [...(cv.certifications || [])],

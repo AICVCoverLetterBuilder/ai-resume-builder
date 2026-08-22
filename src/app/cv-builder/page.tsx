@@ -98,6 +98,7 @@ import {
   withCvRenderModelPhoto,
   type CvRenderSnapshot,
 } from '@/lib/cv-render-model-simple-v1';
+import { clearKnownRoleIdentityForManualPositionEdit } from '@/lib/cv-known-role-simple-v1';
 import type { CVData, WorkExperience, Education, Region, TemplateId } from '@/lib/types';
 import { templateInfo, recommendTemplate } from '@/lib/types';
 import {
@@ -823,13 +824,18 @@ export default function CVBuilderPage() {
     if (field === 'description') {
       releaseExperienceApplyOwnership(experienceApplyOwnershipRef.current, id);
     }
-    commitCvUpdate((prev) => applyCanonicalExperienceEdit(
-      prev,
-      id,
-      field,
-      value,
-      getCvEditorContentLocale(prev, locale, simpleCvV1Enabled),
-    ));
+    commitCvUpdate((prev) => {
+      const edited = applyCanonicalExperienceEdit(
+        prev,
+        id,
+        field,
+        value,
+        getCvEditorContentLocale(prev, locale, simpleCvV1Enabled),
+      );
+      return simpleCvV1Enabled && field === 'position'
+        ? clearKnownRoleIdentityForManualPositionEdit(edited, id)
+        : edited;
+    });
   };
 
   const addEducation = () => setCv(prev => ({ ...prev, education: [...prev.education, emptyEdu()] }));

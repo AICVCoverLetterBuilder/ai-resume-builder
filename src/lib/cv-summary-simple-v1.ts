@@ -1,6 +1,7 @@
 import type { Locale } from './i18n/translations';
 import type { CVData, WorkExperience } from './types';
 import { getCvContentLocale } from './cv-simple-v1';
+import { resolveExperienceRoleDisplayTitle } from './cv-known-role-simple-v1';
 
 export const SIMPLE_SUMMARY_DIAGNOSTIC_KEY = 'cvpro-simple-v1-summary-diagnostic';
 export const SIMPLE_SUMMARY_DIAGNOSTIC_SCHEMA = 1 as const;
@@ -136,11 +137,18 @@ function selectedRoles(experience: WorkExperience[]): WorkExperience[] {
   return [useful[currentIndex], ...useful.filter((_, index) => index !== currentIndex)].slice(0, 4);
 }
 
-export function buildSimpleSummaryFacts(cv: CVData): SimpleSummaryFacts {
+export function buildSimpleSummaryFacts(
+  cv: CVData,
+  contentLocale: Locale = getCvContentLocale(cv),
+): SimpleSummaryFacts {
   return {
     jobTitle: String(cv.personal?.jobTitle || '').trim(),
     roles: selectedRoles(cv.experience || []).map((entry) => ({
-      position: String(entry.position || '').trim(),
+      position: resolveExperienceRoleDisplayTitle(
+        entry,
+        contentLocale,
+        cv.personal?.gender,
+      ),
       company: String(entry.company || '').trim(),
       startDate: String(entry.startDate || '').trim(),
       endDate: String(entry.endDate || '').trim(),
@@ -259,7 +267,7 @@ export async function runSimpleSummaryOperation(
   const sourceCv = options.cv;
   const contentLocale = getCvContentLocale(sourceCv, { uiLocale: options.uiLocale });
   const sourceSummary = String(sourceCv.summary || '').trim();
-  const facts = buildSimpleSummaryFacts(sourceCv);
+  const facts = buildSimpleSummaryFacts(sourceCv, contentLocale);
   const usageBefore = options.getUsageCount();
   const requestId = `simple-summary-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
   const sourceSummaryHash = hashSimpleSummaryText(sourceSummary);
@@ -358,10 +366,14 @@ export async function runSimpleSummaryOperation(
   }
 
   const liveCv = options.getCurrentCv();
+  const liveContentLocale = getCvContentLocale(liveCv, { uiLocale: options.uiLocale });
   const stale = liveCv.id !== sourceCv.id
     || hashSimpleSummaryText(liveCv.summary || '') !== sourceSummaryHash
-    || getCvContentLocale(liveCv, { uiLocale: options.uiLocale }) !== contentLocale
-    || stableFactsHash(buildSimpleSummaryFacts(liveCv), liveCv.personal?.gender || '') !== factsHash;
+    || liveContentLocale !== contentLocale
+    || stableFactsHash(
+      buildSimpleSummaryFacts(liveCv, liveContentLocale),
+      liveCv.personal?.gender || '',
+    ) !== factsHash;
   if (stale) {
     return finish('stale', {
       providerResultKind: 'candidate_received',

@@ -37,6 +37,9 @@ function fixture(templateId: CVData['templateId'] = 'modern-minimal'): CVData {
       id: 'exp-artifact',
       company: 'Nova Firma',
       position: 'Graphic Designer',
+      positionProvenance: 'occupation_option',
+      positionSourceKey: 'graphic_designer',
+      positionSourceLocale: 'en',
       startDate: '2024-01',
       endDate: '',
       isPresent: true,
@@ -107,6 +110,9 @@ describe('Simple V1 M3 artifact content authority', () => {
       .replace(/\u0000/g, ' ')
       .replace(/\s+/g, ' ');
     expect(text).toContain(CURRENT);
+    // The bundled PDF extraction font map drops the č glyph and inserts glyph
+    // spacing; the remaining native Serbian role stem still proves the surface.
+    expect(text.replace(/[^\p{L}]/gu, '')).toContain('Grafikadizajnerka');
     expect(text).not.toContain(STALE);
   }, 30_000);
 
@@ -114,6 +120,7 @@ describe('Simple V1 M3 artifact content authority', () => {
     const snapshot = captureCvRenderSnapshot(fixture('modern-minimal'));
     const xml = await captureDocx(snapshot.model);
     expect(xml).toContain(CURRENT);
+    expect(xml).toContain('Grafička dizajnerka');
     expect(xml).not.toContain(STALE);
   }, 30_000);
 
@@ -121,18 +128,20 @@ describe('Simple V1 M3 artifact content authority', () => {
     const snapshot = captureCvRenderSnapshot(fixture('rirekisho'));
     const xml = await captureDocx(snapshot.model);
     expect(xml).toContain(CURRENT);
+    expect(xml).toContain('グラフィックデザイナー');
     expect(xml).not.toContain(STALE);
   }, 30_000);
 
   it.each([
-    ['corporate-navy', 'en'],
-    ['creative-artistic', 'ar'],
-  ] as Array<[CVData['templateId'], Locale]>)('30. %s DOCX in %s preserves the current sentinel', async (templateId, contentLocale) => {
+    ['corporate-navy', 'en', 'Graphic Designer'],
+    ['creative-artistic', 'ar', 'مصممة جرافيك'],
+  ] as Array<[CVData['templateId'], Locale, string]>)('30. %s DOCX in %s preserves the current sentinel', async (templateId, contentLocale, roleTitle) => {
     const source = fixture(templateId);
     source.contentLocale = contentLocale;
     const snapshot = captureCvRenderSnapshot(source);
     const xml = await captureDocx(withCvRenderModelPhoto(snapshot, snapshot.model.personal.photo));
     expect(xml).toContain(CURRENT);
+    expect(xml).toContain(roleTitle);
     expect(xml).not.toContain(STALE);
   }, 30_000);
 });

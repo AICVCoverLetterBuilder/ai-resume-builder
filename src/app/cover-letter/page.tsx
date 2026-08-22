@@ -77,6 +77,8 @@ import {
   COVER_LETTER_GROUNDING_BACKEND_REVISION,
 } from '@/lib/cover-letter-grounding-diagnostics';
 import { normalizeCoverLetterBody, prepareCoverLetterForDisplay } from '@/lib/cover-letter-header';
+import { getCvContentLocale, isCvSimpleV1Enabled } from '@/lib/cv-simple-v1';
+import { projectExperienceRoleDisplayTitles } from '@/lib/cv-known-role-simple-v1';
 
 const emptyCL = (): CoverLetterData => ({
   id: crypto.randomUUID(),
@@ -175,6 +177,7 @@ async function callGenerateAI(params: {
 
 export default function CoverLetterPage() {
   const { t, locale } = useI18n();
+  const simpleCvV1Enabled = isCvSimpleV1Enabled();
   const { currentCoverLetter, setCurrentCoverLetter, isPro, canGenerateCoverLetter, incrementClGeneration, canDownload, incrementDownloads, canRegenerateCoverLetter, incrementClRegen, resetClRegen, currentCv, canUseProAi, recordProAiSuccess, lastClSavedAt, getAiGate } = useApp();
   const [cl, setCl] = useState<CoverLetterData>(currentCoverLetter || emptyCL());
   const [editing, setEditing] = useState(false);
@@ -487,7 +490,14 @@ export default function CoverLetterPage() {
 
     const proToken = aiGate.status === 'ready' ? aiGate.token : null;
     const fullName = getFullName();
-    const experienceEntries = currentCv?.experience ?? [];
+    const rawExperienceEntries = currentCv?.experience ?? [];
+    const experienceEntries = simpleCvV1Enabled && currentCv
+      ? projectExperienceRoleDisplayTitles(
+        rawExperienceEntries,
+        getCvContentLocale(currentCv, { uiLocale: locale }),
+        currentCv.personal?.gender,
+      )
+      : rawExperienceEntries;
     const skills = currentCv?.skills ?? [];
     const education = currentCv?.education ?? [];
     const languages = currentCv?.languages ?? [];
