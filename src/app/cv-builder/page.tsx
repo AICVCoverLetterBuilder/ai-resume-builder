@@ -93,6 +93,11 @@ import {
   type SimpleSummaryOperation,
   type SimpleSummaryStyle,
 } from '@/lib/cv-summary-simple-v1';
+import {
+  captureCvRenderSnapshot,
+  withCvRenderModelPhoto,
+  type CvRenderSnapshot,
+} from '@/lib/cv-render-model-simple-v1';
 import type { CVData, WorkExperience, Education, Region, TemplateId } from '@/lib/types';
 import { templateInfo, recommendTemplate } from '@/lib/types';
 import {
@@ -1157,6 +1162,9 @@ export default function CVBuilderPage() {
   // Preview and export start from the same live content authority. React state
   // supplies only the selected template; cvRef owns the current visible draft.
   const previewInputCv = resolveCvExportSourceAuthority(cvRef.current, cv.templateId);
+  const simplePreviewSnapshot: CvRenderSnapshot | null = simpleCvV1Enabled
+    ? captureCvRenderSnapshot(previewInputCv)
+    : null;
   const previewPrimaryExpId = (previewInputCv.experience || []).find((entry) => entry.isPresent)?.id
     || (previewInputCv.experience || [])[0]?.id;
   const previewIndustry = previewPrimaryExpId
@@ -1171,19 +1179,22 @@ export default function CVBuilderPage() {
     industry: previewIndustry,
     level: previewLevel,
   }), [previewGender, previewIndustry, previewLevel]);
-  const previewInputSnapshotId = buildPreviewSummarySnapshotId(
-    previewInputCv,
-    locale,
-    previewPrepareOptions,
-  );
-  const matchingTerminalPreview = terminalPreviewPresentation?.snapshotId === previewInputSnapshotId
+  const previewInputSnapshotId = simplePreviewSnapshot?.renderModelHash
+    ?? buildPreviewSummarySnapshotId(
+      previewInputCv,
+      locale,
+      previewPrepareOptions,
+    );
+  const matchingTerminalPreview = !simpleCvV1Enabled
+    && terminalPreviewPresentation?.snapshotId === previewInputSnapshotId
     ? terminalPreviewPresentation
     : null;
   const previewDerivationInputCv = matchingTerminalPreview?.status === 'ready'
     && matchingTerminalPreview.cv
     ? matchingTerminalPreview.cv
     : previewInputCv;
-  const previewSourceRuntimeCv = normalizeLegacyCvRuntime(previewInputCv, locale);
+  const previewSourceRuntimeCv: CVData = simplePreviewSnapshot?.model
+    ?? normalizeLegacyCvRuntime(previewInputCv, locale);
   // Any non-user Summary is app-owned terminal material.  Restricting this
   // to the three historical origin labels let newer deterministic manifest
   // results render the stale editor Summary while the async terminal snapshot
@@ -1195,9 +1206,34 @@ export default function CVBuilderPage() {
 
   const localizedPreviewPresentation = useMemo<{
     cv: CVData;
-    summaryRender: PreviewSummaryRenderEvidence;
+    summaryRender: PreviewSummaryRenderEvidence | null;
   }>(
     () => {
+      if (simplePreviewSnapshot) {
+        const personalPhotos = simplePreviewSnapshot.model.personal as CVData['personal'] & {
+          circularPhoto?: string;
+          rectangularPhoto?: string;
+        };
+        if (RECT_PHOTO_TEMPLATES.includes(simplePreviewSnapshot.model.templateId)) {
+          const rectangularPhoto = personalPhotos.rectangularPhoto ?? personalPhotos.photo;
+          return {
+            cv: withCvRenderModelPhoto(
+              simplePreviewSnapshot,
+              rectangularPhoto
+                ? (rectangularPhoto.includes('#') ? rectangularPhoto : `${rectangularPhoto}#rect`)
+                : undefined,
+            ),
+            summaryRender: null,
+          };
+        }
+        return {
+          cv: withCvRenderModelPhoto(
+            simplePreviewSnapshot,
+            personalPhotos.circularPhoto ?? personalPhotos.photo,
+          ),
+          summaryRender: null,
+        };
+      }
       const migratedCv = normalizeLegacyCvRuntime(previewDerivationInputCv, locale);
       const appOwnedPreviewSummary = migratedCv.summaryOrigin === 'deterministic_fallback'
         || migratedCv.summaryOrigin === 'ai_generated'
@@ -1303,6 +1339,7 @@ export default function CVBuilderPage() {
     },
     [
       cv,
+      simplePreviewSnapshot,
       previewDerivationInputCv,
       previewSourceRuntimeCv.summary,
       locale,
@@ -1316,8 +1353,10 @@ export default function CVBuilderPage() {
   );
 
   const localizedPreviewCv = localizedPreviewPresentation.cv;
+  const previewRenderLocale = simplePreviewSnapshot?.contentLocale ?? locale;
 
   useEffect(() => {
+    if (!localizedPreviewPresentation.summaryRender) return;
     const previewRootId = showPreview
       ? 'cv-preview'
       : step === steps.length - 1
@@ -4714,6 +4753,7 @@ export default function CVBuilderPage() {
     prepareFinalLocaleSafeCvRef.current = prepareFinalLocaleSafeCv;
 
     useEffect(() => {
+      if (simpleCvV1Enabled) return;
       const previewVisible = showPreview || step === steps.length - 1;
       if (!previewVisible || !previewSourceIsAppOwned || matchingTerminalPreview) return;
 
@@ -4758,6 +4798,7 @@ export default function CVBuilderPage() {
       previewInputSnapshotId,
       previewPrepareOptions,
       previewSourceIsAppOwned,
+      simpleCvV1Enabled,
       showPreview,
       step,
       steps.length,
@@ -4773,11 +4814,16 @@ export default function CVBuilderPage() {
       setShowDownloadMenu(false);
       setIsWordExporting(true);
       try {
-        const liveCv = cvRef.current;
+        const simpleDocxSnapshot = simpleCvV1Enabled
+          ? captureCvRenderSnapshot(resolveCvExportSourceAuthority(cvRef.current, cv.templateId))
+          : null;
+        const liveCv = simpleDocxSnapshot?.model ?? cvRef.current;
+        const docxRenderLocale = simpleDocxSnapshot?.contentLocale ?? locale;
         let saveResult: SaveFileResult;
         let fallbackFileName: string;
         if (liveCv.templateId === 'rirekisho') {
-          const cvForExport = await prepareFinalLocaleSafeCv(liveCv);
+          const cvForExport = simpleDocxSnapshot?.model
+            ?? await prepareFinalLocaleSafeCv(liveCv);
           const exportBaseName = cvForExport.personal.fullName || '履歴書';
           saveResult = await exportRirekishoToDOCX(cvForExport, exportBaseName);
           fallbackFileName = `${exportBaseName}.docx`;
@@ -4786,28 +4832,40 @@ export default function CVBuilderPage() {
           // For circle templates, use circularPhotoDataUrl or cv.personal.photo.
           let photoForExport: string | undefined;
           let elegantFormalPhoto: ElegantFormalCanonicalPhotoResult | null = null;
-          if (liveCv.templateId === 'elegant-formal') {
+          const renderPhotos = liveCv.personal as CVData['personal'] & {
+            originalPhoto?: string;
+            circularPhoto?: string;
+            rectangularPhoto?: string;
+          };
+          if (simpleDocxSnapshot && liveCv.templateId === 'elegant-formal') {
+            photoForExport = renderPhotos.rectangularPhoto ?? renderPhotos.photo;
+          } else if (liveCv.templateId === 'elegant-formal') {
             elegantFormalPhoto = await ensureElegantFormalPhotoForExport();
             photoForExport = elegantFormalPhoto?.dataUrl;
           } else if (RECT_PHOTO_TEMPLATES.includes(liveCv.templateId)) {
-            photoForExport = rectangularPhotoDataUrl ?? liveCv.personal.photo; // clean JPEG from original when available
+            photoForExport = simpleDocxSnapshot
+              ? (renderPhotos.rectangularPhoto ?? renderPhotos.photo)
+              : (rectangularPhotoDataUrl ?? liveCv.personal.photo); // clean JPEG from original when available
           } else if (liveCv.templateId === 'corporate-navy' || liveCv.templateId === 'contemporary-bold') {
-            photoForExport = (liveCv.personal as typeof liveCv.personal & { originalPhoto?: string }).originalPhoto
-              ?? circularPhotoDataUrl
-              ?? liveCv.personal.photo;
+            photoForExport = renderPhotos.originalPhoto
+              ?? (simpleDocxSnapshot ? renderPhotos.circularPhoto : circularPhotoDataUrl)
+              ?? renderPhotos.photo;
           } else {
-            photoForExport = circularPhotoDataUrl ?? liveCv.personal.photo;
+            photoForExport = (simpleDocxSnapshot ? renderPhotos.circularPhoto : circularPhotoDataUrl)
+              ?? renderPhotos.photo;
           }
           const selectedTemplateId = cv.templateId;
           const latestCv = resolveCvExportSourceAuthority(
             cvRef.current,
             selectedTemplateId,
           );
-          const cvForExport = await prepareFinalLocaleSafeCv({
-            ...latestCv,
-            personal: { ...latestCv.personal, photo: photoForExport },
-          });
-          const experiencePresentationReady = isTerminalExperiencePresentationReady(
+          const cvForExport = simpleDocxSnapshot
+            ? withCvRenderModelPhoto(simpleDocxSnapshot, photoForExport)
+            : await prepareFinalLocaleSafeCv({
+              ...latestCv,
+              personal: { ...latestCv.personal, photo: photoForExport },
+            });
+          const experiencePresentationReady = simpleCvV1Enabled || isTerminalExperiencePresentationReady(
             cvForExport,
             lastExportPrepareRef.current?.diagnostics.experiencePresentation,
             locale,
@@ -4816,7 +4874,7 @@ export default function CVBuilderPage() {
           saveResult = await exportToDOCX(
             cvForExport,
             exportBaseName,
-            locale,
+            docxRenderLocale,
             cvForExport.templateId,
             { elegantFormalPhoto, experiencePresentationReady },
           );
@@ -4883,6 +4941,14 @@ export default function CVBuilderPage() {
         const selectedTemplateId = cv.templateId;
         const cvRefTemplateId = cvRef.current.templateId;
         const previewTemplateId = readPdfExportTemplateIdFromPreview(previewId);
+        const exportSourceCv = resolveCvExportSourceAuthority(
+          cvRef.current,
+          selectedTemplateId,
+        );
+        const simplePdfSnapshot = simpleCvV1Enabled
+          ? captureCvRenderSnapshot(exportSourceCv)
+          : null;
+        const pdfRenderLocale = simplePdfSnapshot?.contentLocale ?? locale;
         if (cvRefTemplateId !== selectedTemplateId) {
           console.error(
             `[CV PDF export] cvRef.current.templateId (${cvRefTemplateId}) !== selectedTemplateId (${selectedTemplateId}) — overwriting before export`,
@@ -4890,12 +4956,14 @@ export default function CVBuilderPage() {
         }
         // Force templateId from the live UI selection; cvRef.current can only supply
         // the rest of the data, never the template choice.
-        const cvForExport = await prepareFinalLocaleSafeCv(
-          resolveCvExportSourceAuthority(
-            cvRef.current,
-            selectedTemplateId,
-          ),
-        );
+        const prepareLegacyPdfCvForExport = async () => {
+          const cvForExport = await prepareFinalLocaleSafeCv({
+            ...exportSourceCv,
+          });
+          return cvForExport;
+        };
+        const cvForExport = simplePdfSnapshot?.model
+          ?? await prepareLegacyPdfCvForExport();
         const route = resolveCvPdfExportRoute(selectedTemplateId);
 
         if (process.env.NODE_ENV !== 'production') {
@@ -4935,7 +5003,9 @@ export default function CVBuilderPage() {
             toast.error(t.cv.pdfExportFailed);
             throw new Error(`Modern Minimal preview mismatch: ${previewTemplateId}`);
           }
-          const saveResult = await exportModernMinimalPdf(cvForExport, exportFilename, locale);
+          const saveResult = simplePdfSnapshot
+            ? await exportModernMinimalPdf(cvForExport, exportFilename, pdfRenderLocale)
+            : await exportModernMinimalPdf(cvForExport, exportFilename, locale);
           await recordExportDiagnostic({
             format: 'pdf',
             rawCv: lastExportRawCvRef.current || cvForExport,
@@ -4964,37 +5034,34 @@ export default function CVBuilderPage() {
           previewElementId: previewId,
           uiTemplateId: selectedTemplateId,
         });
-        const liveCv = pdfResolution.exportCv;
-        const terminalExperiencePresentationReady = isTerminalExperiencePresentationReady(
+        const liveCv = simplePdfSnapshot?.model ?? pdfResolution.exportCv;
+        const terminalExperiencePresentationReady = simpleCvV1Enabled || isTerminalExperiencePresentationReady(
           liveCv,
           lastExportPrepareRef.current?.diagnostics.experiencePresentation,
           locale,
         );
         if (pdfResolution.route.kind === 'dedicated-clean-simple') {
-          const saveResult = await exportCleanSimplePdf(liveCv, exportFilename, locale);
+          const saveResult = await exportCleanSimplePdf(liveCv, exportFilename, pdfRenderLocale);
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
         }
         if (liveCv.templateId === 'professional-classic') {
-          const saveResult = await exportProfessionalClassicPdf(liveCv, exportFilename, locale);
+          const saveResult = await exportProfessionalClassicPdf(liveCv, exportFilename, pdfRenderLocale);
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
         }
         if (liveCv.templateId === 'creative-bold') {
-          const saveResult = await exportCreativeBoldPdf(liveCv, exportFilename, locale);
+          const saveResult = await exportCreativeBoldPdf(liveCv, exportFilename, pdfRenderLocale);
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
         }
         if (liveCv.templateId === 'creative-artistic') {
-          const saveResult = await exportCreativeArtisticPdf(
-            liveCv,
-            exportFilename,
-            locale,
-            { alreadyPrepared: terminalExperiencePresentationReady },
-          );
+          const saveResult = await exportCreativeArtisticPdf(liveCv, exportFilename, pdfRenderLocale, {
+            alreadyPrepared: terminalExperiencePresentationReady,
+          });
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           await recordExportDiagnostic({
             format: 'pdf',
@@ -5014,32 +5081,35 @@ export default function CVBuilderPage() {
           return;
         }
         if (liveCv.templateId === 'elegant-formal') {
-          const photoDataUrl = await prepareElegantFormalPdfPhotoDataUrl();
-          const saveResult = await exportElegantFormalPdf(liveCv, exportFilename, locale, { photoDataUrl });
+          const renderPhotos = liveCv.personal as CVData['personal'] & { rectangularPhoto?: string };
+          const photoDataUrl = simplePdfSnapshot
+            ? (renderPhotos.rectangularPhoto ?? renderPhotos.photo ?? null)
+            : await prepareElegantFormalPdfPhotoDataUrl();
+          const saveResult = await exportElegantFormalPdf(liveCv, exportFilename, pdfRenderLocale, { photoDataUrl });
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
         }
         if (liveCv.templateId === 'ats-standard') {
-          const saveResult = await exportAtsStandardPdf(liveCv, exportFilename, locale);
+          const saveResult = await exportAtsStandardPdf(liveCv, exportFilename, pdfRenderLocale);
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
         }
         if (liveCv.templateId === 'executive-premium') {
-          const saveResult = await exportExecutivePremiumPdf(liveCv, exportFilename, locale);
+          const saveResult = await exportExecutivePremiumPdf(liveCv, exportFilename, pdfRenderLocale);
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
         }
         if (liveCv.templateId === 'nordic-clean') {
-          const saveResult = await exportNordicCleanPdf(liveCv, exportFilename, locale);
+          const saveResult = await exportNordicCleanPdf(liveCv, exportFilename, pdfRenderLocale);
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
         }
         if (liveCv.templateId === 'tech-sidebar') {
-          const saveResult = await exportTechSidebarPdf(liveCv, exportFilename, locale);
+          const saveResult = await exportTechSidebarPdf(liveCv, exportFilename, pdfRenderLocale);
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
@@ -5048,7 +5118,7 @@ export default function CVBuilderPage() {
           const saveResult = await exportCorporateNavyPdf(
             liveCv,
             exportFilename,
-            locale,
+            pdfRenderLocale,
             { alreadyPrepared: terminalExperiencePresentationReady },
           );
           await recordExportDiagnostic({
@@ -5070,13 +5140,13 @@ export default function CVBuilderPage() {
           return;
         }
         if (liveCv.templateId === 'contemporary-bold') {
-          const saveResult = await exportContemporaryBoldPdf(liveCv, exportFilename, locale);
+          const saveResult = await exportContemporaryBoldPdf(liveCv, exportFilename, pdfRenderLocale);
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
         }
         if (liveCv.templateId === 'rirekisho') {
-          const saveResult = await exportRirekishoPdf(liveCv, exportFilename, locale);
+          const saveResult = await exportRirekishoPdf(liveCv, exportFilename, pdfRenderLocale);
           await recordExportDiagnostic({
             format: 'pdf',
             rawCv: lastExportRawCvRef.current || cvForExport,
@@ -5335,7 +5405,7 @@ export default function CVBuilderPage() {
                       <TemplateComponent
                         key={`${cv.templateId}-${photoForCurrentTemplate?.slice(-20) ?? 'no-photo'}`}
                         data={localizedPreviewCv}
-                        locale={locale}
+                        locale={previewRenderLocale}
                       />
                     )}
                   </div>
@@ -6069,7 +6139,7 @@ export default function CVBuilderPage() {
                             <TemplateComponent
                               key={`${cv.templateId}-${photoForCurrentTemplate?.slice(-20) ?? 'no-photo'}`}
                               data={localizedPreviewCv}
-                              locale={locale}
+                              locale={previewRenderLocale}
                             />
                           )}
                         </div>
