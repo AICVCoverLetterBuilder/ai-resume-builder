@@ -7,13 +7,7 @@
 import type { Locale } from './i18n/translations';
 import { formatExperienceBullets, splitExperienceBullets } from './cv-canonical-facts';
 import { applyEnglishEmploymentTense } from './cv-material-duty-coverage';
-import {
-  detectArabicExperiencePersonMode,
-  normalizeArabicExperienceEmploymentGrammar,
-  normalizeArabicExperienceEmploymentGrammarWithEvidence,
-  validateArabicExperienceNativeMorphology,
-  type ArabicPastMorphologyTransformationClass,
-} from './cv-arabic-experience-tense';
+import { normalizeArabicExperienceEmploymentGrammar } from './cv-arabic-experience-tense';
 import {
   applySerbianCvEmploymentTense,
   stripDutyListPrefix,
@@ -41,11 +35,6 @@ export type ExperiencePerspectiveNormalizeResult = {
   perspectiveNormalizationAttempted: boolean;
   perspectiveNormalizationApplied: boolean;
   perspectiveValidationPassed: boolean;
-  arabicMorphologyTransformationAttempted: boolean;
-  arabicMorphologyTransformationApplied: boolean;
-  arabicMorphologyTransformationClasses: ArabicPastMorphologyTransformationClass[];
-  arabicNativeMorphologyValidationPassed: boolean;
-  arabicNativeMorphologyRejectionReason: string | null;
   changed: boolean;
 };
 
@@ -128,11 +117,7 @@ function leadingTokenLooks1sg(token: string): boolean {
   return false;
 }
 
-export function detectExperiencePersonMode(
-  text: string,
-  locale?: Locale,
-  options?: { isPresent?: boolean },
-): ExperiencePersonMode {
+export function detectExperiencePersonMode(text: string, locale?: Locale): ExperiencePersonMode {
   const raw = (text || '').trim();
   if (!raw) return 'unknown';
   const loc = locale || 'en';
@@ -182,10 +167,6 @@ export function detectExperiencePersonMode(
 
   if (loc === 'hi') {
     return detectHindiExperiencePersonMode(raw);
-  }
-
-  if (loc === 'ar') {
-    return detectArabicExperiencePersonMode(raw, options);
   }
 
   return 'neutral';
@@ -330,12 +311,7 @@ export function normalizeExperienceBulletPerspective(
 }
 
 export function experienceRequiresCvThirdPerson(locale: Locale): boolean {
-  return locale === 'sr'
-    || locale === 'hr'
-    || locale === 'en'
-    || locale === 'es'
-    || locale === 'hi'
-    || locale === 'ar';
+  return locale === 'sr' || locale === 'hr' || locale === 'en' || locale === 'es' || locale === 'hi';
 }
 
 /**
@@ -353,9 +329,8 @@ export function hasDisallowedCvFirstPerson(
 export function validateExperienceCvPerspective(
   text: string,
   locale: Locale,
-  options?: { isPresent?: boolean },
 ): { ok: boolean; finalPersonMode: ExperiencePersonMode; reason?: string } {
-  const finalPersonMode = detectExperiencePersonMode(text, locale, options);
+  const finalPersonMode = detectExperiencePersonMode(text, locale);
   if (!experienceRequiresCvThirdPerson(locale)) {
     return { ok: true, finalPersonMode };
   }
@@ -364,16 +339,6 @@ export function validateExperienceCvPerspective(
       ok: false,
       finalPersonMode,
       reason: 'experience_cv_perspective_first_person',
-    };
-  }
-  // Arabic Experience bullets have an inflected selected-person contract.
-  // Unlike pronoun-free CV styles, neutral/unknown Arabic morphology is not
-  // positive proof that the target text reached the required perspective.
-  if (locale === 'ar' && finalPersonMode !== 'third_singular') {
-    return {
-      ok: false,
-      finalPersonMode,
-      reason: 'experience_cv_perspective_unproven',
     };
   }
   return { ok: true, finalPersonMode };
@@ -390,85 +355,31 @@ export function normalizeExperienceBulletsPerspective(
     isPresent: boolean;
     gender?: string;
     sourceDescription?: string;
-    sourceLocale?: Locale | null;
   },
 ): ExperiencePerspectiveNormalizeResult {
   const locale = options.locale;
-  const hasSeparateSource = Boolean((options.sourceDescription || '').trim());
-  const sourcePersonMode = hasSeparateSource
-    ? (options.sourceLocale
-      ? detectExperiencePersonMode(options.sourceDescription || '', options.sourceLocale, {
-        isPresent: options.isPresent,
-      })
-      : 'unknown')
-    : detectExperiencePersonMode(text, locale, { isPresent: options.isPresent });
-  const providerPersonMode = detectExperiencePersonMode(text, locale, {
-    isPresent: options.isPresent,
-  });
+  const sourcePersonMode = detectExperiencePersonMode(
+    options.sourceDescription || text,
+    locale,
+  );
+  const providerPersonMode = detectExperiencePersonMode(text, locale);
   const perspectiveNormalizationAttempted = experienceRequiresCvThirdPerson(locale)
     && Boolean((text || '').trim());
 
   const lines = splitExperienceBullets(text || '');
-  const arabicNormalizations = [] as ReturnType<
-    typeof normalizeArabicExperienceEmploymentGrammarWithEvidence
-  >[];
-  const normalizedLines = lines.map((line) => {
-    if (locale === 'ar') {
-      const normalized = normalizeArabicExperienceEmploymentGrammarWithEvidence(
-        stripDutyListPrefix(line || '').trim(),
-        { isPresent: options.isPresent, gender: options.gender },
-      );
-      arabicNormalizations.push(normalized);
-      return normalized.text;
-    }
-    return normalizeExperienceBulletPerspective(line, {
+  const normalizedLines = lines.map((line) =>
+    normalizeExperienceBulletPerspective(line, {
       locale,
       isPresent: options.isPresent,
       gender: options.gender,
-    });
-  });
+    }));
   const changed = normalizedLines.some((line, i) =>
     normalizeExperienceAiSourceText(line) !== normalizeExperienceAiSourceText(lines[i] || ''));
   const outText = normalizedLines.length
     ? formatExperienceBullets(normalizedLines)
     : '';
-  const normalizedPersonMode = detectExperiencePersonMode(outText, locale, {
-    isPresent: options.isPresent,
-  });
-  const perspectiveValidationPassed = validateExperienceCvPerspective(outText, locale, {
-    isPresent: options.isPresent,
-  }).ok;
-  const arabicMorphologyTransformationClasses = [...new Set(
-    arabicNormalizations.flatMap((result) => result.transformationClasses),
-  )];
-  const arabicNativeMorphology = locale === 'ar'
-    ? validateArabicExperienceNativeMorphology(outText, {
-      isPresent: options.isPresent,
-      gender: options.gender,
-      sourceText: text,
-      normalization: {
-        text: outText,
-        ok: arabicNormalizations.every((result) => result.ok),
-        morphologyValidationPassed: arabicNormalizations.every(
-          (result) => result.morphologyValidationPassed,
-        ),
-        transformationAttempted: arabicNormalizations.some(
-          (result) => result.transformationAttempted,
-        ),
-        transformationApplied: arabicNormalizations.some(
-          (result) => result.transformationApplied,
-        ),
-        transformationClasses: arabicMorphologyTransformationClasses.length
-          ? arabicMorphologyTransformationClasses
-          : ['none'],
-        unsafeTokenCount: arabicNormalizations.reduce(
-          (sum, result) => sum + result.unsafeTokenCount,
-          0,
-        ),
-        reason: arabicNormalizations.find((result) => result.reason)?.reason,
-      },
-    })
-    : null;
+  const normalizedPersonMode = detectExperiencePersonMode(outText, locale);
+  const perspectiveValidationPassed = validateExperienceCvPerspective(outText, locale).ok;
 
   return {
     text: outText,
@@ -479,16 +390,7 @@ export function normalizeExperienceBulletsPerspective(
     perspectiveMode: 'cv_third_person',
     perspectiveNormalizationAttempted,
     perspectiveNormalizationApplied: perspectiveNormalizationAttempted && changed,
-    perspectiveValidationPassed:
-      perspectiveValidationPassed && (arabicNativeMorphology?.ok ?? true),
-    arabicMorphologyTransformationAttempted:
-      arabicNativeMorphology?.transformationAttempted ?? false,
-    arabicMorphologyTransformationApplied:
-      arabicNativeMorphology?.transformationApplied ?? false,
-    arabicMorphologyTransformationClasses:
-      arabicNativeMorphology?.transformationClasses ?? ['none'],
-    arabicNativeMorphologyValidationPassed: arabicNativeMorphology?.ok ?? true,
-    arabicNativeMorphologyRejectionReason: arabicNativeMorphology?.reason ?? null,
+    perspectiveValidationPassed,
     changed,
   };
 }

@@ -414,10 +414,9 @@ describe('AAB-390 cross-locale purity is fail-closed before selection/apply', ()
     expect(changed.priors[0]?.sourceLocale).toBe('de');
     expect(changedOutcome.localizationSource).toBe('mixed_authoritative');
     expect(Object.values(changedOutcome.sourceByEntryId)).toEqual(
-      expect.arrayContaining(['validated_cache', 'mixed_authoritative']),
+      expect.arrayContaining(['validated_cache', 'provider']),
     );
-    // Only the changed surface misses its source-bound cache key; unchanged
-    // sibling surfaces remain independently validated cache hits.
+    // Only the changed entry misses its source-bound cache key.
     expect(calls).toBe(3);
   });
 

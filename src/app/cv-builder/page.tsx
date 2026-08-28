@@ -45,12 +45,10 @@ import {
   fingerprintText,
   resolveAppVersionInfo,
   resolveNextBuildId,
-  storeSimpleV1CvExportDiagnostic,
 } from '@/lib/cv-export-diagnostics';
 import {
   copyExperienceAiDiagnosticsToClipboard,
   ExperienceAiDiagnosticSession,
-  type ExperienceAiDiagnosticTrace,
 } from '@/lib/cv-experience-ai-diagnostics';
 import { SummaryAiDiagnosticSession, resolveAuthoritativeVisibleSummaryText } from '@/lib/cv-summary-ai-diagnostics';
 import { resolveSummaryFinalizeClientOutcome } from '@/lib/cv-summary-noop-ui';
@@ -81,29 +79,6 @@ import {
   type CvSkillOption,
 } from '@/lib/cv-skill-options';
 import { createEmptyCv } from '@/lib/cv-defaults';
-import {
-  getCvEditorContentLocale,
-  getCvSummaryText,
-  isCvSimpleV1Enabled,
-  materializeSimpleV1ContentLocale,
-} from '@/lib/cv-simple-v1';
-import {
-  hashSimpleSummaryText,
-  runSimpleSummaryOperation,
-  storeSimpleSummaryDiagnostic,
-  type SimpleSummaryOperation,
-  type SimpleSummaryStyle,
-} from '@/lib/cv-summary-simple-v1';
-import {
-  buildCvSimpleV1ExportDiagnostic,
-  captureCvRenderSnapshot,
-  describeCvRenderTarget,
-  withCvRenderModelPhoto,
-  type CvExportRenderTargetDescriptor,
-  type CvRenderSnapshot,
-  type CvSimpleV1ExportLifecycle,
-} from '@/lib/cv-render-model-simple-v1';
-import { clearKnownRoleIdentityForManualPositionEdit } from '@/lib/cv-known-role-simple-v1';
 import type { CVData, WorkExperience, Education, Region, TemplateId } from '@/lib/types';
 import { templateInfo, recommendTemplate } from '@/lib/types';
 import {
@@ -119,6 +94,7 @@ import {
 import { buildExperienceDurationSnapshot, durationToPromptToken } from '@/lib/cv-experience-duration';
 import { applyCvContentQuality } from '@/lib/cv-content-quality';
 import {
+  applyFinalizedBulletsToCv,
   finalizeCvAiFieldForApply,
 } from '@/lib/cv-ai-finalize-apply';
 import {
@@ -132,7 +108,6 @@ import {
   type SummaryV2LocalizationTransportInput,
   type SummaryV2SelectionManifest,
 } from '@/lib/cv-summary-v2';
-import { hashSummaryV2Text } from '@/lib/cv-summary-v2/facts';
 import {
   SUMMARY_TRANSACTIONAL_APPLY_387_REVISION,
   createSummaryApplyOwnershipState,
@@ -149,14 +124,6 @@ import {
   validateVisibleExperienceCoverage,
 } from '@/lib/cv-experience-phased-apply-329';
 import {
-  EXPERIENCE_TRANSACTION_OWNERSHIP_414_REVISION,
-  createExperienceApplyOwnershipState,
-  commitExperienceApplyTransactionally,
-  rollbackExperienceApplyTransactionally,
-  releaseExperienceApplyOwnership,
-  shouldAcceptIncomingExperienceCv,
-} from '@/lib/cv-experience-transactional-apply';
-import {
   canonicalizeContentLocale,
   resolveCommittedAppliedVisibleContentLocale,
 } from '@/lib/cv-content-locale';
@@ -172,7 +139,6 @@ import {
 } from '@/lib/cv-experience-provenance';
 import {
   resolveExperienceTextareaProvenance,
-  resolveTrustedUneditedAiOutputLocale,
   EXPERIENCE_AI_OUTPUT_PROVENANCE_304_REVISION,
 } from '@/lib/cv-experience-ai-output-provenance';
 void EXPERIENCE_AI_OUTPUT_PROVENANCE_304_REVISION;
@@ -187,7 +153,6 @@ import {
   EXPERIENCE_UNEDITED_RERUN_PREFLIGHT_317_REVISION,
 } from '@/lib/cv-experience-operation-source-bundle';
 import { analyzeExperienceVisibleSource } from '@/lib/cv-experience-visible-source-analysis';
-import { buildExperienceRequestTimeCleanNoOpSnapshot } from '@/lib/cv-experience-terminal-outcome';
 void EXPERIENCE_UNEDITED_RERUN_PREFLIGHT_317_REVISION;
 import {
   buildExperienceAiNoOpRepairPrompt,
@@ -204,13 +169,8 @@ import {
 import { prepareCreativeArtisticExport } from '@/lib/cv-export-integrity';
 import { prepareCorporateNavyExport } from '@/lib/corporate-navy-export-integrity';
 import {
-  buildPreviewSummarySnapshotId,
-  commitPreviewSummaryLeafEvidence,
-  describePreviewSummaryRender,
   prepareExportReadyCv,
-  sameSnapshotPreviewParityFailure,
   type PrepareExportReadyResult,
-  type PreviewSummaryRenderEvidence,
 } from '@/lib/prepare-export-ready-cv';
 import {
   resolveCvExportSourceAuthority,
@@ -231,12 +191,9 @@ import { loadCvDraft } from '@/lib/draft-storage';
 import { terminalizeAiDiagnosticSession } from '@/lib/cv-ai-diagnostics-terminalize';
 import {
   EXPERIENCE_LOCALIZATION_MAX_SOURCE_TEXT_CHARS,
-  applyTerminalExperiencePresentationSnapshot,
   buildExperienceLocalizationSnapshot,
   experienceDescriptionLocalizationLimitViolation,
-  isTerminalExperiencePresentationReady,
   prepareExperienceLocalizedSurfaces,
-  resolveExperiencePresentationSnapshot,
   type ExperienceLocalizationProviderResponse,
   type ExperienceLocalizationRequest,
   type ExperienceLocalizationDiagnostics,
@@ -265,38 +222,6 @@ import {
 } from '@/lib/elegant-formal-photo';
 
 const emptyCV = createEmptyCv;
-
-/** Keep recovery diagnostics typed and privacy-safe; never serialize server prose. */
-function normalizeRecoveryRejectionReason(
-  data: { code?: unknown; error?: unknown } | null | undefined,
-  response: { ok: boolean; status: number },
-): string {
-  const code = typeof data?.code === 'string' ? data.code.trim() : '';
-  if (/^[a-z][a-z0-9_]{2,63}$/u.test(code)) return code;
-  if (!response.ok) {
-    if (response.status === 422) return 'recovery_validation_failed';
-    if (response.status >= 400 && response.status <= 599) return `recovery_http_${response.status}`;
-  }
-  return response.ok ? 'recovery_empty_candidate' : 'recovery_request_failed';
-}
-
-function recoveryCandidateMetadata(text: string): {
-  recoveryCandidateHash: string | null;
-  recoveryCandidateUnitCount: number;
-  recoveryCandidateUnitHashes: string[];
-} {
-  const units = text
-    .split(/\r?\n/u)
-    .map((line) => line.replace(/^\s*(?:[•*-]|\d+[.)])\s*/u, '').replace(/\s+/gu, ' ').trim())
-    .filter(Boolean);
-  return {
-    recoveryCandidateHash: text.trim()
-      ? fingerprintText(text.replace(/\s+/gu, ' ').trim())
-      : null,
-    recoveryCandidateUnitCount: units.length,
-    recoveryCandidateUnitHashes: units.map((unit) => fingerprintText(unit)),
-  };
-}
 
 const emptyExp = (): WorkExperience => ({
   id: crypto.randomUUID(),
@@ -431,7 +356,7 @@ function recordSummaryLocalizationDiagnostics(
     ...localization.sourceManifest.priors.map((entry) => entry.entryId),
   ]);
   const localizedManifestLocaleByEntryHash = Object.fromEntries(
-    [...selectedIds].map((id) => [fingerprintText(id), localization.targetLocaleByEntryId[id] || null]),
+    [...selectedIds].map((id) => [fingerprintText(id), localization.manifest?.targetLocale || null]),
   );
   const sameLocaleBypassUsedByEntryHash = Object.fromEntries(
     Object.entries(localization.sourceByEntryId).map(([id, source]) => [
@@ -445,13 +370,6 @@ function recordSummaryLocalizationDiagnostics(
       source === 'validated_cache',
     ]),
   );
-  const localizationLineageByEntryHash = Object.fromEntries(
-    Object.entries(localization.lineageByEntryId).map(([id, lineage]) => [
-      fingerprintText(id),
-      lineage,
-    ]),
-  );
-  const failureEvidence = localization.validationFailureEvidence;
   session.patch({
     summarySelectedEntryIdHashes: [...selectedIds].map((id) => fingerprintText(id)),
     summaryOmittedEntryIdHashes: (cv.experience || [])
@@ -459,10 +377,6 @@ function recordSummaryLocalizationDiagnostics(
       .filter((id) => !selectedIds.has(id))
       .map((id) => fingerprintText(id)),
     localizationPrimaryFailureReason: localization.primaryFailureReason,
-    localizationProviderHttpStatus: localization.httpStatus,
-    localizationProviderResponseKind: localization.apiResponseKind,
-    localizationServerFallbackUsed: localization.serverFallbackUsed,
-    localizationClientFallbackUsed: localization.clientFallbackUsed,
     localizationRecoveryAttempted: localization.localizationRecoveryAttempted,
     localizationRecoveryAccepted: localization.localizationRecoveryAccepted,
     localizationSelectedEntryCount: localization.selectedEntryCount,
@@ -473,27 +387,11 @@ function recordSummaryLocalizationDiagnostics(
     localizedManifestLocaleByEntryHash,
     sameLocaleBypassUsedByEntryHash,
     localizedManifestCacheHitByEntryHash,
-    localizationLineageByEntryHash,
-    localizationSurfaceTransportPlans: localization.surfaceTransportPlans,
-    localizationFailureEntryIdHash: failureEvidence
-      ? fingerprintText(failureEvidence.entryId)
-      : null,
-    localizationFailureFactIdHash: failureEvidence?.factId
-      ? fingerprintText(failureEvidence.factId)
-      : null,
-    localizationFailureSurfaceKind: failureEvidence?.surfaceKind || null,
-    localizationFailureTextPreviewHash: failureEvidence?.textPreviewHash || null,
-    localizationFailureDetectedLocale: failureEvidence?.detectedLocale || null,
-    localizationFailureDetectedScript: failureEvidence?.detectedScript || null,
-    localizationFailureTokenClass: failureEvidence?.tokenClass || null,
-    localizationFailureProtectedEntityTokenClasses:
-      failureEvidence?.protectedEntityTokenClasses || [],
   });
 }
 
 export default function CVBuilderPage() {
   const { t, locale } = useI18n();
-  const simpleCvV1Enabled = isCvSimpleV1Enabled();
   const {
     currentCv,
     setCurrentCv,
@@ -507,27 +405,11 @@ export default function CVBuilderPage() {
     lastCvSavedAt,
     getAiGate,
   } = useApp();
-  const [cv, setCv] = useState<CVData>(
-    currentCv || emptyCV(simpleCvV1Enabled ? locale : undefined),
-  );
+  const [cv, setCv] = useState<CVData>(currentCv || emptyCV());
   const cvRef = useRef<CVData>(cv);
   /** Last prepareExportReadyCv result for release diagnostics (non-PII). */
   const lastExportPrepareRef = useRef<PrepareExportReadyResult | null>(null);
   const lastExportRawCvRef = useRef<CVData | null>(null);
-  /** Exact Summary surface last committed to a Preview template render. */
-  const lastPreviewSummaryRenderRef = useRef<PreviewSummaryRenderEvidence | null>(null);
-  /** Presentation-only result of the complete locale-safe PDF/DOCX pipeline. */
-  const [terminalPreviewPresentation, setTerminalPreviewPresentation] = useState<{
-    snapshotId: string;
-    status: 'ready' | 'failed';
-    cv: CVData | null;
-    selectedFinalSummaryHash: string | null;
-  } | null>(null);
-  const terminalPreviewRequestRef = useRef(0);
-  const prepareFinalLocaleSafeCvRef = useRef<((
-    sourceCv: CVData,
-    options?: { purpose?: 'export' | 'preview' },
-  ) => Promise<CVData>) | null>(null);
   const lastExperienceLocalizationRef = useRef<ExperienceLocalizationDiagnostics | null>(null);
   const experienceLocalizationAbortRef = useRef<AbortController | null>(null);
   const exportInFlightRef = useRef(false);
@@ -542,9 +424,7 @@ export default function CVBuilderPage() {
   const latestBulletsContextKeyRef = useRef<Record<string, string>>({});
   const latestRewriteRequestIdRef = useRef<string | null>(null);
   const summaryApplyOwnershipRef = useRef(createSummaryApplyOwnershipState());
-  const experienceApplyOwnershipRef = useRef(createExperienceApplyOwnershipState());
   void SUMMARY_TRANSACTIONAL_APPLY_387_REVISION;
-  void EXPERIENCE_TRANSACTION_OWNERSHIP_414_REVISION;
   const SUMMARY_CVREF_SINGLE_WRITER_REVISION =
     'summary-cvref-single-writer-411-v1' as const;
   void SUMMARY_CVREF_SINGLE_WRITER_REVISION;
@@ -621,13 +501,6 @@ export default function CVBuilderPage() {
       })) {
         return;
       }
-      if (!shouldAcceptIncomingExperienceCv({
-        ownership: experienceApplyOwnershipRef.current,
-        incomingCv: currentCv,
-        localCvRef: cvRef.current,
-      })) {
-        return;
-      }
       setCv(currentCv);
       cvRef.current = currentCv;
     }
@@ -639,13 +512,6 @@ export default function CVBuilderPage() {
     const ownership = summaryApplyOwnershipRef.current;
     const nextHash = hashSummaryTextForApply(cv.summary);
 
-    if (!shouldAcceptIncomingExperienceCv({
-      ownership: experienceApplyOwnershipRef.current,
-      incomingCv: cv,
-      localCvRef: cvRef.current,
-    })) {
-      return;
-    }
     syncCvRefFromReactState({
       cvRef,
       ownership,
@@ -662,14 +528,6 @@ export default function CVBuilderPage() {
   // so preview/PDF/DOCX cannot read a stale pre-migration snapshot.
   useEffect(() => {
     const source = cvRef.current;
-    if (simpleCvV1Enabled) {
-      const initialized = materializeSimpleV1ContentLocale(source, { uiLocale: locale });
-      if (initialized === source) return;
-      cvRef.current = initialized;
-      setCv(initialized);
-      setCurrentCv(initialized);
-      return;
-    }
     if (Number(source.runtimeMigrationVersion || 0) >= CV_RUNTIME_MIGRATION_VERSION) return;
     const migrated = normalizeLegacyCvRuntime(source, locale);
     cvRef.current = migrated;
@@ -686,7 +544,7 @@ export default function CVBuilderPage() {
         experienceCount: (migrated.experience || []).length,
       });
     }
-  }, [locale, setCurrentCv, cv.id, simpleCvV1Enabled]);
+  }, [locale, setCurrentCv, cv.id]);
 
   // ── Autosave: debounce-save to context (which persists to localStorage) ──────
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -705,14 +563,7 @@ export default function CVBuilderPage() {
       if (!gate.flush || !gate.cvToPersist) {
         return;
       }
-      const cvToPersist = shouldAcceptIncomingExperienceCv({
-        ownership: experienceApplyOwnershipRef.current,
-        incomingCv: gate.cvToPersist,
-        localCvRef: cvRef.current,
-      })
-        ? gate.cvToPersist
-        : cvRef.current;
-      setCurrentCv(cvToPersist);
+      setCurrentCv(gate.cvToPersist);
     }, 800);
     return () => {
       if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
@@ -819,28 +670,11 @@ export default function CVBuilderPage() {
   };
 
   const addExperience = () => setCv(prev => ({ ...prev, experience: [...prev.experience, emptyExp()] }));
-  const removeExperience = (id: string) => {
-    releaseExperienceApplyOwnership(experienceApplyOwnershipRef.current, id);
-    setCv(prev => ({ ...prev, experience: prev.experience.filter(e => e.id !== id) }));
-  };
+  const removeExperience = (id: string) => setCv(prev => ({ ...prev, experience: prev.experience.filter(e => e.id !== id) }));
   const updateExperience = (id: string, field: string, value: string | boolean) => {
     // Sync cvRef immediately so AI Improvement can read the latest textarea
     // without waiting for React's post-paint useEffect.
-    if (field === 'description') {
-      releaseExperienceApplyOwnership(experienceApplyOwnershipRef.current, id);
-    }
-    commitCvUpdate((prev) => {
-      const edited = applyCanonicalExperienceEdit(
-        prev,
-        id,
-        field,
-        value,
-        getCvEditorContentLocale(prev, locale, simpleCvV1Enabled),
-      );
-      return simpleCvV1Enabled && field === 'position'
-        ? clearKnownRoleIdentityForManualPositionEdit(edited, id)
-        : edited;
-    });
+    commitCvUpdate((prev) => applyCanonicalExperienceEdit(prev, id, field, value, locale));
   };
 
   const addEducation = () => setCv(prev => ({ ...prev, education: [...prev.education, emptyEdu()] }));
@@ -1170,139 +1004,14 @@ export default function CVBuilderPage() {
     }
   }, [setCurrentCv]);
 
-  // Preview and export start from the same live content authority. React state
-  // supplies only the selected template; cvRef owns the current visible draft.
-  const previewInputCv = resolveCvExportSourceAuthority(cvRef.current, cv.templateId);
-  const simplePreviewSnapshot: CvRenderSnapshot | null = simpleCvV1Enabled
-    ? captureCvRenderSnapshot(previewInputCv)
-    : null;
-  const previewPrimaryExpId = (previewInputCv.experience || []).find((entry) => entry.isPresent)?.id
-    || (previewInputCv.experience || [])[0]?.id;
-  const previewIndustry = previewPrimaryExpId
-    ? (expIndustry[previewPrimaryExpId] ?? 'general')
-    : 'general';
-  const previewLevel = previewPrimaryExpId
-    ? (expLevel[previewPrimaryExpId] ?? 'mid')
-    : 'mid';
-  const previewGender = previewInputCv.personal?.gender;
-  const previewPrepareOptions = useMemo(() => ({
-    gender: previewGender,
-    industry: previewIndustry,
-    level: previewLevel,
-  }), [previewGender, previewIndustry, previewLevel]);
-  const previewInputSnapshotId = simplePreviewSnapshot?.renderModelHash
-    ?? buildPreviewSummarySnapshotId(
-      previewInputCv,
-      locale,
-      previewPrepareOptions,
-    );
-  const matchingTerminalPreview = !simpleCvV1Enabled
-    && terminalPreviewPresentation?.snapshotId === previewInputSnapshotId
-    ? terminalPreviewPresentation
-    : null;
-  const previewDerivationInputCv = matchingTerminalPreview?.status === 'ready'
-    && matchingTerminalPreview.cv
-    ? matchingTerminalPreview.cv
-    : previewInputCv;
-  const previewSourceRuntimeCv: CVData = simplePreviewSnapshot?.model
-    ?? normalizeLegacyCvRuntime(previewInputCv, locale);
-  // Any non-user Summary is app-owned terminal material.  Restricting this
-  // to the three historical origin labels let newer deterministic manifest
-  // results render the stale editor Summary while the async terminal snapshot
-  // was still being acquired.
-  const previewSourceIsAppOwned = previewSourceRuntimeCv.summaryOrigin !== 'user';
-  const terminalPreviewReady = Boolean(
-    matchingTerminalPreview?.status === 'ready' && matchingTerminalPreview.cv,
-  );
-
-  const localizedPreviewPresentation = useMemo<{
-    cv: CVData;
-    summaryRender: PreviewSummaryRenderEvidence | null;
-  }>(
+  const localizedPreviewCv = useMemo<CVData>(
     () => {
-      if (simplePreviewSnapshot) {
-        const personalPhotos = simplePreviewSnapshot.model.personal as CVData['personal'] & {
-          circularPhoto?: string;
-          rectangularPhoto?: string;
-        };
-        if (RECT_PHOTO_TEMPLATES.includes(simplePreviewSnapshot.model.templateId)) {
-          const rectangularPhoto = personalPhotos.rectangularPhoto ?? personalPhotos.photo;
-          return {
-            cv: withCvRenderModelPhoto(
-              simplePreviewSnapshot,
-              rectangularPhoto
-                ? (rectangularPhoto.includes('#') ? rectangularPhoto : `${rectangularPhoto}#rect`)
-                : undefined,
-            ),
-            summaryRender: null,
-          };
-        }
-        return {
-          cv: withCvRenderModelPhoto(
-            simplePreviewSnapshot,
-            personalPhotos.circularPhoto ?? personalPhotos.photo,
-          ),
-          summaryRender: null,
-        };
-      }
-      const migratedCv = normalizeLegacyCvRuntime(previewDerivationInputCv, locale);
-      const appOwnedPreviewSummary = migratedCv.summaryOrigin === 'deterministic_fallback'
-        || migratedCv.summaryOrigin === 'ai_generated'
-        || migratedCv.summaryOrigin === 'ai_repaired';
-      const terminalSelectedSummaryHash = matchingTerminalPreview?.selectedFinalSummaryHash || null;
-      const previewSourceCv = migratedCv;
-      const presentation = resolveExperiencePresentationSnapshot({
-        cv: previewSourceCv,
-        targetLocale: locale,
-      });
-      // Preserve the source-bound Experience terminal snapshot before any
-      // display-only content normalization.  In particular, an app-owned
-      // stale Summary must be validated against its saved ownership surface,
-      // not a quality-normalized fragment that can no longer expose the stale
-      // employer/date attachment.
-      const terminalExperienceCv = applyTerminalExperiencePresentationSnapshot(
-        presentation.cv,
-        presentation,
-      );
-      // Content-quality is not a Summary authority.  Give it either the
-      // already-selected terminal Summary or an empty Summary while the
-      // asynchronous terminal pass is pending, then restore that exact
-      // surface below.  Otherwise the quality helper can synthesize a generic
-      // occupation blurb between Preview renders and mask the pending/selected
-      // terminal decision.
-      const terminalSummaryText = appOwnedPreviewSummary
-        ? terminalPreviewReady && terminalSelectedSummaryHash
-          ? migratedCv.summary || ''
-          : ''
-        : null;
-      const qualityInputCv = terminalSummaryText === null
-        ? terminalExperienceCv
-        : { ...terminalExperienceCv, summary: terminalSummaryText };
-      const qualityCv = applyCvContentQuality(qualityInputCv, locale, {
-        gender: previewSourceCv.personal?.gender,
-        summaryOrigin: previewSourceCv.summaryOrigin,
+      const migratedCv = normalizeLegacyCvRuntime(cv, locale);
+      const qualityCv = applyCvContentQuality(migratedCv, locale, {
+        gender: migratedCv.personal?.gender,
+        summaryOrigin: migratedCv.summaryOrigin,
       }).cv;
-      // The shared presentation snapshot is terminal for Experience display.
-      // Content-quality normalization is allowed to improve other fields, but
-      // must never reconstruct a source-language description after that entry
-      // was intentionally unresolved by the target-aware presentation contract.
-      const terminalPresentationCv = applyTerminalExperiencePresentationSnapshot(
-        qualityCv,
-        presentation,
-      );
-      // The async locale-safe pipeline has already established the selected
-      // final Summary. Content-quality may normalize other Preview fields, but
-      // it must not re-run Summary recovery against that post-final CV or
-      // replace its selected surface. User-authored Summary prose remains on
-      // the ordinary synchronous path.
-      const summaryTerminalCv = appOwnedPreviewSummary
-        // `previewDerivationInputCv` is the asynchronously prepared terminal
-        // CV here.  Restoring its exact Summary after quality normalization
-        // prevents either stale editor prose or a generic quality fallback
-        // from being spliced into the Preview.
-        ? { ...terminalPresentationCv, summary: terminalSummaryText || '' }
-        : terminalPresentationCv;
-      const localeSafeCv = omitInvalidLocalizedFieldsForPreview(summaryTerminalCv, locale);
+      const localeSafeCv = omitInvalidLocalizedFieldsForPreview(qualityCv, locale);
       const base = {
         ...localeSafeCv,
         skills: localeSafeCv.skills.map((skill) => getLocalizedCvSkillName(skill, locale)),
@@ -1311,22 +1020,6 @@ export default function CVBuilderPage() {
           name: getLocalizedCvLanguageName(language.name, locale),
         })),
       };
-      const finalizePreview = (previewCv: CVData) => ({
-        cv: previewCv,
-        // This hashes the exact `data` object supplied to TemplateComponent;
-        // it cannot be a pre-render selected-candidate surrogate.
-        summaryRender: describePreviewSummaryRender(
-          previewCv,
-          null,
-          appOwnedPreviewSummary,
-          {
-            previewSnapshotId: previewInputSnapshotId,
-            previewInputSummaryHash: hashSummaryV2Text(previewCv.summary || ''),
-            previewSourceSummaryHash: hashSummaryV2Text(previewSourceRuntimeCv.summary || ''),
-            selectedFinalSummaryHash: terminalSelectedSummaryHash,
-          },
-        ),
-      });
       if (RECT_PHOTO_TEMPLATES.includes(cv.templateId)) {
         // Rectangle templates: use rectangular photo derived from the original upload.
         // Append '#rect' cache-buster so the browser never reuses a stale circular decode.
@@ -1335,62 +1028,21 @@ export default function CVBuilderPage() {
           : (getPersonalPhotoVariants(cv).rectangularPhoto ?? rectangularPhotoDataUrl ?? cv.personal.photo);
         if (rectUrl) {
           const cacheBustedUrl = rectUrl.includes('#') ? rectUrl : rectUrl + '#rect';
-          return finalizePreview({ ...base, personal: { ...base.personal, photo: cacheBustedUrl } });
+          return { ...base, personal: { ...base.personal, photo: cacheBustedUrl } };
         }
         // No original available — hide photo rather than show circular crop in a rect frame
-        return finalizePreview({ ...base, personal: { ...base.personal, photo: undefined } });
+        return { ...base, personal: { ...base.personal, photo: undefined } };
       }
       // Circle templates: use the circular crop stored in circularPhotoDataUrl.
       // Fall back to cv.personal.photo for any existing data loaded from storage.
       const circleUrl = getPersonalPhotoVariants(cv).circularPhoto ?? circularPhotoDataUrl;
       if (circleUrl) {
-        return finalizePreview({ ...base, personal: { ...base.personal, photo: circleUrl } });
+        return { ...base, personal: { ...base.personal, photo: circleUrl } };
       }
-      return finalizePreview(base);
+      return base;
     },
-    [
-      cv,
-      simplePreviewSnapshot,
-      previewDerivationInputCv,
-      previewSourceRuntimeCv.summary,
-      locale,
-      circularPhotoDataUrl,
-      rectangularPhotoDataUrl,
-      validatedElegantFormalFallbackPhoto,
-      previewInputSnapshotId,
-      terminalPreviewReady,
-      matchingTerminalPreview?.selectedFinalSummaryHash,
-    ],
+    [cv, locale, circularPhotoDataUrl, rectangularPhotoDataUrl, validatedElegantFormalFallbackPhoto],
   );
-
-  const localizedPreviewCv = localizedPreviewPresentation.cv;
-  const previewRenderLocale = simplePreviewSnapshot?.contentLocale ?? locale;
-
-  useEffect(() => {
-    if (!localizedPreviewPresentation.summaryRender) return;
-    const previewRootId = showPreview
-      ? 'cv-preview'
-      : step === steps.length - 1
-        ? 'cv-inline-preview'
-        : null;
-    if (!previewRootId) return;
-    const root = document.getElementById(previewRootId);
-    if (!root) return;
-    // This runs after React commits the selected template leaf. Evidence is
-    // accepted only when the exact Summary supplied in `data` is present in
-    // that real DOM subtree; intended candidates cannot self-certify.
-    lastPreviewSummaryRenderRef.current = commitPreviewSummaryLeafEvidence(
-      localizedPreviewPresentation.summaryRender,
-      localizedPreviewCv.summary || '',
-      root.textContent || '',
-    );
-  }, [
-    localizedPreviewPresentation,
-    localizedPreviewCv.summary,
-    showPreview,
-    step,
-    steps.length,
-  ]);
 
   useEffect(() => {
     if (!selectedLanguageName) return;
@@ -1517,116 +1169,7 @@ export default function CVBuilderPage() {
     return aiGate.status === 'ready' ? aiGate.token : null;
   };
 
-  const handleSimpleSummaryOperation = async (
-    operation: SimpleSummaryOperation,
-    style?: SimpleSummaryStyle,
-  ) => {
-    if (isSummaryGenerating || rewritingStyle) return;
-    const liveCvAtPress = cvRef.current;
-    if (operation === 'rewrite' && !String(liveCvAtPress.summary || '').trim()) {
-      // Simple V1 deliberately has no hidden rewrite-to-generate fallback.
-      toast.error(aiErrorMessage('summary_rewrite_failed', locale));
-      return;
-    }
-    const proToken = getCurrentProTokenOrToast(() => setSummaryAiModal(true));
-    if (!proToken) return;
-
-    if (operation === 'generate') setIsSummaryGenerating(true);
-    else setRewritingStyle(style || 'professional');
-    const controller = new AbortController();
-    const timer = setTimeout(
-      () => controller.abort(),
-      resolveClientAbortTimeoutMs(AI_CLIENT_TIMEOUT_MS),
-    );
-    try {
-      const result = await runSimpleSummaryOperation({
-        operation,
-        ...(style ? { style } : {}),
-        cv: liveCvAtPress,
-        uiLocale: locale,
-        transport: async (request) => {
-          const { data, response } = await apiFetch<{
-            result?: unknown;
-            error?: string;
-            code?: string;
-            providerResultKind?: string;
-          }>('/api/generate', {
-            body: {
-              action: 'summary-simple-v1',
-              proToken,
-              ...request,
-            },
-            signal: controller.signal,
-          });
-          if (!response.ok || data.error) {
-            return {
-              ok: false,
-              resultKind: data.providerResultKind || 'provider_failure',
-              httpStatus: response.status,
-              errorCode: data.code,
-            };
-          }
-          return {
-            ok: true,
-            candidate: data.result,
-            httpStatus: response.status,
-          };
-        },
-        getCurrentCv: () => cvRef.current,
-        applyCv: (nextCv) => {
-          if (!persistCurrentCvTransactionally(nextCv)) return false;
-          cvRef.current = nextCv;
-          setCv(nextCv);
-          return hashSimpleSummaryText(cvRef.current.summary || '')
-            === hashSimpleSummaryText(nextCv.summary || '');
-        },
-        getUsageCount: getProAiUsageCount,
-        incrementUsage: recordProAiSuccess,
-        recordDiagnostic: storeSimpleSummaryDiagnostic,
-      });
-
-      if (result.outcome === 'applied') {
-        if (operation === 'generate') toast.success(t.cv.genSuccess);
-        else toast.success(`${t.cv.rewriteSuccess} (${t.cv[style === 'shorter' ? 'short' : style === 'stronger' ? 'strong' : 'professional']})`);
-        return;
-      }
-      if (result.outcome === 'no_op') {
-        toast.error(aiErrorMessage('ai_noop', locale));
-        return;
-      }
-      if (result.outcome === 'stale') {
-        toast.error(aiErrorMessage('ai_request_stale', locale));
-        return;
-      }
-      const providerCode = result.errorCode === 'request_timeout'
-        ? 'request_timeout'
-        : result.errorCode === 'provider_rate_limited'
-          ? 'provider_rate_limited'
-          : result.errorCode === 'provider_credit_exhausted'
-            ? 'provider_credit_exhausted'
-            : result.errorCode === 'provider_auth_error'
-              ? 'provider_auth_error'
-              : result.errorCode === 'server_rate_limited'
-                ? 'server_rate_limited'
-                : null;
-      toast.error(aiErrorMessage(
-        providerCode || (operation === 'generate' ? 'summary_generation_failed' : 'summary_rewrite_failed'),
-        locale,
-      ));
-    } catch {
-      toast.error(aiErrorMessage('provider_temporarily_unavailable', locale));
-    } finally {
-      clearTimeout(timer);
-      if (operation === 'generate') setIsSummaryGenerating(false);
-      else setRewritingStyle(null);
-    }
-  };
-
   const handleGenSummary = async () => {
-    if (simpleCvV1Enabled) {
-      await handleSimpleSummaryOperation('generate');
-      return;
-    }
     const proToken = getCurrentProTokenOrToast(() => setSummaryAiModal(true));
     if (!proToken) return;
     if (isSummaryGenerating) return;
@@ -1691,10 +1234,8 @@ export default function CVBuilderPage() {
           stage: 'localization',
           reason: localization.reason || 'localization_provider_failed',
           usageAfter: countBefore,
-          localizationHttpStatus: localization.httpStatus,
-          localizationApiResponseKind: localization.apiResponseKind,
-          localizationServerFallbackUsed: localization.serverFallbackUsed,
-          localizationClientFallbackUsed: localization.clientFallbackUsed,
+          httpStatus: localization.httpStatus,
+          apiResponseKind: localization.apiResponseKind,
           serverFallbackUsed: localization.serverFallbackUsed,
           clientFallbackUsed: localization.clientFallbackUsed,
         });
@@ -1712,10 +1253,8 @@ export default function CVBuilderPage() {
           stage: 'localization',
           reason: 'localized_manifest_projection_failed',
           usageAfter: countBefore,
-          localizationHttpStatus: localization.httpStatus,
-          localizationApiResponseKind: 'validation_rejected',
-          localizationServerFallbackUsed: localization.serverFallbackUsed,
-          localizationClientFallbackUsed: localization.clientFallbackUsed,
+          httpStatus: localization.httpStatus,
+          apiResponseKind: 'validation_rejected',
         });
         toast.error(aiErrorMessage('generation_validation_failed', requestedLocale));
         return;
@@ -2266,9 +1805,6 @@ export default function CVBuilderPage() {
           ) as 'canonicalDescription' | 'originalUserDescription',
         }
         : {}),
-      visibleComparisonProvenance: textareaProvenance.currentTextareaProvenance,
-      visibleComparisonMatchedLastAiOutput: textareaProvenance.lastAiOutputHashMatched,
-      visibleComparisonMaterialUserEditDetected: textareaProvenance.materialUserEditDetected,
     });
     const liveSourceEmpty = !operationSnapshot.liveRawText.trim();
 
@@ -2384,6 +1920,12 @@ export default function CVBuilderPage() {
         materialUserEditDetected: textareaProvenance.materialUserEditDetected,
       },
     );
+    diagSession.recordPayloadBuilt({
+      locale: requestedLocale,
+      industryNorm: requestContext.industryNorm,
+      levelNorm: requestContext.levelNorm,
+      isPresent: Boolean(exp.isPresent),
+    });
     // Capture immutable build metadata before provenance/preflight/any early return.
     await diagSession.resolveVersions();
 
@@ -2407,81 +1949,6 @@ export default function CVBuilderPage() {
       } else {
         toast.error(message);
       }
-    };
-
-    /**
-     * Provider/API failure is not itself evidence that the visible textarea is
-     * invalid. Re-run the complete local no-op gate against the immutable
-     * request snapshot before surfacing the provider failure to the user.
-     */
-    const recoverProviderFailureAsLocalNoOp = (options: {
-      httpStatus: number | null;
-      attempted: boolean;
-      errorCode?: string | null;
-    }): boolean => {
-      const currentCv = cvRef.current;
-      const currentEntry = currentCv.experience.find(
-        (entry) => entry.id === clickedExperienceEntryId,
-      );
-      const currentContext = buildExperienceJobContext({
-        position: currentEntry?.position,
-        industry,
-        locale: requestedLocale,
-        level,
-      });
-      const latestId = latestBulletsRequestIdRef.current[clickedExperienceEntryId];
-      const latestContext = latestBulletsContextKeyRef.current[clickedExperienceEntryId];
-      const currentText = String(currentEntry?.description || '').trim();
-      const requestText = operationSnapshot.visibleComparisonRawText.trim();
-      const requestStillCurrent = Boolean(currentEntry)
-        && latestId === reqCtx.requestId
-        && latestContext === requestContext.key
-        && experienceJobContextsMatch(currentContext.key, requestContext.key)
-        && fingerprintText(currentText.replace(/\s+/g, ' ').trim())
-          === fingerprintText(requestText.replace(/\s+/g, ' ').trim());
-      if (!requestStillCurrent || !currentText) return false;
-
-      const finalized = finalizeCvAiFieldForApply({
-        action: 'experience_bullets',
-        field: 'experience_description',
-        requestedLocale,
-        gender: currentCv.personal.gender || '',
-        cv: currentCv,
-        candidate: currentText,
-        experienceId: clickedExperienceEntryId,
-        industry,
-        level,
-        jobContext: requestContext,
-        operationSnapshot,
-        earlyUneditedRerunNoOp: true,
-      });
-      if (
-        finalized.diagnostics?.earlyNoOpPreflightPassed !== true
-        || finalized.diagnostics?.semanticNoOpDetected !== true
-        || finalized.diagnostics?.finalDecisionKind !== 'semantic_noop'
-      ) {
-        return false;
-      }
-
-      diagSession.recordProviderFailureRecoveredNoOp(finalized, options);
-      finishAiClientRequest({
-        ctx: reqCtx,
-        isProVerified: true,
-        countBefore,
-        countAfter: countBefore,
-        httpStatus: options.httpStatus,
-        error: null,
-        responseSource: 'blocked',
-      });
-      diagSession.recordVisibleApply(false, countBefore);
-      diagSession.commit();
-      logExperienceAiTrace({
-        resultApplied: false,
-        rejectedReason: 'experience_ai_noop_after_provider_failure',
-        aiUsageIncremented: false,
-      });
-      toast.error(aiErrorMessage('ai_noop', requestedLocale));
-      return true;
     };
 
     const logExperienceAiTrace = (partial: Partial<ExperienceAiJobContextTrace>) => {
@@ -2541,54 +2008,30 @@ export default function CVBuilderPage() {
         visibleText: liveDescription,
         targetLocale: requestedLocale,
         isPresent: Boolean(exp.isPresent),
-        // An unedited output that still matches its write-time provenance has
-        // stronger locale authority than a stale document-level contentLocale.
-        // Edited/wrong-entry/changed-target text receives no override.
-        trustedLocale: resolveTrustedUneditedAiOutputLocale({
-          exp,
-          provenance: textareaProvenance,
-          requestedLocale,
-        }),
-        generatedLocale: (exp as WorkExperience & { generatedLocale?: string })?.generatedLocale
-          || null,
         storedLocale: operationalContentLocale || requestedLocale,
       });
-      const visibleCoverageForPreflight = validateVisibleExperienceCoverage({
-        sourceDescription: factAuthorityForPreflight,
-        visibleText: liveDescription,
-        targetLocale: requestedLocale,
-        finalNormalizedHash: fingerprintText(
-          liveDescription.replace(/\s+/g, ' ').trim(),
-        ),
-        isPresent: Boolean(exp.isPresent),
-      });
-      const independentVisibleValidationPassed =
-        visibleCoverageForPreflight.visibleFactCoveragePassed
-        && (!visibleCoverageForPreflight.visiblePredicateValidationApplicable
-          || visibleCoverageForPreflight.visiblePredicateCoveragePassed)
-        && visibleCoverageForPreflight.visibleLocaleValidationPassed
-        && visibleCoverageForPreflight.visiblePerspectiveValidationPassed
-        && visibleCoverageForPreflight.visibleNativeMorphologyValidationPassed
-        && (requestedLocale !== 'es'
-          || visibleAnalysisForPreflight.sourceTenseValidationPassed === true);
       const earlyNoOp = evaluateUneditedRerunEarlyNoOpPreflight({
         bundle: sourceBundleForPreflight,
         visibleSourceAnalysis: visibleAnalysisForPreflight,
         sourceWasEmpty: liveSourceEmpty,
         raceOrStaleDetected: false,
-        independentVisibleValidationPassed,
       });
       if (earlyNoOp.earlyNoOpPreflightPassed) {
         clearTimeout(timer);
-        const terminalSnapshot = buildExperienceRequestTimeCleanNoOpSnapshot({
-          sourceBundle: sourceBundleForPreflight,
-          preflight: earlyNoOp,
-          visibleAuthority: visibleAnalysisForPreflight,
-          visibleCoverage: visibleCoverageForPreflight,
+        const earlyFinalized = finalizeCvAiFieldForApply({
+          action: 'experience_bullets',
+          field: 'experience_description',
           requestedLocale,
-          entryGeneratedLocaleBeforeApply:
-            (exp as WorkExperience & { generatedLocale?: string }).generatedLocale || null,
-          contentLocaleDocument: liveCv.contentLocale || null,
+          gender: liveCv.personal.gender || '',
+          cv: liveCv,
+          candidate: '',
+          experienceId: clickedExperienceEntryId,
+          industry,
+          level,
+          jobContext: requestContext,
+          operationSnapshot,
+          jobContextHash: requestContext.key,
+          earlyUneditedRerunNoOp: true,
         });
         finishAiClientRequest({
           ctx: reqCtx,
@@ -2599,9 +2042,27 @@ export default function CVBuilderPage() {
           error: null,
           responseSource: 'blocked',
         });
-        diagSession.recordRequestTimeCleanNoOpTerminal(terminalSnapshot);
+        diagSession.recordFinalizeResult(earlyFinalized);
         // Clean no-op terminalizer already set stages — do not call recordVisibleApply(false).
         await diagSession.resolveVersions();
+        diagSession.patch({
+          providerAttempted: false,
+          earlyNoOpPreflightPassed: true,
+          uneditedRerunDetected: true,
+          semanticNoOpDetected: true,
+          semanticNoOpReason: 'unedited_ai_output_already_valid',
+          degradationDetected: false,
+          degradationKinds: [],
+          finalDecisionKind: 'semantic_noop',
+          finalOutcomeReason: 'experience_ai_noop',
+          rejectionStage: null,
+          finalTypedFailureReason: null,
+          finalBulletCount: 0,
+          finalBulletScripts: [],
+          providerNoOpDetected: false,
+          apiResponseKind: 'not_attempted',
+          providerResponseKind: 'not_attempted',
+        });
         diagSession.commit();
         logExperienceAiTrace({
           resultApplied: false,
@@ -2609,16 +2070,9 @@ export default function CVBuilderPage() {
           aiUsageIncremented: false,
         });
         setGeneratingBulletsId(null);
-        toast.error(aiErrorMessage('ai_noop', requestedLocale));
         return;
       }
 
-      diagSession.recordPayloadBuilt({
-        locale: requestedLocale,
-        industryNorm: requestContext.industryNorm,
-        levelNorm: requestContext.levelNorm,
-        isPresent: Boolean(exp.isPresent),
-      });
       const requestBody = {
         action: 'bullets',
         proToken,
@@ -2642,84 +2096,11 @@ export default function CVBuilderPage() {
         requestId: reqCtx.requestId,
       };
 
-      const apiResult = await apiFetch<{ result?: string; error?: string; code?: string; retryAfter?: number; repairAttempted?: boolean; fallbackUsed?: boolean; providerPhase?: { candidatePresent?: boolean; requiredFactCount?: number; coveredFactCount?: number; uncoveredSourceIndexes?: number[]; semanticArgumentAdditionCount?: number; addedPredicateCount?: number; addedPredicateIdentityHashes?: string[]; accepted?: boolean } }>('/api/generate', {
+      const { data: bulletsData, response: res } = await apiFetch<{ result?: string; error?: string; code?: string; retryAfter?: number; repairAttempted?: boolean; fallbackUsed?: boolean }>('/api/generate', {
         body: requestBody,
         signal: controller.signal,
       });
-      let bulletsData = apiResult.data;
-      const res = apiResult.response;
 
-      let providerFailureRecovery: { code: string; payload: ReturnType<typeof resolveAiHttpFailure> } | null = null;
-      let recoveryAttempted = false;
-      let recoveryHttpStatus: number | null = null;
-      let recoveryCandidatePresent = false;
-      let recoveryCandidateText = '';
-      let recoveryAccepted: boolean | null = null;
-      let recoverySelected = false;
-      let recoveryRejectionReasons: string[] = [];
-      let rejectedProviderDiagnostics: Partial<ExperienceAiDiagnosticTrace> | null = null;
-      const isRecoverableExperienceValidationReason = (reason: string): boolean => (
-        Boolean(reason)
-        && !/(?:authorization|forbidden|race|entry[_-]?mismatch|stale|timeout|client_abort|cancel)/i.test(reason)
-        && /(?:validation|predicate|fact|coverage|locale|tense|perspective|unsupported|scope|duty|material)/i.test(reason)
-      );
-      const attemptProviderErrorRecovery = async (reason: string): Promise<void> => {
-        if (recoveryAttempted || !isRecoverableExperienceValidationReason(reason)) return;
-        recoveryAttempted = true;
-        const recoveryPrompt = [
-          'EXPERIENCE PROVIDER-ERROR RECOVERY REQUIRED.',
-          `Produce a fresh, safe ${requestedLocale} Experience result after the previous provider validation error.`,
-          'Use ONLY the immutable SOURCE FACTS below as authority. The previous visible textarea is not a fact source.',
-          'Preserve the exact entry identity, employment state, gender/perspective and every source duty.',
-          'Preserve material/media, purpose/condition, review/quality and project/team relations exactly where stated.',
-          'Do not add tools, systems, metrics, leadership, frequency, universal scope or responsibility escalation.',
-          'Return one bullet per source fact, in source order, in the requested locale and employment tense.',
-          `Employment state: ${exp.isPresent ? 'current/present' : 'completed/past'}.`,
-          cvRef.current.personal.gender
-            ? `Gender/perspective: ${cvRef.current.personal.gender}.`
-            : '',
-          'SOURCE FACTS (immutable):',
-          (factAuthorityForPreflight || aiGrounding.sourceDescription).slice(0, 4000),
-        ].filter(Boolean).join('\n');
-        try {
-          const recoveryResult = await apiFetch<{
-            result?: string;
-            error?: string;
-            code?: string;
-            repairAttempted?: boolean;
-            fallbackUsed?: boolean;
-          }>('/api/generate', {
-            body: {
-              ...requestBody,
-              noopRepair: true,
-              previousOutput: '',
-              repairPromptHint: recoveryPrompt,
-            },
-            signal: controller.signal,
-          });
-          recoveryHttpStatus = recoveryResult.response.status;
-          recoveryCandidateText = (recoveryResult.data?.result || '').trim();
-          recoveryCandidatePresent = Boolean(
-            recoveryResult.response.ok
-            && recoveryCandidateText
-            && !recoveryResult.data?.error,
-          );
-          if (!recoveryCandidatePresent) {
-            recoveryRejectionReasons = [normalizeRecoveryRejectionReason(
-              recoveryResult.data,
-              recoveryResult.response,
-            )];
-            recoveryCandidateText = '';
-          }
-        } catch {
-          recoveryRejectionReasons = ['recovery_request_failed'];
-          recoveryCandidateText = '';
-        }
-        if (!recoveryCandidatePresent) {
-          recoveryAccepted = false;
-          recoverySelected = false;
-        }
-      };
       if (!res.ok || bulletsData?.error) {
         if (res.status === 403) {
           const payload = resolveAiHttpFailure({ response: res, body: bulletsData });
@@ -2748,44 +2129,27 @@ export default function CVBuilderPage() {
           return;
         }
         const payload = resolveAiHttpFailure({ response: res, body: bulletsData });
-        if (recoverProviderFailureAsLocalNoOp({
+        const msg = finishAiClientRequest({
+          ctx: reqCtx,
+          isProVerified: true,
+          countBefore,
+          countAfter: countBefore,
           httpStatus: res.status,
-          attempted: true,
-          errorCode: payload.code || 'provider_http_failure',
-        })) {
-          return;
-        }
-        // A provider/validation error is not itself a terminal product result.
-        // Continue through the exact same immutable-source finalizer used for
-        // rejected provider candidates. It will select a safe cross-locale or
-        // deterministic fallback only when every existing gate passes.
-        providerFailureRecovery = {
-          code: payload.code || 'provider_http_failure',
-          payload,
-        };
-        const recoverableValidationFailure = res.status === 422
-          || /(?:generation|provider).*validation|validation_failed/i.test(
-            payload.code || '',
-          );
-        if (recoverableValidationFailure) {
-          await attemptProviderErrorRecovery(payload.code || 'provider_validation_failed');
-        }
-        bulletsData = {
-          ...(bulletsData || {}),
-          result: recoveryCandidateText,
-          error: recoveryCandidateText ? undefined : (payload.code || 'provider_http_failure'),
-          repairAttempted: Boolean(recoveryCandidateText),
-          fallbackUsed: false,
-        };
-        diagSession.patch({
-          recoveryAttempted,
-          recoveryHttpStatus,
-          recoveryCandidatePresent,
-          recoveryAccepted,
-          recoveryRejectionReasons,
-          recoverySelected,
-          ...recoveryCandidateMetadata(recoveryCandidateText),
+          error: payload,
         });
+        diagSession.recordApiResponse({
+          httpStatus: res.status,
+          errorCode: payload.code || 'http_error',
+        });
+        diagSession.recordVisibleApply(false, countBefore);
+        diagSession.commit();
+        showExperienceAiRejectToast(msg ?? aiErrorMessage('provider_temporarily_unavailable', locale));
+        logExperienceAiTrace({
+          resultApplied: false,
+          rejectedReason: payload.code || 'http_error',
+          aiUsageIncremented: false,
+        });
+        return;
       }
 
       // Stale-response guard: requestId + job-context must both still match.
@@ -2804,7 +2168,6 @@ export default function CVBuilderPage() {
         repairAttempted: Boolean(bulletsData.repairAttempted),
         fallbackUsed: Boolean(bulletsData.fallbackUsed),
         resultText: bulletsData.result || '',
-        errorCode: providerFailureRecovery?.code,
       });
       if (
         latestId !== reqCtx.requestId
@@ -2835,9 +2198,7 @@ export default function CVBuilderPage() {
         return;
       }
       diagSession.recordRaceCheck(true, undefined, liveContext.key);
-      const newDescription = providerFailureRecovery
-        ? recoveryCandidateText
-        : (bulletsData.result || '');
+      const newDescription = bulletsData.result || '';
       const finalizeInputBase = {
         action: 'experience_bullets' as const,
         field: 'experience_description' as const,
@@ -2854,153 +2215,21 @@ export default function CVBuilderPage() {
         level,
         jobContext: requestContext,
         operationSnapshot,
-        providerPhaseDiagnostics: bulletsData.providerPhase,
       };
       let finalizedBullets = finalizeCvAiFieldForApply({
         ...finalizeInputBase,
         candidate: newDescription,
-        originHint: providerFailureRecovery
-          ? 'ai_repaired'
-          : bulletsData.fallbackUsed
+        originHint: bulletsData.fallbackUsed
           ? 'deterministic_fallback'
           : bulletsData.repairAttempted
             ? 'ai_repaired'
             : 'ai_generated',
       });
-      if (!providerFailureRecovery && !finalizedBullets.countedAsSuccess) {
-        const candidateDiagnostics = (finalizedBullets.diagnostics || {}) as Partial<ExperienceAiDiagnosticTrace>;
-        const candidateDiagnosticsUnknown = candidateDiagnostics as Record<string, unknown>;
-        rejectedProviderDiagnostics = candidateDiagnostics;
-        const providerReason = String(
-          candidateDiagnosticsUnknown.providerRejectionReason
-          || (Array.isArray(candidateDiagnostics.providerRejectionReasons)
-            ? candidateDiagnostics.providerRejectionReasons[0]
-            : '')
-          || finalizedBullets.reason
-          || candidateDiagnosticsUnknown.typedFailureReason
-          || '',
-        );
-        // A parsed HTTP-200 provider candidate can fail the same typed
-        // validation gates as a transport/422 response. Route only those
-        // recoverable validation failures through the bounded server repair;
-        // authorization, races, timeouts and entry mismatches remain terminal.
-        if (isRecoverableExperienceValidationReason(providerReason)) {
-          providerFailureRecovery = {
-            code: providerReason,
-            payload: resolveAiHttpFailure({
-              response: res,
-              body: { code: providerReason },
-            }),
-          };
-          await attemptProviderErrorRecovery(providerReason);
-          bulletsData = {
-            ...(bulletsData || {}),
-            result: recoveryCandidateText,
-            repairAttempted: Boolean(recoveryCandidateText),
-            fallbackUsed: false,
-          };
-          if (recoveryCandidatePresent) {
-            finalizedBullets = finalizeCvAiFieldForApply({
-              ...finalizeInputBase,
-              candidate: recoveryCandidateText,
-              originHint: 'ai_repaired',
-            });
-          }
-        }
-      }
-      if (providerFailureRecovery && recoveryCandidatePresent) {
-        const finalizerAccepted = Boolean(
-          finalizedBullets.countedAsSuccess && !finalizedBullets.blocked,
-        );
-        recoveryAccepted = finalizerAccepted;
-        recoverySelected = finalizerAccepted;
-        if (!finalizerAccepted) {
-          recoveryRejectionReasons = [
-            ...recoveryRejectionReasons,
-            finalizedBullets.reason
-              || finalizedBullets.diagnostics?.typedFailureReason
-              || 'recovery_candidate_rejected',
-          ];
-        }
-        diagSession.patch({
-          recoveryAccepted,
-          recoverySelected,
-          recoveryRejectionReasons,
-          finalCandidateSource: finalizerAccepted
-            ? 'server_repair'
-            : 'none',
-        });
-      }
-      const providerPhaseFields = rejectedProviderDiagnostics
-        ? {
-          providerResponseKind: 'provider' as const,
-          apiResponseKind: 'provider' as const,
-          providerAccepted: false,
-          providerPrimaryCandidateValidationAccepted: false,
-          providerValidationApplicable:
-            rejectedProviderDiagnostics.providerValidationApplicable ?? true,
-          providerBulletCount: rejectedProviderDiagnostics.providerBulletCount ?? null,
-          providerRequiredFactCount: rejectedProviderDiagnostics.providerRequiredFactCount ?? null,
-          providerCoveredFactCount: rejectedProviderDiagnostics.providerCoveredFactCount ?? null,
-          providerUncoveredFactCount: rejectedProviderDiagnostics.providerUncoveredFactCount ?? null,
-          providerUncoveredFactIdentityHashes:
-            Array.isArray(rejectedProviderDiagnostics.providerUncoveredFactIdentityHashes)
-              ? rejectedProviderDiagnostics.providerUncoveredFactIdentityHashes.map(String)
-              : [],
-          providerPredicateValidationApplicable:
-            rejectedProviderDiagnostics.providerPredicateValidationApplicable ?? null,
-          providerSourceUnitPredicateCoveragePassed:
-            rejectedProviderDiagnostics.providerSourceUnitPredicateCoveragePassed ?? null,
-          providerLocalePurityPassed: rejectedProviderDiagnostics.providerLocalePurityPassed ?? null,
-          providerSemanticCoveragePassed: rejectedProviderDiagnostics.providerSemanticCoveragePassed ?? null,
-          providerCoverageCount: rejectedProviderDiagnostics.providerCoverageCount ?? null,
-          providerRejectionReasons:
-            Array.isArray(rejectedProviderDiagnostics.providerRejectionReasons)
-              ? rejectedProviderDiagnostics.providerRejectionReasons.map(String)
-              : [providerFailureRecovery?.code || 'provider_validation_failed'],
-          providerRejectionStage:
-            String(rejectedProviderDiagnostics.providerRejectionStage || 'provider_validation'),
-        }
-        : {
-          providerResponseKind: 'error' as const,
-          apiResponseKind: 'error' as const,
-          providerAccepted: false,
-          providerPrimaryCandidateValidationAccepted: null,
-          providerValidationApplicable: null,
-          providerBulletCount: null,
-          providerRequiredFactCount: null,
-          providerCoveredFactCount: null,
-          providerUncoveredFactCount: null,
-          providerUncoveredFactIdentityHashes: [],
-          providerPredicateValidationApplicable: null,
-          providerSourceUnitPredicateCoveragePassed: null,
-          providerLocalePurityPassed: null,
-          providerSemanticCoveragePassed: null,
-          providerCoverageCount: null,
-          providerRejectionReasons: [providerFailureRecovery?.code || 'provider_http_failure'],
-          providerRejectionStage: 'api_response_received',
-        };
-      if (providerFailureRecovery) {
-        diagSession.patch({
-          providerHttpStatus: res.status,
-          providerAttempted: true,
-          ...providerPhaseFields,
-          clientDeterministicFallbackReason:
-            finalizedBullets.diagnostics?.clientDeterministicFallbackReason
-            || 'provider_validation_error_recovery',
-          recoveryAttempted,
-          recoveryHttpStatus,
-          recoveryCandidatePresent,
-          recoveryAccepted,
-          recoveryRejectionReasons,
-          recoverySelected,
-        });
-      }
 
       // Recoverable provider echo: one dedicated no-op repair, then deterministic fallback.
       let noOpRepairAttempted = false;
       let noOpRepairHttpStatus: number | null = null;
-      if (!providerFailureRecovery && isRecoverableExperienceProviderNoOp(finalizedBullets)) {
+      if (isRecoverableExperienceProviderNoOp(finalizedBullets)) {
         diagSession.patch({
           providerNoOpDetected: true,
           noOpRejected: true,
@@ -3081,30 +2310,6 @@ export default function CVBuilderPage() {
       }
 
       diagSession.recordFinalizeResult(finalizedBullets);
-      if (providerFailureRecovery) {
-        // recordFinalizeResult intentionally mirrors any provider-candidate
-        // fields exposed by the finalizer. For an HTTP/validation terminal,
-        // however, no provider candidate was evaluated: keep those fields
-        // explicitly N/A and preserve the actual local fallback evidence. A
-        // parsed HTTP-200 candidate has evaluated provider fields instead.
-        diagSession.patch({
-          providerHttpStatus: res.status,
-          providerAttempted: true,
-          ...providerPhaseFields,
-          clientDeterministicFallbackReason:
-            finalizedBullets.diagnostics?.clientDeterministicFallbackReason
-            || 'provider_validation_error_recovery',
-          recoveryAttempted,
-          recoveryHttpStatus,
-          recoveryCandidatePresent,
-          recoveryAccepted,
-          recoveryRejectionReasons,
-          recoverySelected,
-          finalCandidateSource: recoveryAccepted
-            ? 'server_repair'
-            : 'none',
-        });
-      }
       // Re-assert stable clicked entry targeting after finalize (never inherit prior card).
       diagSession.recordExperienceEntryTarget({
         experienceEntryId: clickedExperienceEntryId,
@@ -3214,6 +2419,15 @@ export default function CVBuilderPage() {
         || exp.description
         || '',
       );
+      const previousGeneratedLocale = (
+        previousTargetEntry as { generatedLocale?: string } | undefined
+      )?.generatedLocale || null;
+      const previousGeneratedDescription = String(
+        (previousTargetEntry as { generatedDescription?: string } | undefined)
+          ?.generatedDescription
+        || previousTargetText,
+      );
+      const previousTargetHash = fingerprintText(previousTargetText.replace(/\s+/g, ' ').trim());
       const finalNormalizedHash = String(
         finalizedBullets.diagnostics?.finalNormalizedHash
         || fingerprintText((finalizedBullets.text || '').replace(/\s+/g, ' ').trim()),
@@ -3221,18 +2435,6 @@ export default function CVBuilderPage() {
       const authoritativeSourceForVisible = String(
         aiGrounding.sourceDescription || previousTargetText,
       );
-      let currentVisibleTextAtWrite = String(previousTargetEntry?.description || '');
-      if (typeof document !== 'undefined') {
-        const escapedId = typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
-          ? CSS.escape(clickedExperienceEntryId)
-          : clickedExperienceEntryId.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-        const domField = document.querySelector(
-          `[data-experience-description-id="${escapedId}"]`,
-        ) as HTMLTextAreaElement | null;
-        if (domField && typeof domField.value === 'string') {
-          currentVisibleTextAtWrite = domField.value;
-        }
-      }
       diagSession.patch({
         applyAuthorized: true,
         applyAttempted: true,
@@ -3244,94 +2446,35 @@ export default function CVBuilderPage() {
         attemptedApplyCandidateHash: finalNormalizedHash,
         entryGeneratedLocaleBeforeApply:
           (finalizedBullets.diagnostics?.entryGeneratedLocaleBeforeApply as string | undefined)
-          || (previousTargetEntry as { generatedLocale?: string } | undefined)?.generatedLocale
-          || null,
+          || previousGeneratedLocale,
         visibleTextareaLocaleBeforeApply:
           (finalizedBullets.diagnostics?.visibleTextareaLocaleBeforeApply as string | undefined)
           || (finalizedBullets.diagnostics?.visibleTextareaLocale as string | undefined)
           || null,
       });
-      const applyTransaction = commitExperienceApplyTransactionally({
-        cvRef,
-        ownership: experienceApplyOwnershipRef.current,
-        locale: requestedLocale,
-        experienceId: clickedExperienceEntryId,
-        finalized: finalizedBullets,
-        operationSourceText: operationSnapshot.visibleComparisonRawText,
-        currentVisibleText: currentVisibleTextAtWrite,
-        operationId: reqCtx.requestId,
-        jobContext: requestContext,
-        scheduleReactCv: (next) => setCv(next),
+      diagSession.stage('temporary_visible_write', 'ok');
+      let writtenVisibleText = '';
+      commitCvUpdate((prev) => {
+        if (!prev.experience.some((e) => e.id === clickedExperienceEntryId)) {
+          return prev;
+        }
+        const next = applyFinalizedBulletsToCv(
+          prev,
+          requestedLocale,
+          clickedExperienceEntryId,
+          finalizedBullets,
+          requestContext,
+        );
+        writtenVisibleText = String(
+          (next.experience || []).find((e) => e.id === clickedExperienceEntryId)?.description || '',
+        );
+        return next;
       });
-      diagSession.patch({
-        experienceApplyOperationSourceHash: applyTransaction.lifecycle.operationSourceHash,
-        experienceApplySelectedFinalHash: applyTransaction.lifecycle.selectedFinalHash,
-        experienceApplyCvRefHashBeforeWrite: applyTransaction.lifecycle.cvRefHashBeforeWrite,
-        experienceApplyFormHashBeforeWrite: applyTransaction.lifecycle.formHashBeforeWrite,
-        experienceApplyTransactionWrittenHash: applyTransaction.lifecycle.transactionWrittenHash,
-        experienceApplyCvRefHashImmediatelyAfterWrite:
-          applyTransaction.lifecycle.cvRefHashImmediatelyAfterWrite,
-        experienceApplyTransactionEntryIdHash:
-          applyTransaction.lifecycle.transactionEntryIdHash,
-        experienceApplyOperationIdHash: applyTransaction.lifecycle.operationIdHash,
-        experienceApplyOwnershipPassed: applyTransaction.lifecycle.applyOwnershipPassed,
-        experienceApplyActualRaceDetected: applyTransaction.lifecycle.actualRaceDetected,
-        experienceApplyActualRaceReason: applyTransaction.lifecycle.actualRaceReason,
-        experienceApplyPostWriteReadSource: applyTransaction.lifecycle.postWriteReadSource,
-        experienceApplyFailureKind: applyTransaction.lifecycle.failureKind,
-      });
-      diagSession.stage(
-        'temporary_visible_write',
-        applyTransaction.ok ? 'ok' : 'fail',
-        applyTransaction.lifecycle.failureKind === 'none'
-          ? undefined
-          : applyTransaction.lifecycle.failureKind,
-      );
-
-      if (applyTransaction.lifecycle.actualRaceDetected) {
-        diagSession.patch({
-          applyWriteSucceeded: false,
-          visibleValidationAttempted: false,
-          visibleValidationPassed: false,
-          rollbackAttempted: false,
-          rollbackSucceeded: null,
-          applyCommitted: false,
-          targetContentApplied: false,
-          contentLocaleUpdatedAfterApply: false,
-          translationFallbackApplied: false,
-          appliedVisibleContentLocale: null,
-          appliedExperienceEntryIdHash: null,
-          countedAsSuccess: false,
-          finalTypedFailureReason: 'stale_experience_edited_in_flight',
-          rejectionStage: 'compare_and_swap_source',
-        });
-        const msg = finishAiClientRequest({
-          ctx: reqCtx,
-          isProVerified: true,
-          countBefore,
-          countAfter: countBefore,
-          httpStatus: res.status,
-          error: { code: 'generation_validation_failed', httpStatus: 422 },
-          responseSource: 'blocked',
-        });
-        logExperienceAiTrace({
-          resultApplied: false,
-          rejectedReason: 'stale_experience_edited_in_flight',
-          aiUsageIncremented: false,
-        });
-        diagSession.recordVisibleApply(false, countBefore);
-        diagSession.commit();
-        showExperienceAiRejectToast(msg ?? aiErrorMessage('generation_validation_failed', locale));
-        return;
-      }
-
-      const transactionWrittenCv = applyTransaction.writtenCv;
-      const visibleEntry = (transactionWrittenCv?.experience || []).find(
+      const visibleEntry = (cvRef.current.experience || []).find(
         (e) => e.id === clickedExperienceEntryId,
       );
-      const visibleText = String(applyTransaction.writtenDescription || '');
-      const writeSucceeded = applyTransaction.ok
-        && Boolean(visibleText.trim())
+      const visibleText = String(visibleEntry?.description || writtenVisibleText || '');
+      const writeSucceeded = Boolean(visibleText.trim())
         && visibleText.trim() === (finalizedBullets.text || '').trim();
       diagSession.patch({
         applyWriteSucceeded: writeSucceeded,
@@ -3342,24 +2485,19 @@ export default function CVBuilderPage() {
         visibleText,
         targetLocale: requestedLocale,
         finalNormalizedHash,
-        isPresent: Boolean(exp.isPresent),
       });
       const visibleEntryStillExists = Boolean(visibleEntry);
-      const visiblePerspectiveReason = visibleCov.visiblePersonMode === 'first_singular'
-        ? 'experience_cv_perspective_first_person'
-        : 'experience_cv_perspective_unproven';
       const visibleAppliedEntryIdHash = visibleEntryStillExists
         ? String(
           finalizedBullets.diagnostics?.selectedExperienceEntryIdHash
-          || applyTransaction.lifecycle.transactionEntryIdHash,
+          || '',
         )
         : null;
       const visibleOk = writeSucceeded
         && visibleCov.visibleDescriptionMatchesFinalHash
-        && visibleCov.visibleLocaleValidationPassed
-        && visibleCov.visiblePerspectiveValidationPassed
         && (
-          !visibleCov.visiblePredicateValidationApplicable
+          requestedLocale !== 'en'
+          || !visibleCov.visiblePredicateValidationApplicable
           || (
             visibleCov.visibleFactCoveragePassed
             && visibleCov.visiblePredicateCoveragePassed
@@ -3371,6 +2509,8 @@ export default function CVBuilderPage() {
         visibleAppliedEntryIdHash,
         visibleTenseValidationPassed:
           finalizedBullets.diagnostics?.tenseValidationPassed !== false,
+        visiblePerspectiveValidationPassed:
+          finalizedBullets.diagnostics?.perspectiveValidationPassed !== false,
         visibleValidationPassed: visibleOk,
         visibleTextareaMatchesFinalNormalizedHash:
           visibleCov.visibleDescriptionMatchesFinalHash,
@@ -3397,19 +2537,11 @@ export default function CVBuilderPage() {
         finalizedBullets.diagnostics?.tenseValidationPassed !== false ? 'ok' : 'fail',
       );
       diagSession.stage(
-        'visible_perspective_validation',
-        visibleCov.visiblePerspectiveValidationPassed ? 'ok' : 'fail',
-        visibleCov.visiblePerspectiveValidationPassed
-          ? undefined
-          : visiblePerspectiveReason,
-      );
-      diagSession.stage(
         'visible_hash_validation',
         visibleCov.visibleDescriptionMatchesFinalHash ? 'ok' : 'fail',
       );
 
       if (!visibleOk) {
-        const actualWriteFailure = !applyTransaction.ok;
         diagSession.patch({
           rollbackAttempted: true,
           applyCommitted: false,
@@ -3419,23 +2551,39 @@ export default function CVBuilderPage() {
           appliedVisibleContentLocale: null,
           appliedExperienceEntryIdHash: null,
           countedAsSuccess: false,
-          finalTypedFailureReason: actualWriteFailure
-            ? 'visible_apply_write_failed'
-            : (!visibleCov.visiblePerspectiveValidationPassed
-              ? visiblePerspectiveReason
-              : 'visible_apply_validation_failed'),
-          rejectionStage: !visibleCov.visiblePerspectiveValidationPassed
-            ? 'visible_apply:perspective'
-            : 'visible_apply',
+          finalTypedFailureReason: writeSucceeded
+            ? 'visible_apply_validation_failed'
+            : 'visible_apply_write_failed',
+          rejectionStage: 'visible_apply',
         });
         diagSession.stage('rollback_started', 'ok');
-        const rollbackOk = rollbackExperienceApplyTransactionally({
-          cvRef,
-          ownership: experienceApplyOwnershipRef.current,
-          experienceId: clickedExperienceEntryId,
-          previousCv: applyTransaction.previousCv,
-          scheduleReactCv: (next) => setCv(next),
-        });
+        commitCvUpdate((prev) => ({
+          ...prev,
+          experience: (prev.experience || []).map((e) =>
+            e.id === clickedExperienceEntryId
+              ? {
+                ...e,
+                description: previousTargetText,
+                generatedDescription: previousGeneratedDescription,
+                ...(previousGeneratedLocale
+                  ? { generatedLocale: previousGeneratedLocale }
+                  : { generatedLocale: undefined }),
+              }
+              : e,
+          ),
+        }));
+        const rolledEntry = (cvRef.current.experience || []).find(
+          (e) => e.id === clickedExperienceEntryId,
+        );
+        const rolled = String(rolledEntry?.description || '');
+        const rolledLocale = (
+          rolledEntry as { generatedLocale?: string } | undefined
+        )?.generatedLocale || null;
+        const rollbackOk = fingerprintText(rolled.replace(/\s+/g, ' ').trim()) === previousTargetHash
+          && (
+            !previousGeneratedLocale
+            || rolledLocale === previousGeneratedLocale
+          );
         diagSession.patch({
           rollbackSucceeded: rollbackOk,
           applyCommitted: false,
@@ -3443,6 +2591,8 @@ export default function CVBuilderPage() {
           translationFallbackApplied: false,
           appliedVisibleContentLocale: null,
           appliedExperienceEntryIdHash: null,
+          postapplyDiagnosticCompletenessPassed: false,
+          diagnosticCompletenessPassed: false,
         });
         diagSession.stage('rollback_completed', rollbackOk ? 'ok' : 'fail');
         if (!rollbackOk) {
@@ -3461,9 +2611,7 @@ export default function CVBuilderPage() {
         });
         logExperienceAiTrace({
           resultApplied: false,
-          rejectedReason: actualWriteFailure
-            ? 'visible_apply_write_failed'
-            : 'visible_apply_validation_failed',
+          rejectedReason: 'visible_apply_validation_failed',
           aiUsageIncremented: false,
         });
         diagSession.recordVisibleApply(false, countBefore);
@@ -3486,9 +2634,7 @@ export default function CVBuilderPage() {
       });
       const persistedAppliedLocale = appliedLocaleResolved.appliedVisibleContentLocale;
       const contentLocaleCanonical = String(
-        canonicalizeContentLocale(
-          transactionWrittenCv?.contentLocale || cvRef.current.contentLocale || requestedLocale,
-        ),
+        canonicalizeContentLocale(cvRef.current.contentLocale || requestedLocale),
       );
       diagSession.patch({
         applyCommitted: true,
@@ -3560,46 +2706,22 @@ export default function CVBuilderPage() {
         clientAborted: false,
         applied: true,
       });
-      const experienceTraceDiagnostics = providerFailureRecovery
-        ? {
-          ...(finalizedBullets.diagnostics || {}),
-          // The primary provider response remains rejected; recovery evidence
-          // is local/server-repair provenance and must not be serialized as
-          // provider acceptance.
-          ...providerPhaseFields,
-        }
-        : finalizedBullets.diagnostics;
       logExperienceAiTrace({
         appliedContextKey: requestContext.key,
         resultApplied: true,
         aiUsageIncremented: true,
         semanticDutyKeysUsed: [],
-        ...(experienceTraceDiagnostics || {}),
+        ...(finalizedBullets.diagnostics || {}),
       });
       diagSession.recordVisibleApply(true, countBefore + 1, {
         visibleDescription: visibleText,
         finalNormalizedText: finalizedBullets.text,
       });
-      if (providerFailureRecovery) {
-        // recordVisibleApply derives provider-phase acceptance from the
-        // selected final candidate. Reassert that the primary response itself
-        // was rejected; only the bounded recovery was selected.
-        diagSession.patch({
-          ...providerPhaseFields,
-        });
-      }
       diagSession.commit();
       toast.success(t.cv.bulletsSuccess);
     } catch (err) {
       if (process.env.NODE_ENV !== 'production') console.error('[AI Improvements Error]', err);
       const payload = resolveAiHttpFailure({ response: null, error: err });
-      if (recoverProviderFailureAsLocalNoOp({
-        httpStatus: null,
-        attempted: true,
-        errorCode: payload.code || 'provider_request_failed',
-      })) {
-        return;
-      }
       const msg = finishAiClientRequest({
         ctx: reqCtx,
         isProVerified: true,
@@ -3640,10 +2762,6 @@ export default function CVBuilderPage() {
   };
 
   const handleRewrite = async (style: 'shorter' | 'stronger' | 'professional') => {
-    if (simpleCvV1Enabled) {
-      await handleSimpleSummaryOperation('rewrite', style);
-      return;
-    }
     if (rewritingStyle) return;
     const liveCvAtPress = cvRef.current;
     const liveSummaryAtPress = (liveCvAtPress.summary || '').trim();
@@ -3712,10 +2830,8 @@ export default function CVBuilderPage() {
           stage: 'localization',
           reason: localization.reason || 'localization_provider_failed',
           usageAfter: countBefore,
-          localizationHttpStatus: localization.httpStatus,
-          localizationApiResponseKind: localization.apiResponseKind,
-          localizationServerFallbackUsed: localization.serverFallbackUsed,
-          localizationClientFallbackUsed: localization.clientFallbackUsed,
+          httpStatus: localization.httpStatus,
+          apiResponseKind: localization.apiResponseKind,
           serverFallbackUsed: localization.serverFallbackUsed,
           clientFallbackUsed: localization.clientFallbackUsed,
         });
@@ -3733,10 +2849,8 @@ export default function CVBuilderPage() {
           stage: 'localization',
           reason: 'localized_manifest_projection_failed',
           usageAfter: countBefore,
-          localizationHttpStatus: localization.httpStatus,
-          localizationApiResponseKind: 'validation_rejected',
-          localizationServerFallbackUsed: localization.serverFallbackUsed,
-          localizationClientFallbackUsed: localization.clientFallbackUsed,
+          httpStatus: localization.httpStatus,
+          apiResponseKind: 'validation_rejected',
         });
         toast.error(aiErrorMessage('generation_validation_failed', requestedLocale));
         return;
@@ -4262,68 +3376,12 @@ export default function CVBuilderPage() {
         appVersionName: app.versionName,
         nextBuildId: resolveNextBuildId(),
         experienceLocalization: lastExperienceLocalizationRef.current,
-        previewSummaryRender: lastPreviewSummaryRenderRef.current,
         extraStages: args.extraStages,
       });
       setExportDiagTick((n) => n + 1);
     };
 
-    const recordSimpleV1ExportDiagnostic = (
-      descriptor: CvExportRenderTargetDescriptor,
-      lifecycle: CvSimpleV1ExportLifecycle,
-    ) => {
-      const trace = buildCvSimpleV1ExportDiagnostic(descriptor, lifecycle, {
-        sourceCommitShort: process.env.NEXT_PUBLIC_SOURCE_COMMIT_SHORT,
-        nextBuildId: resolveNextBuildId(),
-      });
-      storeSimpleV1CvExportDiagnostic(trace);
-      setExportDiagTick((n) => n + 1);
-      return trace;
-    };
-
-    const runExportWithSimpleV1Diagnostic = async (
-      descriptor: CvExportRenderTargetDescriptor | null,
-      exportAction: () => Promise<SaveFileResult>,
-      onDiagnosticRecorded: () => void,
-    ): Promise<SaveFileResult> => {
-      if (!descriptor) return exportAction();
-
-      try {
-        const saveResult = await exportAction();
-        recordSimpleV1ExportDiagnostic(descriptor, {
-          rendererReached: true,
-          rendererStarted: true,
-          rendererSucceeded: true,
-          blobProduced: true,
-          blobSucceeded: true,
-          saveReached: true,
-          saveSucceeded: saveResult.result === 'saved',
-          ...(saveResult.result === 'saved'
-            ? {}
-            : { failureReason: `save_result_${saveResult.result}` }),
-        });
-        onDiagnosticRecorded();
-        return saveResult;
-      } catch (error) {
-        recordSimpleV1ExportDiagnostic(descriptor, {
-          rendererReached: true,
-          rendererStarted: true,
-          rendererSucceeded: false,
-          blobProduced: false,
-          blobSucceeded: false,
-          saveReached: false,
-          saveSucceeded: false,
-          failureReason: extractCvExportFailureReason(error),
-        });
-        onDiagnosticRecorded();
-        throw error;
-      }
-    };
-
-    const prepareFinalLocaleSafeCv = async (
-      sourceCv: CVData,
-      options?: { purpose?: 'export' | 'preview' },
-    ): Promise<CVData> => {
+    const prepareFinalLocaleSafeCv = async (sourceCv: CVData): Promise<CVData> => {
       const editorSourceCv = sourceCv;
       lastExportRawCvRef.current = sourceCv;
       lastExportPrepareRef.current = null;
@@ -4440,12 +3498,6 @@ export default function CVBuilderPage() {
             if (!currentSnapshot.ok || currentSnapshot.snapshotId !== expectedSnapshotId) {
               return false;
             }
-            if ((options?.purpose || 'export') === 'preview') {
-              // Preview preparation may consume the validated in-memory
-              // projection returned by this operation, but it must not mutate
-              // the editor draft or its persisted localization caches.
-              return true;
-            }
             const safeNext = buildPersistableCvAfterExportPreparation(cvRef.current, nextCv);
             if (!exportDraftVisibleContentPreserved(cvRef.current, safeNext)) return false;
             const persisted = persistCurrentCvTransactionally(safeNext);
@@ -4506,18 +3558,12 @@ export default function CVBuilderPage() {
           computeExperienceLocalizationOperationDeadline(Date.now());
         const titleRepairContextByBatchKey = new Map<string, unknown>();
         const titleTransportDiagnostics: Partial<ExperienceLocalizationDiagnostics> = {};
-        // Preview renders every Experience row, not only Summary-selected
-        // entries.  Resolve title presentation for the complete terminal CV so
-        // an omitted row cannot show a stale source title while PDF/DOCX use a
-        // localized title surface for that same entry.
         const titleLocalization = await prepareExportLocalizedTitles({
           sourceCv,
           exportCv: recoveredCv,
           targetLocale: locale,
           gender: sourceCv.personal?.gender,
           getCurrentCv: () => cvRef.current,
-          experienceIds: undefined,
-          includePersonalTitle: (options?.purpose || 'export') === 'export',
           adapter: async (request: ExportTitleLocalizationTransportInput) => {
             const aiGate = getAiGate();
             if (aiGate.status !== 'ready') {
@@ -4697,33 +3743,12 @@ export default function CVBuilderPage() {
         // Title projection can increase Summary length or change role-context
         // metadata. Re-run the same canonical export validator on the complete
         // localized projection before any renderer or DOCX branch receives it.
-        const titleKey = (value: string) => value
-          .normalize('NFKC')
-          .replace(/\s+/gu, ' ')
-          .trim()
-          .toLocaleLowerCase();
-        const recoveredPositions = new Map(
-          (recoveredCv.experience || []).map((entry) => [entry.id, entry.position || '']),
+        const postTitlePrepared = prepareExportReadyCv(
+          titleLocalization.exportCv,
+          locale,
+          titleLocalization.exportCv.templateId,
+          prepareOptions,
         );
-        const titleProjectionChanged = (
-          (options?.purpose || 'export') === 'export'
-          && titleKey(titleLocalization.exportCv.personal?.jobTitle || '')
-            !== titleKey(recoveredCv.personal?.jobTitle || '')
-        )
-          || (titleLocalization.exportCv.experience || []).some(
-          (entry) => titleKey(recoveredPositions.get(entry.id) || '')
-                !== titleKey(entry.position || ''),
-          )
-          || hashSummaryV2Text(titleLocalization.exportCv.summary || '')
-            !== hashSummaryV2Text(recoveredCv.summary || '');
-        const postTitlePrepared = titleProjectionChanged
-          ? prepareExportReadyCv(
-            titleLocalization.exportCv,
-            locale,
-            titleLocalization.exportCv.templateId,
-            prepareOptions,
-          )
-          : prepared;
         lastExportPrepareRef.current = postTitlePrepared;
         lastExperienceLocalizationRef.current = {
           ...(lastExperienceLocalizationRef.current || localization.diagnostics),
@@ -4736,18 +3761,6 @@ export default function CVBuilderPage() {
           throw new CvExportFailure(
             postTitlePrepared.reason,
             `${postTitlePrepared.reason} @ title_post_projection_validation`,
-          );
-        }
-        if ((options?.purpose || 'export') === 'export' && sameSnapshotPreviewParityFailure({
-          evidence: lastPreviewSummaryRenderRef.current,
-          sourceCv: editorSourceCv,
-          locale,
-          context: prepareOptions,
-          selectedFinalSummaryHash: postTitlePrepared.diagnostics.selectedFinalSummaryHash,
-        })) {
-          throw new CvExportFailure(
-            'preview_render_mismatch',
-            'preview_render_mismatch @ same_snapshot_preview_parity',
           );
         }
         const exportCv = postTitlePrepared.cv;
@@ -4777,25 +3790,9 @@ export default function CVBuilderPage() {
             'export-only content attempted to mutate the editor draft',
           );
         }
-        if ((options?.purpose || 'export') === 'export') {
-          cvRef.current = groundingPersisted;
-          setCv(groundingPersisted);
-          setCurrentCv(groundingPersisted);
-        }
-
-        // All template families consume the same terminal per-entry
-        // presentation selected above. Creative Artistic and Corporate Navy
-        // historically re-ran their legacy canonical-bullet localizers here,
-        // which rejected valid Serbian current_visible/projection surfaces
-        // after the shared resolver had already validated them. Keep those
-        // adapters as a fallback for legacy inputs, but never let them replace
-        // a complete terminal snapshot.
-        const terminalPresentationReady = isTerminalExperiencePresentationReady(
-          exportCv,
-          postTitlePrepared.diagnostics.experiencePresentation,
-          locale,
-        );
-        if (terminalPresentationReady) return exportCv;
+        cvRef.current = groundingPersisted;
+        setCv(groundingPersisted);
+        setCurrentCv(groundingPersisted);
 
         if (exportCv.templateId === 'creative-artistic') {
           return prepareCreativeArtisticExport(exportCv, locale, {
@@ -4813,60 +3810,6 @@ export default function CVBuilderPage() {
       }
     };
 
-    prepareFinalLocaleSafeCvRef.current = prepareFinalLocaleSafeCv;
-
-    useEffect(() => {
-      if (simpleCvV1Enabled) return;
-      const previewVisible = showPreview || step === steps.length - 1;
-      if (!previewVisible || !previewSourceIsAppOwned || matchingTerminalPreview) return;
-
-      const requestRevision = terminalPreviewRequestRef.current + 1;
-      terminalPreviewRequestRef.current = requestRevision;
-      const sourceSnapshotId = previewInputSnapshotId;
-      const sourceCv = resolveCvExportSourceAuthority(cvRef.current, cv.templateId);
-      const prepare = prepareFinalLocaleSafeCvRef.current;
-      if (!prepare) return;
-
-      void prepare(sourceCv, { purpose: 'preview' }).then((terminalCv) => {
-        if (terminalPreviewRequestRef.current !== requestRevision) return;
-        const currentSource = resolveCvExportSourceAuthority(cvRef.current, cv.templateId);
-        const currentSnapshotId = buildPreviewSummarySnapshotId(
-          currentSource,
-          locale,
-          previewPrepareOptions,
-        );
-        if (currentSnapshotId !== sourceSnapshotId) return;
-        setTerminalPreviewPresentation({
-          snapshotId: sourceSnapshotId,
-          status: 'ready',
-          cv: terminalCv,
-          selectedFinalSummaryHash: hashSummaryV2Text(terminalCv.summary || ''),
-        });
-      }).catch((error) => {
-        if (process.env.NODE_ENV !== 'production') {
-          console.warn('[CV Preview] terminal preparation failed', error);
-        }
-        if (terminalPreviewRequestRef.current !== requestRevision) return;
-        setTerminalPreviewPresentation({
-          snapshotId: sourceSnapshotId,
-          status: 'failed',
-          cv: null,
-          selectedFinalSummaryHash: null,
-        });
-      });
-    }, [
-      cv.templateId,
-      locale,
-      matchingTerminalPreview,
-      previewInputSnapshotId,
-      previewPrepareOptions,
-      previewSourceIsAppOwned,
-      simpleCvV1Enabled,
-      showPreview,
-      step,
-      steps.length,
-    ]);
-
     const handleDOCXDownload = async () => {
       if (!canDownload('cv')) {
         setLimitModal({ open: true, type: 'cv' });
@@ -4876,104 +3819,58 @@ export default function CVBuilderPage() {
       exportInFlightRef.current = true;
       setShowDownloadMenu(false);
       setIsWordExporting(true);
-      let simpleDocxDescriptor: CvExportRenderTargetDescriptor | null = null;
-      let simpleDocxDiagnosticRecorded = false;
       try {
-        const simpleDocxSnapshot = simpleCvV1Enabled
-          ? captureCvRenderSnapshot(resolveCvExportSourceAuthority(cvRef.current, cv.templateId))
-          : null;
-        simpleDocxDescriptor = simpleDocxSnapshot
-          ? describeCvRenderTarget(simpleDocxSnapshot, 'docx')
-          : null;
-        const runDocxExport = (exportAction: () => Promise<SaveFileResult>) => (
-          runExportWithSimpleV1Diagnostic(
-            simpleDocxDescriptor,
-            exportAction,
-            () => { simpleDocxDiagnosticRecorded = true; },
-          )
-        );
-        const liveCv = simpleDocxSnapshot?.model ?? cvRef.current;
-        const docxRenderLocale = simpleDocxSnapshot?.contentLocale ?? locale;
+        const liveCv = cvRef.current;
         let saveResult: SaveFileResult;
         let fallbackFileName: string;
         if (liveCv.templateId === 'rirekisho') {
-          const cvForExport = simpleDocxSnapshot?.model
-            ?? await prepareFinalLocaleSafeCv(liveCv);
+          const cvForExport = await prepareFinalLocaleSafeCv(liveCv);
           const exportBaseName = cvForExport.personal.fullName || '履歴書';
-          saveResult = await runDocxExport(
-            () => exportRirekishoToDOCX(cvForExport, exportBaseName),
-          );
+          saveResult = await exportRirekishoToDOCX(cvForExport, exportBaseName);
           fallbackFileName = `${exportBaseName}.docx`;
         } else {
           // For rect-photo templates, use rectangularPhotoDataUrl (derived from original upload).
           // For circle templates, use circularPhotoDataUrl or cv.personal.photo.
           let photoForExport: string | undefined;
           let elegantFormalPhoto: ElegantFormalCanonicalPhotoResult | null = null;
-          const renderPhotos = liveCv.personal as CVData['personal'] & {
-            originalPhoto?: string;
-            circularPhoto?: string;
-            rectangularPhoto?: string;
-          };
-          if (simpleDocxSnapshot && liveCv.templateId === 'elegant-formal') {
-            photoForExport = renderPhotos.rectangularPhoto ?? renderPhotos.photo;
-          } else if (liveCv.templateId === 'elegant-formal') {
+          if (liveCv.templateId === 'elegant-formal') {
             elegantFormalPhoto = await ensureElegantFormalPhotoForExport();
             photoForExport = elegantFormalPhoto?.dataUrl;
           } else if (RECT_PHOTO_TEMPLATES.includes(liveCv.templateId)) {
-            photoForExport = simpleDocxSnapshot
-              ? (renderPhotos.rectangularPhoto ?? renderPhotos.photo)
-              : (rectangularPhotoDataUrl ?? liveCv.personal.photo); // clean JPEG from original when available
+            photoForExport = rectangularPhotoDataUrl ?? liveCv.personal.photo; // clean JPEG from original when available
           } else if (liveCv.templateId === 'corporate-navy' || liveCv.templateId === 'contemporary-bold') {
-            photoForExport = renderPhotos.originalPhoto
-              ?? (simpleDocxSnapshot ? renderPhotos.circularPhoto : circularPhotoDataUrl)
-              ?? renderPhotos.photo;
+            photoForExport = (liveCv.personal as typeof liveCv.personal & { originalPhoto?: string }).originalPhoto
+              ?? circularPhotoDataUrl
+              ?? liveCv.personal.photo;
           } else {
-            photoForExport = (simpleDocxSnapshot ? renderPhotos.circularPhoto : circularPhotoDataUrl)
-              ?? renderPhotos.photo;
+            photoForExport = circularPhotoDataUrl ?? liveCv.personal.photo;
           }
           const selectedTemplateId = cv.templateId;
           const latestCv = resolveCvExportSourceAuthority(
             cvRef.current,
             selectedTemplateId,
           );
-          const cvForExport = simpleDocxSnapshot
-            ? withCvRenderModelPhoto(simpleDocxSnapshot, photoForExport)
-            : await prepareFinalLocaleSafeCv({
-              ...latestCv,
-              personal: { ...latestCv.personal, photo: photoForExport },
-            });
-          const experiencePresentationReady = simpleCvV1Enabled || isTerminalExperiencePresentationReady(
-            cvForExport,
-            lastExportPrepareRef.current?.diagnostics.experiencePresentation,
-            locale,
-          );
+          const cvForExport = await prepareFinalLocaleSafeCv({
+            ...latestCv,
+            personal: { ...latestCv.personal, photo: photoForExport },
+          });
           const exportBaseName = makeCvExportBaseName(cvForExport.personal.fullName);
-          saveResult = await runDocxExport(
-            () => exportToDOCX(
-              cvForExport,
-              exportBaseName,
-              docxRenderLocale,
-              cvForExport.templateId,
-              { elegantFormalPhoto, experiencePresentationReady },
-            ),
-          );
+          saveResult = await exportToDOCX(cvForExport, exportBaseName, locale, cvForExport.templateId, { elegantFormalPhoto });
           fallbackFileName = `${exportBaseName}.docx`;
-          if (!simpleDocxDescriptor) {
-            await recordExportDiagnostic({
-              format: 'docx',
-              rawCv: lastExportRawCvRef.current || latestCv,
-              prepared: lastExportPrepareRef.current,
-              rendererReached: true,
-              blobProduced: true,
-              blobMimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-              androidSaveReached: true,
-              saveResult,
-              extraStages: [
-                { stage: 'render_blob', result: 'ok' },
-                { stage: 'android_save', result: saveResult.result === 'saved' ? 'ok' : 'fail' },
-              ],
-            });
-          }
+          await recordExportDiagnostic({
+            format: 'docx',
+            rawCv: lastExportRawCvRef.current || latestCv,
+            prepared: lastExportPrepareRef.current,
+            rendererReached: true,
+            blobProduced: true,
+            blobMimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            androidSaveReached: true,
+            saveResult,
+            extraStages: [
+              { stage: 'render_blob', result: 'ok' },
+              { stage: 'android_save', result: saveResult.result === 'saved' ? 'ok' : 'fail' },
+            ],
+          });
         }
         showCvExportSuccessToast(saveResult, 'docx', fallbackFileName);
         incrementDownloads('cv');
@@ -4982,38 +3879,19 @@ export default function CVBuilderPage() {
         if (process.env.NODE_ENV !== 'production') console.error('[CV DOCX export] failed:', err);
         const prepared = lastExportPrepareRef.current;
         const originalReason = prepared && !prepared.ok ? prepared.reason : undefined;
-        const terminalReason = extractCvExportFailureReason(err);
-        const previewParityBlocked = /preview_render_mismatch/iu.test(terminalReason);
-        if (simpleCvV1Enabled) {
-          if (simpleDocxDescriptor && !simpleDocxDiagnosticRecorded) {
-            recordSimpleV1ExportDiagnostic(simpleDocxDescriptor, {
-              rendererReached: false,
-              rendererStarted: false,
-              rendererSucceeded: false,
-              blobProduced: false,
-              blobSucceeded: false,
-              saveReached: false,
-              saveSucceeded: false,
-              failureReason: terminalReason,
-            });
-          }
-        } else {
-          await recordExportDiagnostic({
-            format: 'docx',
-            rawCv: lastExportRawCvRef.current || cvRef.current,
-            prepared,
-            originalFailureReason: originalReason,
-            finalError: err,
-            rendererReached: previewParityBlocked ? false : Boolean(prepared?.ok),
-            blobProduced: false,
-            androidSaveReached: /android_file_save_failed/i.test(extractCvExportFailureReason(err)),
-            extraStages: previewParityBlocked
-              ? [{ stage: 'same_snapshot_preview_parity', result: 'fail', reason: terminalReason }]
-              : prepared?.ok
-                ? [{ stage: 'render_blob', result: 'fail', reason: terminalReason }]
-                : undefined,
-          });
-        }
+        await recordExportDiagnostic({
+          format: 'docx',
+          rawCv: lastExportRawCvRef.current || cvRef.current,
+          prepared,
+          originalFailureReason: originalReason,
+          finalError: err,
+          rendererReached: Boolean(prepared?.ok),
+          blobProduced: false,
+          androidSaveReached: /android_file_save_failed/i.test(extractCvExportFailureReason(err)),
+          extraStages: prepared?.ok
+            ? [{ stage: 'render_blob', result: 'fail', reason: extractCvExportFailureReason(err) }]
+            : undefined,
+        });
         showExportFailureToast(err, 'docx');
       } finally {
         exportInFlightRef.current = false;
@@ -5030,8 +3908,6 @@ export default function CVBuilderPage() {
       exportInFlightRef.current = true;
       setShowDownloadMenu(false);
       setIsPdfExporting(true);
-      let simplePdfDescriptor: CvExportRenderTargetDescriptor | null = null;
-      let simplePdfDiagnosticRecorded = false;
       try {
         // selectedTemplateId is the live UI selection and is authoritative over any
         // stale cvRef.current/localStorage templateId (hard requirement — do not
@@ -5039,24 +3915,6 @@ export default function CVBuilderPage() {
         const selectedTemplateId = cv.templateId;
         const cvRefTemplateId = cvRef.current.templateId;
         const previewTemplateId = readPdfExportTemplateIdFromPreview(previewId);
-        const exportSourceCv = resolveCvExportSourceAuthority(
-          cvRef.current,
-          selectedTemplateId,
-        );
-        const simplePdfSnapshot = simpleCvV1Enabled
-          ? captureCvRenderSnapshot(exportSourceCv)
-          : null;
-        simplePdfDescriptor = simplePdfSnapshot
-          ? describeCvRenderTarget(simplePdfSnapshot, 'pdf')
-          : null;
-        const runPdfExport = (exportAction: () => Promise<SaveFileResult>) => (
-          runExportWithSimpleV1Diagnostic(
-            simplePdfDescriptor,
-            exportAction,
-            () => { simplePdfDiagnosticRecorded = true; },
-          )
-        );
-        const pdfRenderLocale = simplePdfSnapshot?.contentLocale ?? locale;
         if (cvRefTemplateId !== selectedTemplateId) {
           console.error(
             `[CV PDF export] cvRef.current.templateId (${cvRefTemplateId}) !== selectedTemplateId (${selectedTemplateId}) — overwriting before export`,
@@ -5064,14 +3922,12 @@ export default function CVBuilderPage() {
         }
         // Force templateId from the live UI selection; cvRef.current can only supply
         // the rest of the data, never the template choice.
-        const prepareLegacyPdfCvForExport = async () => {
-          const cvForExport = await prepareFinalLocaleSafeCv({
-            ...exportSourceCv,
-          });
-          return cvForExport;
-        };
-        const cvForExport = simplePdfSnapshot?.model
-          ?? await prepareLegacyPdfCvForExport();
+        const cvForExport = await prepareFinalLocaleSafeCv(
+          resolveCvExportSourceAuthority(
+            cvRef.current,
+            selectedTemplateId,
+          ),
+        );
         const route = resolveCvPdfExportRoute(selectedTemplateId);
 
         if (process.env.NODE_ENV !== 'production') {
@@ -5111,27 +3967,21 @@ export default function CVBuilderPage() {
             toast.error(t.cv.pdfExportFailed);
             throw new Error(`Modern Minimal preview mismatch: ${previewTemplateId}`);
           }
-          const saveResult = await runPdfExport(() => (
-            simplePdfSnapshot
-              ? exportModernMinimalPdf(cvForExport, exportFilename, pdfRenderLocale)
-              : exportModernMinimalPdf(cvForExport, exportFilename, locale)
-          ));
-          if (!simplePdfDescriptor) {
-            await recordExportDiagnostic({
-              format: 'pdf',
-              rawCv: lastExportRawCvRef.current || cvForExport,
-              prepared: lastExportPrepareRef.current,
-              rendererReached: true,
-              blobProduced: true,
-              blobMimeType: 'application/pdf',
-              androidSaveReached: true,
-              saveResult,
-              extraStages: [
-                { stage: 'render_blob', result: 'ok' },
-                { stage: 'android_save', result: saveResult.result === 'saved' ? 'ok' : 'fail' },
-              ],
-            });
-          }
+          const saveResult = await exportModernMinimalPdf(cvForExport, exportFilename, locale);
+          await recordExportDiagnostic({
+            format: 'pdf',
+            rawCv: lastExportRawCvRef.current || cvForExport,
+            prepared: lastExportPrepareRef.current,
+            rendererReached: true,
+            blobProduced: true,
+            blobMimeType: 'application/pdf',
+            androidSaveReached: true,
+            saveResult,
+            extraStages: [
+              { stage: 'render_blob', result: 'ok' },
+              { stage: 'android_save', result: saveResult.result === 'saved' ? 'ok' : 'fail' },
+            ],
+          });
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
@@ -5146,163 +3996,76 @@ export default function CVBuilderPage() {
           previewElementId: previewId,
           uiTemplateId: selectedTemplateId,
         });
-        const liveCv = simplePdfSnapshot?.model ?? pdfResolution.exportCv;
-        const terminalExperiencePresentationReady = simpleCvV1Enabled || isTerminalExperiencePresentationReady(
-          liveCv,
-          lastExportPrepareRef.current?.diagnostics.experiencePresentation,
-          locale,
-        );
+        const liveCv = pdfResolution.exportCv;
         if (pdfResolution.route.kind === 'dedicated-clean-simple') {
-          const saveResult = await runPdfExport(
-            () => exportCleanSimplePdf(liveCv, exportFilename, pdfRenderLocale),
-          );
+          const saveResult = await exportCleanSimplePdf(liveCv, exportFilename, locale);
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
         }
         if (liveCv.templateId === 'professional-classic') {
-          const saveResult = await runPdfExport(
-            () => exportProfessionalClassicPdf(liveCv, exportFilename, pdfRenderLocale),
-          );
+          const saveResult = await exportProfessionalClassicPdf(liveCv, exportFilename, locale);
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
         }
         if (liveCv.templateId === 'creative-bold') {
-          const saveResult = await runPdfExport(
-            () => exportCreativeBoldPdf(liveCv, exportFilename, pdfRenderLocale),
-          );
+          const saveResult = await exportCreativeBoldPdf(liveCv, exportFilename, locale);
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
         }
         if (liveCv.templateId === 'creative-artistic') {
-          const saveResult = await runPdfExport(
-            () => exportCreativeArtisticPdf(liveCv, exportFilename, pdfRenderLocale, {
-              alreadyPrepared: terminalExperiencePresentationReady,
-            }),
-          );
+          const saveResult = await exportCreativeArtisticPdf(liveCv, exportFilename, locale);
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
-          if (!simplePdfDescriptor) {
-            await recordExportDiagnostic({
-              format: 'pdf',
-              rawCv: lastExportRawCvRef.current || cvForExport,
-              prepared: lastExportPrepareRef.current,
-              rendererReached: true,
-              blobProduced: true,
-              blobMimeType: 'application/pdf',
-              androidSaveReached: true,
-              saveResult,
-              extraStages: [
-                { stage: 'render_blob', result: 'ok' },
-                { stage: 'android_save', result: saveResult.result === 'saved' ? 'ok' : 'fail' },
-              ],
-            });
-          }
           incrementDownloads('cv');
           return;
         }
         if (liveCv.templateId === 'elegant-formal') {
-          const renderPhotos = liveCv.personal as CVData['personal'] & { rectangularPhoto?: string };
-          const photoDataUrl = simplePdfSnapshot
-            ? (renderPhotos.rectangularPhoto ?? renderPhotos.photo ?? null)
-            : await prepareElegantFormalPdfPhotoDataUrl();
-          const saveResult = await runPdfExport(
-            () => exportElegantFormalPdf(liveCv, exportFilename, pdfRenderLocale, { photoDataUrl }),
-          );
+          const photoDataUrl = await prepareElegantFormalPdfPhotoDataUrl();
+          const saveResult = await exportElegantFormalPdf(liveCv, exportFilename, locale, { photoDataUrl });
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
         }
         if (liveCv.templateId === 'ats-standard') {
-          const saveResult = await runPdfExport(
-            () => exportAtsStandardPdf(liveCv, exportFilename, pdfRenderLocale),
-          );
+          const saveResult = await exportAtsStandardPdf(liveCv, exportFilename, locale);
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
         }
         if (liveCv.templateId === 'executive-premium') {
-          const saveResult = await runPdfExport(
-            () => exportExecutivePremiumPdf(liveCv, exportFilename, pdfRenderLocale),
-          );
+          const saveResult = await exportExecutivePremiumPdf(liveCv, exportFilename, locale);
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
         }
         if (liveCv.templateId === 'nordic-clean') {
-          const saveResult = await runPdfExport(
-            () => exportNordicCleanPdf(liveCv, exportFilename, pdfRenderLocale),
-          );
+          const saveResult = await exportNordicCleanPdf(liveCv, exportFilename, locale);
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
         }
         if (liveCv.templateId === 'tech-sidebar') {
-          const saveResult = await runPdfExport(
-            () => exportTechSidebarPdf(liveCv, exportFilename, pdfRenderLocale),
-          );
+          const saveResult = await exportTechSidebarPdf(liveCv, exportFilename, locale);
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
         }
         if (liveCv.templateId === 'corporate-navy') {
-          const saveResult = await runPdfExport(
-            () => exportCorporateNavyPdf(
-              liveCv,
-              exportFilename,
-              pdfRenderLocale,
-              { alreadyPrepared: terminalExperiencePresentationReady },
-            ),
-          );
-          if (!simplePdfDescriptor) {
-            await recordExportDiagnostic({
-              format: 'pdf',
-              rawCv: lastExportRawCvRef.current || cvForExport,
-              prepared: lastExportPrepareRef.current,
-              rendererReached: true,
-              blobProduced: true,
-              blobMimeType: 'application/pdf',
-              androidSaveReached: true,
-              saveResult,
-              extraStages: [
-                { stage: 'render_blob', result: 'ok' },
-                { stage: 'android_save', result: saveResult.result === 'saved' ? 'ok' : 'fail' },
-              ],
-            });
-          }
+          const saveResult = await exportCorporateNavyPdf(liveCv, exportFilename, locale);
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
         }
         if (liveCv.templateId === 'contemporary-bold') {
-          const saveResult = await runPdfExport(
-            () => exportContemporaryBoldPdf(liveCv, exportFilename, pdfRenderLocale),
-          );
+          const saveResult = await exportContemporaryBoldPdf(liveCv, exportFilename, locale);
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
         }
         if (liveCv.templateId === 'rirekisho') {
-          const saveResult = await runPdfExport(
-            () => exportRirekishoPdf(liveCv, exportFilename, pdfRenderLocale),
-          );
-          if (!simplePdfDescriptor) {
-            await recordExportDiagnostic({
-              format: 'pdf',
-              rawCv: lastExportRawCvRef.current || cvForExport,
-              prepared: lastExportPrepareRef.current,
-              rendererReached: true,
-              blobProduced: true,
-              blobMimeType: 'application/pdf',
-              androidSaveReached: true,
-              saveResult,
-              extraStages: [
-                { stage: 'render_blob', result: 'ok' },
-                { stage: 'android_save', result: saveResult.result === 'saved' ? 'ok' : 'fail' },
-              ],
-            });
-          }
+          const saveResult = await exportRirekishoPdf(liveCv, exportFilename, locale);
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
@@ -5326,9 +4089,7 @@ export default function CVBuilderPage() {
 
         assertDedicatedPdfRouteWasHandled(pdfResolution);
 
-        const saveResult = await runPdfExport(
-          () => exportToPDF(previewId, exportFilename),
-        );
+        const saveResult = await exportToPDF(previewId, exportFilename);
         showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
         incrementDownloads('cv');
       } catch (err: unknown) {
@@ -5336,38 +4097,19 @@ export default function CVBuilderPage() {
         if (process.env.NODE_ENV !== 'production') console.error('[CV PDF export] failed:', err);
         const prepared = lastExportPrepareRef.current;
         const originalReason = prepared && !prepared.ok ? prepared.reason : undefined;
-        const terminalReason = extractCvExportFailureReason(err);
-        const previewParityBlocked = /preview_render_mismatch/iu.test(terminalReason);
-        if (simpleCvV1Enabled) {
-          if (simplePdfDescriptor && !simplePdfDiagnosticRecorded) {
-            recordSimpleV1ExportDiagnostic(simplePdfDescriptor, {
-              rendererReached: false,
-              rendererStarted: false,
-              rendererSucceeded: false,
-              blobProduced: false,
-              blobSucceeded: false,
-              saveReached: false,
-              saveSucceeded: false,
-              failureReason: terminalReason,
-            });
-          }
-        } else {
-          await recordExportDiagnostic({
-            format: 'pdf',
-            rawCv: lastExportRawCvRef.current || cvRef.current,
-            prepared,
-            originalFailureReason: originalReason,
-            finalError: err,
-            rendererReached: previewParityBlocked ? false : Boolean(prepared?.ok),
-            blobProduced: false,
-            androidSaveReached: /android_file_save_failed/i.test(extractCvExportFailureReason(err)),
-            extraStages: previewParityBlocked
-              ? [{ stage: 'same_snapshot_preview_parity', result: 'fail', reason: terminalReason }]
-              : prepared?.ok
-                ? [{ stage: 'render_blob', result: 'fail', reason: terminalReason }]
-                : undefined,
-          });
-        }
+        await recordExportDiagnostic({
+          format: 'pdf',
+          rawCv: lastExportRawCvRef.current || cvRef.current,
+          prepared,
+          originalFailureReason: originalReason,
+          finalError: err,
+          rendererReached: Boolean(prepared?.ok),
+          blobProduced: false,
+          androidSaveReached: /android_file_save_failed/i.test(extractCvExportFailureReason(err)),
+          extraStages: prepared?.ok
+            ? [{ stage: 'render_blob', result: 'fail', reason: extractCvExportFailureReason(err) }]
+            : undefined,
+        });
         const cv = { templateId: cvRef.current.templateId, personal: { fullName: cvRef.current.personal.fullName } };
         if (cv.templateId === 'modern-minimal' || cv.templateId === 'clean-simple' || cv.templateId === 'professional-classic' || cv.templateId === 'creative-bold' || cv.templateId === 'creative-artistic' || cv.templateId === 'elegant-formal' || cv.templateId === 'ats-standard' || cv.templateId === 'executive-premium' || cv.templateId === 'nordic-clean' || cv.templateId === 'tech-sidebar' || cv.templateId === 'corporate-navy' || cv.templateId === 'contemporary-bold' || cv.templateId === 'rirekisho') {
           toast.error(formatCvExportIntegrityToast(err, locale, 'pdf') || t.cv.pdfExportFailed, {
@@ -5564,7 +4306,7 @@ export default function CVBuilderPage() {
                       <TemplateComponent
                         key={`${cv.templateId}-${photoForCurrentTemplate?.slice(-20) ?? 'no-photo'}`}
                         data={localizedPreviewCv}
-                        locale={previewRenderLocale}
+                        locale={locale}
                       />
                     )}
                   </div>
@@ -6103,12 +4845,8 @@ export default function CVBuilderPage() {
                       </div>
                     </div>
                     <textarea
-                      value={simpleCvV1Enabled ? getCvSummaryText(cv) : cv.summary}
-                      onChange={e => setCv(prev => applyCanonicalSummaryEdit(
-                        prev,
-                        e.target.value,
-                        getCvEditorContentLocale(prev, locale, simpleCvV1Enabled),
-                      ))}
+                      value={cv.summary}
+                      onChange={e => setCv(prev => applyCanonicalSummaryEdit(prev, e.target.value, locale))}
                       className={textareaClass + ' min-h-[180px]'}
                       placeholder={t.cv.summaryPlaceholder}
                     />
@@ -6298,7 +5036,7 @@ export default function CVBuilderPage() {
                             <TemplateComponent
                               key={`${cv.templateId}-${photoForCurrentTemplate?.slice(-20) ?? 'no-photo'}`}
                               data={localizedPreviewCv}
-                              locale={previewRenderLocale}
+                              locale={locale}
                             />
                           )}
                         </div>

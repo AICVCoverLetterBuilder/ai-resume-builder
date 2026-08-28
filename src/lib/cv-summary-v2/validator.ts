@@ -1,51 +1,109 @@
 import type { Locale } from '@/lib/i18n/translations';
 import { SUMMARY_V2_REVISION } from './flag';
-import { factCoveredInText, hashSummaryV2Text } from './facts';
+import { factCoveredInText } from './facts';
 import { bulletToWhereClauseEn, dutyTenseFromEmploymentState, summaryHasMalformedDoublePast } from './tense';
 import { bulletToGermanWoIchClause } from './german-surface';
 import {
   realizeFirstPersonDutyClause,
   japaneseDutyRealizationVariants,
-  evaluateNativeRealizationContract,
 } from './native-surface';
 import type {
-  SummaryV2CandidateSourceKind,
   SummaryV2EmploymentState,
   SummaryV2EntryFact,
   SummaryV2SelectionManifest,
   SummaryV2ValidationResult,
 } from './types';
 import { validateAiUnitLocalePurity } from '../cv-ai-unit-locale-purity';
-import { inspectSummaryV2TranslatableSurface } from './localization';
 import {
-  classifySummaryV2EntrySurfaceAuthority,
-} from './localization';
-import { validateLocalizedSummaryRoleTitleGender } from '@/lib/cv-summary-structured-role-localization';
-import { matchesGraphicDesignerOccupationalTitle } from '@/lib/cv-role-title';
-import { auditSummaryV2MaterialClaims } from './material-claims';
-import { analyzeSummaryV2FinalUnitOwnership } from './unit-ownership';
-import { fingerprintText } from '../cv-export-diagnostics';
-import { unsupportedSummaryV2QualityMannerClaims } from './semantic-claims';
+  localizeGraphicDesigner,
+  matchesGraphicDesignerOccupationalTitle,
+} from '../cv-role-title';
+import { resolveSummaryV2GenderMode } from './gender';
 
-/** Compatibility diagnostic; V2 deliberately has no fixture occupation lexicon. */
+const RESIDUE_MARKERS: Array<{ re: RegExp; needle: string }> = [
+  { re: /\bAtlas\b/iu, needle: 'atlas' },
+  { re: /\bRewitu\b/iu, needle: 'rewitu' },
+  { re: /\bincoming\s+goods\b/iu, needle: 'incoming goods' },
+  { re: /\bwarehouse\s+employee\b/iu, needle: 'warehouse employee' },
+  { re: /\bgraphic\s+designer\b/iu, needle: 'graphic designer' },
+  {
+    re: /\bvisual\s+materials\s+and\s+graphic\s+elements\b/iu,
+    needle: 'visual materials and graphic elements',
+  },
+];
+
+/**
+ * Stale residue = Summary mentions occupation memory that the live selection
+ * manifest does not own. Live Atlas/Rewitu/warehouse/design content is NOT residue.
+ */
 export function detectStaleOccupationResidue(
-  _summary: string,
-  _manifest: SummaryV2SelectionManifest,
+  summary: string,
+  manifest: SummaryV2SelectionManifest,
 ): boolean {
-  // V2 has no occupation-name memory. Generic selected-entry unit ownership,
-  // required-fact coverage and source-claim authority reject stale material.
+  const text = summary || '';
+  if (!text.trim()) return false;
+  const owned = [
+    manifest.current,
+    ...manifest.priors,
+  ]
+    .filter(Boolean)
+    .map((e) => {
+      const entry = e!;
+      return [
+        entry.role,
+        entry.employer,
+        ...entry.facts.map((f) => f.bulletText),
+        ...manifest.requiredCurrentFacts
+          .filter((f) => f.entryId === entry.entryId)
+          .map((f) => f.bulletText),
+        ...manifest.requiredPriorFacts
+          .filter((f) => f.entryId === entry.entryId)
+          .map((f) => f.bulletText),
+      ].join(' ');
+    })
+    .join(' ')
+    .toLowerCase();
+
+  for (const { re, needle } of RESIDUE_MARKERS) {
+    if (!re.test(text)) continue;
+    if (!owned.includes(needle)) return true;
+  }
   return false;
 }
 
-export type SummaryV2ValidationOptions = {
-  candidateSource?: SummaryV2CandidateSourceKind;
-  preserveConstructionOrder?: boolean;
-  /** Internal-only: this text was just constructed from the supplied manifest. */
-  trustedConstructionAuthority?: boolean;
-};
-
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function roleTitleGenderEvidence(
+  text: string,
+  manifest: SummaryV2SelectionManifest,
+) {
+  const gender = resolveSummaryV2GenderMode(manifest.gender);
+  const selected = [
+    ...(manifest.current ? [manifest.current] : []),
+    ...manifest.priors,
+  ];
+  return selected.map((entry) => {
+    // This is a known Serbian dictionary role, never a free-text feminizer.
+    const applicable = manifest.locale === 'sr'
+      && gender !== 'unspecified'
+      && !entry.rolePresentationIsUserAuthoritative
+      && matchesGraphicDesignerOccupationalTitle(entry.role);
+    const expectedSurface = applicable
+      ? localizeGraphicDesigner('sr', gender)
+      : null;
+    return {
+      entryId: entry.entryId,
+      genderValidationApplicable: applicable,
+      genderValidationPassed: !applicable || new RegExp(
+        escapeRegExp(expectedSurface || ''),
+        'iu',
+      ).test(text),
+      expectedSurface,
+      actualSurface: entry.role,
+    };
+  });
 }
 
 /** Invented metrics / leadership / quantified impact not owned by the manifest. */
@@ -230,7 +288,6 @@ export function entryDutiesMatchEmploymentTense(
 export function validateSummaryV2AgainstManifest(
   summary: string,
   manifest: SummaryV2SelectionManifest,
-  options: SummaryV2ValidationOptions = {},
 ): SummaryV2ValidationResult {
   void SUMMARY_V2_REVISION;
   const text = (summary || '').replace(/\s+/g, ' ').trim();
@@ -239,101 +296,45 @@ export function validateSummaryV2AgainstManifest(
 
   const current = manifest.current;
   const prior = manifest.priors[0] || null;
-  const selectedEntries = [...(current ? [current] : []), ...manifest.priors];
-  const ownership = analyzeSummaryV2FinalUnitOwnership(text, manifest, options);
-  const evidenceForEntry = (entryId: string) => ownership.evidence.filter(
-    (evidence) => evidence.owningEntryId === entryId,
-  );
-  const unitForEvidence = (unitIndex: number) => ownership.units[unitIndex] || '';
-  const unitTextForEntry = (entryId: string) => evidenceForEntry(entryId)
-    .map((evidence) => unitForEvidence(evidence.unitIndex))
-    .join(' ');
-  const factUnitCoverageEvidence = [
-    ...requiredCurrent.map((fact) => ({ fact, semanticRole: 'current_fact' as const })),
-    ...requiredPrior.map((fact) => ({ fact, semanticRole: 'prior_fact' as const })),
-  ].map(({ fact, semanticRole }) => {
-    const owner = selectedEntries.find((entry) => entry.entryId === fact.entryId);
-    const matches = owner ? evidenceForEntry(owner.entryId).filter((unitEvidence) => {
-      const unit = unitForEvidence(unitEvidence.unitIndex);
-      return factCoveredInText(
-        fact,
-        unit,
-        dutyTenseFromEmploymentState(owner.employmentState),
-      ) || entryDutiesMatchEmploymentTense(
-        unit,
-        [fact],
-        owner.employmentState,
-        manifest.locale,
-        manifest.gender,
-      );
-    }) : [];
-    const covered = matches.length > 0;
-    const ownershipPassed = Boolean(
-      ownership.passed
-      && owner
-      && matches.every((unitEvidence) => unitEvidence.owningEntryId === owner.entryId)
-      && matches.every((unitEvidence) => (
-        semanticRole === 'current_fact'
-          ? unitEvidence.roleSlot === 'current_role'
-          : unitEvidence.roleSlot === 'prior_role'
-      )),
+  const coveredCurrent = requiredCurrent.filter((f) => factCoveredInText(
+    f,
+    text,
+    dutyTenseFromEmploymentState(current?.employmentState),
+  )).length;
+  const coveredPrior = requiredPrior.filter((f) => {
+    const owner = manifest.priors.find((p) => p.entryId === f.entryId);
+    return factCoveredInText(
+      f,
+      text,
+      dutyTenseFromEmploymentState(owner?.employmentState),
     );
-    return {
-      factId: fact.factId,
-      factHash: fingerprintText(fact.factId),
-      owningEntryId: fact.entryId,
-      owningEntryHash: fingerprintText(fact.entryId),
-      semanticRole,
-      matchedUnitHashes: matches.map((unitEvidence) => unitEvidence.unitHash),
-      matchedUnitOwnerHashes: matches.map((unitEvidence) => unitEvidence.owningEntryHash || ''),
-      matchedUnitRoleSlots: matches.map((unitEvidence) => unitEvidence.roleSlot),
-      ownershipPassed,
-      covered,
-    };
-  });
-  const coveredCurrent = factUnitCoverageEvidence.filter(
-    (evidence) => evidence.semanticRole === 'current_fact' && evidence.covered,
-  ).length;
-  const coveredPrior = factUnitCoverageEvidence.filter(
-    (evidence) => evidence.semanticRole === 'prior_fact' && evidence.covered,
-  ).length;
-  const factUnitOwnershipValidationPassed = ownership.passed
-    && factUnitCoverageEvidence.every((evidence) => evidence.ownershipPassed);
-  const relationalOwnershipFailureReasons = [...new Set(
-    ownership.evidence.flatMap((evidence) => evidence.relationalOwnershipFailureReasons),
-  )];
-  const relationalOwnershipValidationPassed = ownership.passed
-    && ownership.evidence.every((evidence) => evidence.relationalOwnershipPassed);
-  const currentUnitText = current ? unitTextForEntry(current.entryId) : '';
+  }).length;
   const currentRolePresent = Boolean(
     current?.role
-    && new RegExp(escapeRegExp(current.role), 'iu').test(currentUnitText),
+    && new RegExp(escapeRegExp(current.role), 'iu').test(text),
   );
   const currentEmployerPresent = Boolean(
     current?.employer
-    && new RegExp(escapeRegExp(current.employer), 'iu').test(currentUnitText),
+    && new RegExp(escapeRegExp(current.employer), 'iu').test(text),
   );
   const currentStateExpressed = /\b(?:currently|derzeit|actuellement|attualmente|actualmente|atualmente|trenutno)\b/iu
-    .test(currentUnitText)
-    || /\bsince\b/iu.test(currentUnitText)
-    || hasAnyMarker(currentUnitText, [
+    .test(text)
+    || /\bsince\b/iu.test(text)
+    || hasAnyMarker(text, [
       'сейчас', 'حاليا', 'حالیا', 'أعمل', 'वर्तमान', '現在', '現職',
       'in my current role', 'en mi rol actual', 'dans mon rôle', 'nel mio ruolo',
       'na minha função atual', 'в текущей роли', 'u trenutnoj ulozi',
       'في دوري الحالي', 'वर्तमान भूमिका',
       'in meiner aktuellen rolle', 'in einer früheren rolle',
     ]);
-  const priorRolePresent = manifest.priors.every((entry) => (
-    !entry.role || new RegExp(escapeRegExp(entry.role), 'iu').test(unitTextForEntry(entry.entryId))
-  ));
-  const priorEmployerPresent = manifest.priors.every((entry) => (
-    !entry.employer || new RegExp(escapeRegExp(entry.employer), 'iu').test(unitTextForEntry(entry.entryId))
-  ));
-  const priorStateExpressed = !prior || manifest.priors.every((entry) => {
-    const priorUnitText = unitTextForEntry(entry.entryId);
-    return /\b(?:previously|formerly|before\s+that|zuvor|anteriormente|auparavant|in\s+precedenza|prethodno|ranije)\b/iu
-      .test(priorUnitText)
-    || hasAnyMarker(priorUnitText, [
+  const priorRolePresent = !prior?.role
+    || new RegExp(escapeRegExp(prior.role), 'iu').test(text);
+  const priorEmployerPresent = !prior?.employer
+    || new RegExp(escapeRegExp(prior.employer), 'iu').test(text);
+  const priorStateExpressed = !prior
+    || /\b(?:previously|formerly|zuvor|anteriormente|auparavant|in\s+precedenza|prethodno|ranije)\b/iu
+      .test(text)
+    || hasAnyMarker(text, [
       'ранее', 'سابقا', 'इससे पहले', 'पहले', '以前', '前は', '前職',
       'antes', 'prije', 'già', 'déjà', "j'ai déjà",
       'in a previous role', 'en un rol anterior', 'dans un rôle précédent',
@@ -341,25 +342,19 @@ export function validateSummaryV2AgainstManifest(
       'u prethodnoj ulozi', 'في دور سابق', 'पिछली भूमिका',
       'in einer früheren rolle',
     ]);
-  });
 
-  // A deterministic rewrite is newly constructed from this manifest; its
-  // per-entry current/completed tense is structured authority, not a premise
-  // to re-infer from localized prose. Native realization still validates the
-  // visible finite forms below. Provider and repair candidates never opt in.
-  const preserveDeterministicTenseAuthority = options.trustedConstructionAuthority === true;
-  const currentDutyTenseOk = preserveDeterministicTenseAuthority || !current
+  const currentDutyTenseOk = !current
     || entryDutiesMatchEmploymentTense(
-      currentUnitText,
+      text,
       requiredCurrent,
       current.employmentState,
       manifest.locale,
       manifest.gender,
     );
-  const priorDutyTenseOk = preserveDeterministicTenseAuthority || manifest.priors.every((p) => {
+  const priorDutyTenseOk = manifest.priors.every((p) => {
     const facts = requiredPrior.filter((f) => f.entryId === p.entryId);
     return entryDutiesMatchEmploymentTense(
-      unitTextForEntry(p.entryId),
+      text,
       facts,
       p.employmentState,
       manifest.locale,
@@ -370,116 +365,25 @@ export function validateSummaryV2AgainstManifest(
   const durationExpressionCount = countDurationExpressions(text, manifest.locale);
   const staleResidueDetected = detectStaleOccupationResidue(text, manifest);
   const unsupportedMaterialClaim = detectUnsupportedMaterialClaims(text);
-  const materialAuthority = auditSummaryV2MaterialClaims(text, manifest, ownership.evidence);
-  const unsupportedQualityMannerClaims = unsupportedSummaryV2QualityMannerClaims(text, manifest);
-  const qualityMannerAuthorityPassed = unsupportedQualityMannerClaims.length === 0;
   const unsupportedClaimCount = (staleResidueDetected ? 1 : 0)
-    + (unsupportedMaterialClaim ? 1 : 0)
-    + materialAuthority.unsupportedMaterialClaimCount
-    + unsupportedQualityMannerClaims.length;
+    + (unsupportedMaterialClaim ? 1 : 0);
   const localePurity = validateAiUnitLocalePurity(text, manifest.locale, {
     kind: 'summary_sentence',
     requireUnits: true,
   });
   const hasLiveAuthority = Boolean(manifest.current || manifest.priors.length > 0);
-  const roleTitleSurfaceEvidence = selectedEntries.map((entry) => {
-    const roleAuthority = classifySummaryV2EntrySurfaceAuthority({ manifest, entry }).roleTitleAuthority;
-    const gender = validateLocalizedSummaryRoleTitleGender({
-      sourceRoleTitle: entry.sourceRoleTitle || entry.role,
-      localizedRoleTitle: entry.role,
-      sourceLocale: entry.roleSourceLocale || entry.sourceLocale,
-      targetLocale: manifest.locale,
-      gender: manifest.gender,
-      foreignLocalizationRequired: roleAuthority === 'foreign_localization_required'
-        || Boolean(
-          entry.roleTitleLocalizationSource
-          && entry.roleTitleLocalizationSource !== 'same_locale_authoritative'
-          && entry.sourceRoleTitle
-          && entry.sourceRoleTitle !== entry.role,
-        )
-        || (
-          manifest.locale === 'sr'
-          && !entry.rolePresentationIsUserAuthoritative
-          && matchesGraphicDesignerOccupationalTitle(entry.sourceRoleTitle || entry.role)
-        ),
-    });
-    const surface = inspectSummaryV2TranslatableSurface({
-      localizedText: entry.role,
-      sourceText: entry.sourceRoleTitle || entry.role,
-      employer: entry.employer,
-      targetLocale: manifest.locale,
-    });
-    return {
-      owningEntryHash: hashSummaryV2Text(entry.entryId),
-      detectedLocale: surface.detectedLocale,
-      detectedScript: surface.detectedScript,
-      classification: 'translatable' as const,
-      targetLocaleNativeSurfacePassed: surface.targetLocaleNativeSurfacePassed,
-      localizedTitleHash: hashSummaryV2Text(entry.role),
-      sourceRoleTitleHash: entry.sourceRoleTitleHash || hashSummaryV2Text(entry.role),
-      genderValidationPassed: gender.passed,
-      genderValidationApplicable: gender.applicable,
-      genderValidationReason: gender.reason,
-      expectedRoleTitleHash: gender.expectedRoleTitleHash,
-      provenance: entry.roleTitleLocalizationSource || 'source_manifest_role_title',
-    };
-  });
-  const roleTitleSurfaceValidationPassed = roleTitleSurfaceEvidence.every(
-    (entry) => entry.targetLocaleNativeSurfacePassed && entry.genderValidationPassed,
+  const roleGenderEvidence = roleTitleGenderEvidence(text, manifest);
+  const roleTitleGenderValidationPassed = roleGenderEvidence.every(
+    (evidence) => !evidence.genderValidationApplicable || evidence.genderValidationPassed,
   );
-  const roleTitleGenderValidationPassed = roleTitleSurfaceEvidence.every(
-    (entry) => entry.genderValidationPassed,
-  );
-  const nativeContract = evaluateNativeRealizationContract({
-    text,
-    locale: manifest.locale,
-    perspectiveMode: 'first_person',
-    gender: manifest.gender,
-  });
-  const perspectiveValidationPassed = nativeContract.firstPersonPredicateChainPassed;
-  const arabicMorphologyValidationPassed = manifest.locale !== 'ar'
-    || nativeContract.localeVerbMorphologyPassed;
-  const russianMorphologyValidationPassed = manifest.locale !== 'ru'
-    || nativeContract.localeVerbMorphologyPassed;
-  const hindiFirstPersonAgreementPassed = manifest.locale !== 'hi'
-    || nativeContract.hindiFirstPersonAgreementPassed;
 
   let reason: string | null = null;
   if (!text) reason = 'empty_summary';
   else if (!hasLiveAuthority) reason = 'no_live_experience_authority';
-  else if (!roleTitleSurfaceValidationPassed) reason = 'foreign_role_title_surface';
   else if (!localePurity.targetLocalePurityPassed) reason = 'locale_impurity';
   else if (staleResidueDetected) reason = 'stale_occupation_residue';
   else if (unsupportedMaterialClaim) reason = 'unsupported_material_claim';
-  else if (!qualityMannerAuthorityPassed) reason = 'unsupported_quality_manner_claim';
-  else if (!materialAuthority.invariantPassed) {
-    reason = 'material_authority_provenance_invariant_failed';
-  } else if (materialAuthority.unsupportedPrintClaimCount > 0) {
-    reason = 'unsupported_print_medium_claim';
-  }
-  else if (!hindiFirstPersonAgreementPassed) reason = 'hindi_first_person_agreement_invalid';
-  else if (!perspectiveValidationPassed) reason = 'mixed_perspective';
-  else if (
-    manifest.locale === 'hr'
-    && !nativeContract.nativeCoordinationValidationPassed
-    && nativeContract.nativeRealizationRejectionReasons.includes(
-      'unnatural_coordination:hr_awkward_professional_role_intro',
-    )
-  ) reason = 'hr_awkward_professional_role_intro';
-  else if (nativeContract.nativeRealizationRejectionReasons.includes(
-    'locale_verb_morphology:ptbr_invalid_role_intro_valency',
-  )) reason = 'ptbr_invalid_role_intro_valency';
-  else if (!arabicMorphologyValidationPassed) reason = 'malformed_arabic_finite_verb';
-  else if (!russianMorphologyValidationPassed) reason = 'malformed_russian_finite_verb';
-  else if (current && (!currentRolePresent || !currentEmployerPresent || !currentStateExpressed)) {
-    reason = 'missing_current_role_intro';
-  } else if (prior && (!priorRolePresent || !priorEmployerPresent || !priorStateExpressed)) {
-    reason = 'missing_prior_role_intro';
-  } else if (relationalOwnershipFailureReasons.length > 0) {
-    reason = relationalOwnershipFailureReasons[0];
-  } else if (!ownership.passed) {
-    reason = ownership.reason || 'final_unit_ownership_failed';
-  } else if (manifest.totalDurationMonths <= 0 && durationExpressionCount > 0) {
+  else if (manifest.totalDurationMonths <= 0 && durationExpressionCount > 0) {
     reason = 'unsupported_duration_without_dates';
   } else if (manifest.totalDurationMonths > 0 && durationExpressionCount !== 1) {
     reason = 'duration_not_exactly_once';
@@ -487,6 +391,12 @@ export function validateSummaryV2AgainstManifest(
     reason = 'current_duty_coverage_incomplete';
   } else if (requiredPrior.length > 0 && coveredPrior < requiredPrior.length) {
     reason = 'prior_duty_coverage_incomplete';
+  } else if (current && (!currentRolePresent || !currentEmployerPresent || !currentStateExpressed)) {
+    reason = 'missing_current_role_intro';
+  } else if (prior && (!priorRolePresent || !priorEmployerPresent || !priorStateExpressed)) {
+    reason = 'missing_prior_role_intro';
+  } else if (!roleTitleGenderValidationPassed) {
+    reason = 'role_title_gender_mismatch';
   } else if (manifest.locale === 'en' && summaryHasMalformedDoublePast(text)) {
     reason = 'malformed_double_past_inflection';
   } else if (!currentDutyTenseOk || !priorDutyTenseOk) {
@@ -511,34 +421,13 @@ export function validateSummaryV2AgainstManifest(
     priorDutyTenseOk,
     staleResidueDetected,
     unsupportedClaimCount,
-    unsupportedQualityMannerClaimCount: unsupportedQualityMannerClaims.length,
-    unsupportedQualityMannerClaimKinds: [...new Set(unsupportedQualityMannerClaims.map((claim) => claim.kind))],
-    unsupportedQualityMannerClaimHashes: [...new Set(unsupportedQualityMannerClaims.map((claim) => claim.surfaceHash))],
-    qualityMannerAuthorityPassed,
     targetLocalePurityPassed: localePurity.targetLocalePurityPassed,
     sourceLanguageLeakageDetected: localePurity.sourceLanguageLeakageDetected,
     unexpectedLocaleCodes: localePurity.unexpectedLocaleCodes as Locale[],
     sourceLanguageLeakageTokens: [],
     wrongLocaleUnitCount: localePurity.wrongLocaleUnitCount,
     wrongScriptUnitCount: localePurity.wrongScriptUnitCount,
-    roleTitleSurfaceValidationPassed,
+    roleTitleGenderEvidence: roleGenderEvidence,
     roleTitleGenderValidationPassed,
-    roleTitleSurfaceEvidence,
-    perspectiveValidationPassed,
-    arabicMorphologyValidationPassed,
-    russianMorphologyValidationPassed,
-    hindiFirstPersonAgreementPassed,
-    hindiSentenceAgreementRecords: nativeContract.hindiSentenceAgreementRecords,
-    printClaimDetected: materialAuthority.printClaimDetected,
-    sourcePrintFactPresent: materialAuthority.sourcePrintFactPresent,
-    unsupportedPrintClaimCount: materialAuthority.unsupportedPrintClaimCount,
-    materialAuthority,
-    unitOwnershipValidationPassed: ownership.passed,
-    unitOwnershipFailureReason: ownership.reason,
-    relationalOwnershipValidationPassed,
-    relationalOwnershipFailureReasons,
-    finalUnitOwnership: ownership.evidence,
-    factUnitCoverageEvidence,
-    factUnitOwnershipValidationPassed,
   };
 }

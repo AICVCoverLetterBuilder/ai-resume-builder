@@ -37,27 +37,10 @@ import { summaryHasMalformedSkillsFragment } from './cv-summary-grounding';
 import { normalizeHindiExperiencePerspective } from './cv-experience-perspective';
 import { buildCrossLocaleExperienceFallback } from './cv-cross-locale-experience';
 import {
-  detectTextLocale,
-  isCrossLocaleOperation,
-} from './cv-content-locale';
-import { validateCrossLocaleSemanticCoverage } from './cv-cross-locale-experience';
-import {
-  validateDistinctExperienceBullets,
-  validateNoExtraGeneratedDuties,
-} from './cv-material-duty-coverage';
-import { validateExperienceCvPerspective } from './cv-experience-perspective';
-import {
   scanGenericExperiencePredicates,
   sourceRequiresGenericExperiencePredicates,
 } from './cv-generic-experience-predicate-grounding';
 import { sourceHasWarehouseDomainApplicability } from './cv-warehouse-domain-applicability';
-import {
-  buildRussianDesignSemanticFallback,
-  sourceRequiresRussianDesignSemanticGrounding,
-  validateRussianDesignSemanticProjection,
-} from './cv-russian-experience-semantic-grounding';
-import { validateRussianExperienceEmploymentTense } from './cv-russian-experience-tense';
-import { validateAiUnitLocalePurity } from './cv-ai-unit-locale-purity';
 
 export type CvContentActivation = {
   content: string;
@@ -67,17 +50,6 @@ export type CvContentActivation = {
   violations: CvFidelityViolation[];
   /** True when non-English locale could not produce valid localized content (never English dump). */
   blocked?: boolean;
-  /** Hash-/count-only truth for the primary provider candidate. */
-  providerPhase?: {
-    candidatePresent: boolean;
-    requiredFactCount: number;
-    coveredFactCount: number;
-    uncoveredSourceIndexes: number[];
-    semanticArgumentAdditionCount: number;
-    addedPredicateCount: number;
-    addedPredicateIdentityHashes: string[];
-    accepted: boolean;
-  };
 };
 
 export function buildBulletRepairPrompt(
@@ -185,41 +157,10 @@ function experiencePasses(
     stage: options.stage,
     isPresent: options.isPresent,
   });
-  const sourceLocale = detectTextLocale(options.canonicalJoined);
-  const crossLocale = isCrossLocaleOperation(sourceLocale, options.locale);
-  if (!check.valid) {
-    // A translated provider candidate can be semantically complete even when
-    // the legacy material-key validator cannot map localized nouns back to the
-    // source language.  Permit only this narrow, independently proven bridge:
-    // exact 1:1 semantic coverage, no added duties, no duplicate/merged units,
-    // target-language output, and valid CV perspective.  Same-locale output
-    // keeps the original strict validator unchanged.
-    const onlyLexicalCoverageFailures = check.violations.length > 0
-      && check.violations.every((violation) => (
-        violation.kind === 'missing_canonical_duty'
-        || violation.kind === 'material_duty_removed'
-        || violation.kind === 'bullet_count_mismatch'
-      ));
-    if (!crossLocale || !onlyLexicalCoverageFailures) return false;
-    const semantic = validateCrossLocaleSemanticCoverage(options.canonicalJoined, content);
-    const extras = validateNoExtraGeneratedDuties(options.canonicalJoined, content);
-    const distinct = validateDistinctExperienceBullets(content);
-    const perspective = validateExperienceCvPerspective(content, options.locale, {
-      isPresent: options.isPresent,
-    });
-    if (
-      !semantic.ok
-      || !extras.valid
-      || !distinct.ok
-      || !perspective.ok
-      || !textMatchesRequestedFieldLocale(content, options.locale, 'experience_bullet')
-    ) return false;
-  }
+  if (!check.valid) return false;
   if (isEnglishCanonicalDump(content, options.canonicalJoined, options.locale)) return false;
   if (sourceRequiresGenericExperiencePredicates(options.canonicalJoined)) {
-    const predicates = scanGenericExperiencePredicates(options.canonicalJoined, content, {
-      allowValidatedCrossLocaleBridge: crossLocale && check.valid === false,
-    });
+    const predicates = scanGenericExperiencePredicates(options.canonicalJoined, content);
     if (predicates.candidateAddedPredicateCount > 0) return false;
     if (!sourceHasWarehouseDomainApplicability(options.canonicalJoined)
       && !predicates.sourceUnitPredicateCoveragePassed) return false;
@@ -241,9 +182,6 @@ export async function activateCvExperienceBullets(options: {
    * skipped and the local deterministic fallback is used immediately instead
    * — see `ai-request-timing.ts`. */
   deadlineAt?: number | null;
-  /** Recovery requests must fail closed when their one bounded provider result
-   * is empty/unsafe; ordinary generation retains deterministic fallback. */
-  allowDeterministicFallback?: boolean;
 }): Promise<CvContentActivation> {
   const canonical = bulletsForExperience(options.factSet, options.experienceIndex);
   const canonicalJoined = canonical.map((b) => b.value).join('\n');
@@ -252,28 +190,6 @@ export async function activateCvExperienceBullets(options: {
     stripAiProtocolMarkers(options.candidate || ''),
     options.locale,
   );
-  const providerSemantic = candidate.trim()
-    ? validateCrossLocaleSemanticCoverage(canonicalJoined, candidate)
-    : null;
-  const providerPredicates = candidate.trim()
-    && sourceRequiresGenericExperiencePredicates(canonicalJoined)
-    ? scanGenericExperiencePredicates(canonicalJoined, candidate, {
-      allowValidatedCrossLocaleBridge: isCrossLocaleOperation(
-        detectTextLocale(canonicalJoined),
-        options.locale,
-      ),
-    })
-    : null;
-  const providerPhase = {
-    candidatePresent: Boolean(candidate.trim()),
-    requiredFactCount: canonical.length,
-    coveredFactCount: providerSemantic?.coveredCount ?? 0,
-    uncoveredSourceIndexes: providerSemantic?.uncoveredSourceIndexes ?? canonical.map((_fact, index) => index),
-    semanticArgumentAdditionCount: providerSemantic?.addedSemanticArgumentCount ?? 0,
-    addedPredicateCount: providerPredicates?.candidateAddedPredicateCount ?? 0,
-    addedPredicateIdentityHashes: providerPredicates?.candidateAddedPredicateIdentityHashes ?? [],
-    accepted: false,
-  };
   const first = validateLocalizedExperienceBullets(candidate, options.factSet, {
     locale: options.locale,
     gender: options.gender,
@@ -288,14 +204,12 @@ export async function activateCvExperienceBullets(options: {
       canonicalJoined,
     })
   ) {
-    providerPhase.accepted = true;
     return {
       content: candidate.trim(),
       status: 'passed',
       repairAttempted: false,
       fallbackUsed: false,
       violations: [],
-      providerPhase,
     };
   }
 
@@ -326,72 +240,11 @@ export async function activateCvExperienceBullets(options: {
           repairAttempted: true,
           fallbackUsed: false,
           violations: first.violations,
-          providerPhase,
         };
       }
     } catch {
       // fall through
     }
-  }
-
-  if (options.allowDeterministicFallback === false) {
-    return {
-      content: '',
-      status: 'blocked',
-      repairAttempted,
-      fallbackUsed: false,
-      blocked: true,
-      violations: first.violations,
-      providerPhase,
-    };
-  }
-
-  // A recognised Russian design source has an immutable three-fact projector.
-  // It must win over the older generic localized fallback: that fallback can
-  // sound plausible while substituting role-template duties (platforms,
-  // screens, file preparation) for source-owned media, client-needs, and
-  // review/quality relations. This remains generic because activation decides
-  // solely from the authoritative source fact families, never title or fixture.
-  const russianSemanticFallback = options.locale === 'ru'
-    && sourceRequiresRussianDesignSemanticGrounding(canonicalJoined)
-    ? buildRussianDesignSemanticFallback({
-      sourceDescription: canonicalJoined,
-      gender: options.gender,
-      isPresent: options.isPresent,
-    })
-    : '';
-  const russianSemanticTense = russianSemanticFallback
-    ? validateRussianExperienceEmploymentTense(russianSemanticFallback, {
-      isPresent: options.isPresent,
-      gender: String(options.gender || ''),
-    })
-    : null;
-  const russianSemanticPurity = russianSemanticFallback
-    ? validateAiUnitLocalePurity(russianSemanticFallback, 'ru', {
-      kind: 'experience_bullet',
-      requireUnits: true,
-    })
-    : null;
-  if (
-    russianSemanticFallback
-    && validateRussianDesignSemanticProjection(canonicalJoined, russianSemanticFallback).ok
-    && russianSemanticTense?.finalTensePassed === true
-    && russianSemanticTense.finalGenderAgreementPassed === true
-    && russianSemanticPurity?.ok === true
-    && textMatchesRequestedFieldLocale(russianSemanticFallback, 'ru', 'experience_bullet')
-    && !isWrongLanguageAiOutput(russianSemanticFallback, 'ru')
-    && validateExperienceCvPerspective(russianSemanticFallback, 'ru', {
-      isPresent: options.isPresent,
-    }).ok
-  ) {
-    return {
-      content: russianSemanticFallback,
-      status: 'fallback',
-      repairAttempted,
-      fallbackUsed: true,
-      violations: first.violations,
-      providerPhase,
-    };
   }
 
   const localizedFallbackRaw = normalizeHindiGeneratedWhitespace(
@@ -421,7 +274,6 @@ export async function activateCvExperienceBullets(options: {
       repairAttempted,
       fallbackUsed: true,
       violations: first.violations,
-      providerPhase,
     };
   }
 
@@ -448,7 +300,6 @@ export async function activateCvExperienceBullets(options: {
       repairAttempted,
       fallbackUsed: true,
       violations: first.violations,
-      providerPhase,
     };
   }
 
@@ -459,7 +310,6 @@ export async function activateCvExperienceBullets(options: {
       repairAttempted,
       fallbackUsed: true,
       violations: first.violations,
-      providerPhase,
     };
   }
 
@@ -471,7 +321,6 @@ export async function activateCvExperienceBullets(options: {
     fallbackUsed: true,
     blocked: true,
     violations: first.violations,
-    providerPhase,
   };
 }
 

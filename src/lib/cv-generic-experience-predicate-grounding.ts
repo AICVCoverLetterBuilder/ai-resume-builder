@@ -11,7 +11,6 @@
 import { splitExperienceBullets } from './cv-canonical-facts';
 import {
   classifyExperienceActionFrame,
-  validateCrossLocaleSemanticCoverage,
 } from './cv-cross-locale-experience';
 import {
   extractSourceDutyUnits,
@@ -27,7 +26,6 @@ import {
   validateNoExtraGeneratedDuties,
 } from './cv-material-duty-coverage';
 import type { MaterialDutyKey } from './cv-material-duty-coverage';
-import { scanJapaneseExperiencePredicates } from './cv-japanese-experience-grounding';
 import {
   sourceHasWarehouseDomainApplicability,
   sourceIsCookingHospitalityWithoutWarehouseEvidence,
@@ -140,20 +138,6 @@ function framesCompatible(
   );
 }
 
-function dominantWritingSystem(
-  text: string,
-): 'arabic' | 'cyrillic' | 'devanagari' | 'latin' | 'other' {
-  const counts = {
-    arabic: (text.match(/\p{Script=Arabic}/gu) || []).length,
-    cyrillic: (text.match(/\p{Script=Cyrillic}/gu) || []).length,
-    devanagari: (text.match(/\p{Script=Devanagari}/gu) || []).length,
-    latin: (text.match(/\p{Script=Latin}/gu) || []).length,
-  };
-  const best = (Object.entries(counts) as Array<[keyof typeof counts, number]>)
-    .sort((a, b) => b[1] - a[1])[0];
-  return best && best[1] > 0 ? best[0] : 'other';
-}
-
 /**
  * Bipartite 1:1 match of source units ↔ candidate units by action frame.
  * Returns covered source indices and unused candidate indices.
@@ -223,18 +207,6 @@ function matchSourceToCandidateUnits(
 export function scanGenericExperiencePredicates(
   sourceDescription: string,
   candidateDescription: string,
-  options?: {
-    allowValidatedCrossScriptBridge?: boolean;
-    /**
-     * Route-level cross-locale validation has already proved the requested
-     * locale, perspective, and target employment state.  That proof allows a
-     * same-script translation (for example Hindi -> French after source
-     * locale detection is unavailable) to use the same one-to-one semantic
-     * bridge as a cross-script translation.  This is opt-in so the ordinary
-     * generic predicate gate remains unchanged for every other caller.
-     */
-    allowValidatedCrossLocaleBridge?: boolean;
-  },
 ): GenericExperiencePredicateScan {
   void GENERIC_EXPERIENCE_PREDICATE_343_REVISION;
   const sourceUnits = extractSourceDutyUnits(sourceDescription || '')
@@ -256,32 +228,6 @@ export function scanGenericExperiencePredicates(
       finalCandidatePredicateValidationApplicable: true,
       missingPredicateIdentityHashes: [],
       reason: 'generic_experience_predicate_source_empty',
-    };
-  }
-
-  // CJK surfaces do not expose whitespace-delimited verbs. Use the typed
-  // Japanese responsibility bridge so one source duty maps to one candidate
-  // duty without counting agglutinative/action tokens as extra predicates.
-  if (/[\u3040-\u30ff\u3400-\u9fff]/u.test(candidateDescription || '')) {
-    const japanese = scanJapaneseExperiencePredicates(
-      sourceDescription || '',
-      candidateDescription || '',
-    );
-    const semanticCoverage = validateCrossLocaleSemanticCoverage(
-      sourceDescription || '',
-      candidateDescription || '',
-    );
-    const passed = japanese.sourceUnitPredicateCoveragePassed && semanticCoverage.ok;
-    return {
-      revision: GENERIC_EXPERIENCE_PREDICATE_343_REVISION,
-      sourcePredicateIdentityCount: japanese.sourcePredicateIdentityCount,
-      candidatePredicateIdentityCount: japanese.candidatePredicateIdentityCount,
-      candidateAddedPredicateCount: japanese.candidateAddedPredicateCount,
-      candidateAddedPredicateIdentityHashes: japanese.candidateAddedPredicateIdentityHashes,
-      sourceUnitPredicateCoveragePassed: passed,
-      finalCandidatePredicateValidationApplicable: true,
-      missingPredicateIdentityHashes: passed ? [] : sourceIds.slice(japanese.candidatePredicateIdentityCount),
-      reason: passed ? null : (semanticCoverage.ok ? 'source_unit_predicate_coverage_failed' : 'semantic_argument_coverage_failed'),
     };
   }
 
@@ -319,36 +265,11 @@ export function scanGenericExperiencePredicates(
   // Dedicated locale scanners recognize broader warehouse vocabulary. The
   // generic layer may accept an unclassified localized object only when its
   // action frame still maps one-to-one; registered added duties remain fatal.
-  let { coveredSi, usedCi } = matchSourceToCandidateUnits(
+  const { coveredSi, usedCi } = matchSourceToCandidateUnits(
     sourceUnits,
     candUnits,
     warehouseApplicable,
   );
-  const semanticCoverage = validateCrossLocaleSemanticCoverage(
-    sourceDescription || '',
-    candidateDescription || '',
-  );
-  const sourceWritingSystem = dominantWritingSystem(sourceDescription || '');
-  const candidateWritingSystem = dominantWritingSystem(candidateDescription || '');
-  // Translation can legitimately change both lexical action frames and the
-  // surface material-family token. Permit an identity bridge only when every
-  // independent safety boundary proves a complete 1:1 translation. Added,
-  // merged, duplicated, unsupported, and cross-domain actions remain fatal.
-  const provenCrossLocaleTranslation = (
-    options?.allowValidatedCrossScriptBridge === true
-    || options?.allowValidatedCrossLocaleBridge === true
-  )
-    && sourceWritingSystem !== 'other'
-    && candidateWritingSystem !== 'other'
-    && sourceUnits.length === candUnits.length
-    && semanticCoverage.ok
-    && extras.valid
-    && distinct.ok
-    && !crossDomainLeakage;
-  if (provenCrossLocaleTranslation && coveredSi.length < sourceUnits.length) {
-    coveredSi = sourceUnits.map((_, index) => index);
-    usedCi = new Set(candUnits.map((_, index) => index));
-  }
   const missing = sourceIds.filter((_, i) => !coveredSi.includes(i));
   const addedHashes: string[] = [];
   for (let ci = 0; ci < candUnits.length; ci += 1) {
@@ -362,13 +283,11 @@ export function scanGenericExperiencePredicates(
   const sourceMaterialKeys = new Set(
     sourceUnits.flatMap((unit) => specificMaterialDutyKeys(unit)),
   );
-  if (!provenCrossLocaleTranslation) {
-    for (let ci = 0; ci < candUnits.length; ci += 1) {
-      for (const key of specificMaterialDutyKeys(candUnits[ci]!)) {
-        if (sourceMaterialKeys.has(key)) continue;
-        const id = addedPredicateIdentity(`extra:material_key:${key}:${ci}`);
-        if (!addedHashes.includes(id)) addedHashes.push(id);
-      }
+  for (let ci = 0; ci < candUnits.length; ci += 1) {
+    for (const key of specificMaterialDutyKeys(candUnits[ci]!)) {
+      if (sourceMaterialKeys.has(key)) continue;
+      const id = addedPredicateIdentity(`extra:material_key:${key}:${ci}`);
+      if (!addedHashes.includes(id)) addedHashes.push(id);
     }
   }
   if (extras.valid === false) {
@@ -410,7 +329,7 @@ export function scanGenericExperiencePredicates(
     && !splitOrDup
     && !countMismatch
     && !crossDomainLeakage
-    && (provenCrossLocaleTranslation || warehouseApplicable || materialCoverage.valid)
+    && (warehouseApplicable || materialCoverage.valid)
     && coveredCount === sourceUnits.length
     && candUnits.length === sourceUnits.length;
 

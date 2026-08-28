@@ -156,7 +156,6 @@ export type ExperienceFinalDecisionKind =
   | 'semantic_noop'
   | 'exact_noop'
   | 'degradation'
-  | 'neutral_restyle'
   | 'none';
 
 export type ExperienceCanonicalPreapplyDecisionKind =
@@ -166,9 +165,9 @@ export type ExperienceCanonicalPreapplyDecisionKind =
   | 'invalid_candidate_rejected';
 
 /**
- * Grounding acceptance and visible apply acceptance are deliberately separate.
- * This frozen object is the only decision allowed to authorize an Experience
- * write or usage increment.
+ * Candidate grounding acceptance and visible apply acceptance are deliberately
+ * separate. This frozen object is the only decision allowed to authorize a
+ * visible write or usage increment for an Experience operation.
  */
 export type ExperienceCanonicalPreapplyDecision = Readonly<{
   revision: typeof EXPERIENCE_CANONICAL_PREAPPLY_DECISION_421_REVISION;
@@ -197,8 +196,10 @@ export function decideExperienceCanonicalPreapply(options: {
   neutralRestyleDetected?: boolean;
   degradationDetected?: boolean;
   degradationKinds?: readonly string[];
+  /** Empty target text/job-context generation has no visible baseline to improve. */
   allowMaterialApplyWithoutVisibleComparison?: boolean;
 }): ExperienceCanonicalPreapplyDecision {
+  void EXPERIENCE_CANONICAL_PREAPPLY_DECISION_421_REVISION;
   const reportedImprovementKinds = [
     ...new Set((options.materialImprovementKinds || []).filter(Boolean)),
   ];
@@ -212,14 +213,14 @@ export function decideExperienceCanonicalPreapply(options: {
       ? ['grounded_target_generation']
       : reportedImprovementKinds,
   );
+  const degradationKinds = Object.freeze([
+    ...new Set((options.degradationKinds || []).filter(Boolean)),
+  ]);
   const semanticNoOpDetected = Boolean(
     options.visibleComparisonAvailable
     && options.semanticNoOpDetected
     && !options.materialImprovementDetected,
   );
-  const degradationKinds = Object.freeze([
-    ...new Set((options.degradationKinds || []).filter(Boolean)),
-  ]);
   const degradationDetected = Boolean(
     options.candidateValidationAccepted
     && !semanticNoOpDetected
@@ -232,17 +233,19 @@ export function decideExperienceCanonicalPreapply(options: {
     && !degradationDetected
     && (
       (options.materialImprovementDetected && improvementKinds.length > 0)
-      || generationWithoutVisibleBaseline
+      || (
+        generationWithoutVisibleBaseline
+      )
     ),
   );
 
   let finalDecisionKind: ExperienceCanonicalPreapplyDecisionKind;
-  if (semanticNoOpDetected) {
-    finalDecisionKind = 'semantic_noop';
-  } else if (!options.candidateValidationAccepted) {
+  if (!options.candidateValidationAccepted) {
     finalDecisionKind = 'invalid_candidate_rejected';
   } else if (degradationDetected) {
     finalDecisionKind = 'degradation_rejected';
+  } else if (semanticNoOpDetected) {
+    finalDecisionKind = 'semantic_noop';
   } else if (materialImprovementDetected) {
     finalDecisionKind = 'material_improvement';
   } else {
@@ -259,9 +262,7 @@ export function decideExperienceCanonicalPreapply(options: {
       ? (options.semanticNoOpReason || 'semantic_equivalent_visible')
       : null,
     materialImprovementDetected,
-    materialImprovementKinds: materialImprovementDetected
-      ? improvementKinds
-      : Object.freeze([]),
+    materialImprovementKinds: materialImprovementDetected ? improvementKinds : Object.freeze([]),
     neutralRestyleDetected: Boolean(semanticNoOpDetected && options.neutralRestyleDetected),
     degradationDetected,
     degradationKinds: degradationDetected ? degradationKinds : Object.freeze([]),
@@ -809,16 +810,7 @@ export function evaluateExperienceVisibleComparison(options: {
         // Generic cross-locale: semantic frame / identity coverage + shared predicates.
         const semantic = validateCrossLocaleSemanticCoverage(auth, candidate);
         const genPred = sourceRequiresGenericExperiencePredicates(auth)
-          // The generic predicate scanner is intentionally strict for ordinary
-          // same-locale output.  A cross-locale final candidate has already
-          // crossed the independent, typed fact/predicate/argument bridge
-          // above, though; comparing its target-language predicates directly
-          // with the foreign-language visible snapshot falsely invents an
-          // added action.  Keep the scanner's one-to-one and no-extra-duty
-          // checks, but enable its proven translation bridge for this path.
-          ? scanGenericExperiencePredicates(auth, candidate, {
-            allowValidatedCrossLocaleBridge: true,
-          })
+          ? scanGenericExperiencePredicates(auth, candidate)
           : null;
         if (!semantic.ok || semantic.coveredCount < semantic.requiredCount) {
           degradationKinds.push('fact_lost');
@@ -1028,7 +1020,9 @@ export function evaluateExperienceVisibleComparison(options: {
   if (degradationDetected) finalDecisionKind = 'degradation';
   else if (materialImprovementDetected) finalDecisionKind = 'material_improvement';
   else if (exactNormMatch) finalDecisionKind = 'exact_noop';
-  else if (neutralRestyleDetected) finalDecisionKind = 'neutral_restyle';
+  // Neutral restyle is evidence for semantic no-op, not a separate final
+  // decision that another phase may accidentally treat as apply-capable.
+  else if (neutralRestyleDetected) finalDecisionKind = 'semantic_noop';
   else if (semanticNoOpDetected) finalDecisionKind = 'semantic_noop';
 
   return {

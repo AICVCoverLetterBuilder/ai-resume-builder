@@ -5,8 +5,6 @@ import type { CVData } from '@/lib/types';
 import { getRegionSettings } from '@/lib/cv-region';
 import { translations, type Locale } from '@/lib/i18n/translations';
 import { ELEGANT_FORMAL_PHOTO_HEIGHT, ELEGANT_FORMAL_PHOTO_WIDTH } from '@/lib/elegant-formal-photo';
-import { formatRirekishoDateRange } from '@/lib/rirekisho-date-format';
-import { projectRirekishoGenderDisplay } from '@/lib/rirekisho-gender-display';
 
 
 interface TemplateProps {
@@ -29,18 +27,6 @@ function getLabels(locale?: Locale) {
     certifications: t.cv.certifications,
     present: t.cv.present,
   };
-}
-
-/** Keep date ranges meaningful when one side of an app-owned entry is absent. */
-function formatExperienceDateRange(
-  startDate: string | undefined,
-  endDate: string | undefined,
-  isPresent: boolean | undefined,
-  presentLabel: string,
-): string {
-  const start = String(startDate || '').trim();
-  const end = String(isPresent ? presentLabel : (endDate || '')).trim();
-  return [start, end].filter(Boolean).join(' - ');
 }
 
 function PhotoFill({
@@ -833,7 +819,7 @@ export function CreativeArtisticTemplate({ data, locale }: TemplateProps) {
       </header>
       <div className="p-8" style={{ padding: 32, backgroundColor: '#ffffff', boxSizing: 'border-box' }}>
         {data.summary && <section className="mb-6" style={{ marginBottom: 24 }}><p data-export-meaningful="true" className="text-gray-700 text-base leading-relaxed" style={{ color: '#374151', fontSize: 16, lineHeight: 1.625, margin: 0, ...exportSafeTextStyle }}>{data.summary}</p></section>}
-        {data.experience.length > 0 && <section className="mb-6" style={{ marginBottom: 24 }}><h2 data-export-meaningful="true" className="text-violet-600 font-bold mb-3" style={{ color: '#7c3aed', fontWeight: 700, marginBottom: 12, ...exportSafeTextStyle }}>{L.experience}</h2>{data.experience.map(exp => (<div key={exp.id} data-export-meaningful="true" className="mb-4 pl-4 border-l-2 border-violet-200" style={{ marginBottom: 16, paddingLeft: 16, borderLeft: '2px solid #ddd6fe', boxSizing: 'border-box' }}><h3 className="font-semibold" style={{ fontWeight: 600, margin: 0, ...exportSafeTextStyle }}>{exp.position}</h3><p className="text-xs text-violet-500" style={{ color: '#8b5cf6', fontSize: 12, margin: '2px 0 0', ...exportSafeTextStyle }}>{exp.company}{formatExperienceDateRange(exp.startDate, exp.endDate, exp.isPresent, L.present) ? ` | ${formatExperienceDateRange(exp.startDate, exp.endDate, exp.isPresent, L.present)}` : ''}</p>{exp.description && <p className="mt-1 text-gray-600 whitespace-pre-line" style={{ ...exportSafeTextStyle, color: '#4b5563', marginTop: 4, whiteSpace: 'pre-line' }}>{exp.description}</p>}</div>))}</section>}
+        {data.experience.length > 0 && <section className="mb-6" style={{ marginBottom: 24 }}><h2 data-export-meaningful="true" className="text-violet-600 font-bold mb-3" style={{ color: '#7c3aed', fontWeight: 700, marginBottom: 12, ...exportSafeTextStyle }}>{L.experience}</h2>{data.experience.map(exp => (<div key={exp.id} data-export-meaningful="true" className="mb-4 pl-4 border-l-2 border-violet-200" style={{ marginBottom: 16, paddingLeft: 16, borderLeft: '2px solid #ddd6fe', boxSizing: 'border-box' }}><h3 className="font-semibold" style={{ fontWeight: 600, margin: 0, ...exportSafeTextStyle }}>{exp.position}</h3><p className="text-xs text-violet-500" style={{ color: '#8b5cf6', fontSize: 12, margin: '2px 0 0', ...exportSafeTextStyle }}>{exp.company} | {exp.startDate} - {exp.isPresent ? L.present : exp.endDate}</p>{exp.description && <p className="mt-1 text-gray-600 whitespace-pre-line" style={{ ...exportSafeTextStyle, color: '#4b5563', marginTop: 4, whiteSpace: 'pre-line' }}>{exp.description}</p>}</div>))}</section>}
         {data.education.length > 0 && <section data-export-group="education-section" className="mb-6" style={{ marginBottom: 24 }}><h2 data-export-meaningful="true" data-export-keep-with-next="true" className="text-violet-600 font-bold mb-3" style={{ color: '#7c3aed', fontWeight: 700, marginBottom: 12, ...exportSafeTextStyle }}>{L.education}</h2>{data.education.map(edu => {
           const educationDates = [edu.startDate, edu.endDate].filter(Boolean).join(' - ');
           const educationMeta = [edu.school, educationDates].filter(Boolean).join(' | ');
@@ -1163,7 +1149,7 @@ export function CorporateNavyTemplate({ data, locale }: TemplateProps) {
               <div key={exp.id} className="mb-5">
                 <div className="flex justify-between items-baseline">
                   <h3 className="font-bold text-gray-900">{exp.position}</h3>
-                  <span className="text-xs text-gray-400">{formatExperienceDateRange(exp.startDate, exp.endDate, exp.isPresent, L.present)}</span>
+                  <span className="text-xs text-gray-400">{exp.startDate} – {exp.isPresent ? L.present : exp.endDate}</span>
                 </div>
                 <p className="text-blue-700 text-xs font-medium mt-0.5">{exp.company}</p>
                 <p className="mt-2 text-gray-600 whitespace-pre-line">{exp.description}</p>
@@ -1221,7 +1207,7 @@ export function CorporateNavyTemplate({ data, locale }: TemplateProps) {
 // --- Rirekisho: Standard Japanese CV format ---
 export function RirekishoTemplate({ data }: TemplateProps) {
   const showPhoto = data.personal.photoEnabled !== undefined ? data.personal.photoEnabled : true;
-  const gender = projectRirekishoGenderDisplay(data.personal.gender);
+  const gender = data.personal.gender;
   const dob = data.personal.dateOfBirth;
   const coverLetter = (data as CVData & { coverLetterContent?: string }).coverLetterContent;
 
@@ -1354,7 +1340,7 @@ export function RirekishoTemplate({ data }: TemplateProps) {
               {data.experience.map((exp) => (
                 <tr key={exp.id}>
                   <td className="border border-gray-300 px-2 py-1.5 text-gray-600 whitespace-nowrap">
-                    {formatRirekishoDateRange(exp.startDate, exp.endDate, exp.isPresent)}
+                    {exp.startDate}{exp.startDate ? '〜' : ''}{exp.isPresent ? '現在' : exp.endDate}
                   </td>
                   <td className="border border-gray-300 px-2 py-1.5">
                     <p className="font-medium">{exp.company}</p>

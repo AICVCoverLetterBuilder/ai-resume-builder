@@ -1860,116 +1860,6 @@ Rules:
       });
     }
 
-    if (action === 'summary-simple-v1') {
-      const operation = params.operation === 'generate' || params.operation === 'rewrite'
-        ? params.operation
-        : null;
-      const style = ['shorter', 'stronger', 'professional'].includes(String(params.style))
-        ? String(params.style) as 'shorter' | 'stronger' | 'professional'
-        : null;
-      if (!operation || (operation === 'rewrite' && !style)) {
-        return jsonResponse({
-          error: 'Invalid Simple V1 Summary operation.',
-          code: 'generation_validation_failed' satisfies AiErrorCode,
-        }, { status: 400 });
-      }
-
-      const resolvedLocale = normalizeLocale(params.contentLocale);
-      const localeInfo = localeInstructions[resolvedLocale];
-      const gender = sanitizeField(params.gender, 40);
-      const genderNote = getGenderInstruction(resolvedLocale, gender || '');
-      const rawFacts = params.facts && typeof params.facts === 'object' && !Array.isArray(params.facts)
-        ? params.facts as Record<string, unknown>
-        : {};
-      const safeFacts = {
-        jobTitle: sanitizeField(rawFacts.jobTitle, 300),
-        roles: (Array.isArray(rawFacts.roles) ? rawFacts.roles : []).slice(0, 4).map((value) => {
-          const role = value && typeof value === 'object' && !Array.isArray(value)
-            ? value as Record<string, unknown>
-            : {};
-          return {
-            position: sanitizeField(role.position, 300),
-            company: sanitizeField(role.company, 300),
-            startDate: sanitizeField(role.startDate, 40),
-            endDate: sanitizeField(role.endDate, 40),
-            isPresent: role.isPresent === true,
-            description: sanitizeText(role.description, 3000),
-          };
-        }),
-        education: (Array.isArray(rawFacts.education) ? rawFacts.education : []).slice(0, 3).map((value) => {
-          const education = value && typeof value === 'object' && !Array.isArray(value)
-            ? value as Record<string, unknown>
-            : {};
-          return {
-            school: sanitizeField(education.school, 300),
-            degree: sanitizeField(education.degree, 300),
-            startDate: sanitizeField(education.startDate, 40),
-            endDate: sanitizeField(education.endDate, 40),
-          };
-        }),
-        skills: (Array.isArray(rawFacts.skills) ? rawFacts.skills : [])
-          .slice(0, 16)
-          .map((value) => sanitizeField(value, 160)),
-        certifications: (Array.isArray(rawFacts.certifications) ? rawFacts.certifications : [])
-          .slice(0, 8)
-          .map((value) => sanitizeField(value, 200)),
-        languages: (Array.isArray(rawFacts.languages) ? rawFacts.languages : []).slice(0, 8).map((value) => {
-          const language = value && typeof value === 'object' && !Array.isArray(value)
-            ? value as Record<string, unknown>
-            : {};
-          return {
-            name: sanitizeField(language.name, 120),
-            level: sanitizeField(language.level, 80),
-          };
-        }),
-      };
-      const sourceSummary = operation === 'rewrite'
-        ? sanitizeText(params.sourceSummary, 3000)
-        : '';
-      if (operation === 'rewrite' && !sourceSummary.trim()) {
-        return jsonResponse({
-          error: 'A current Summary is required for rewrite.',
-          code: 'generation_validation_failed' satisfies AiErrorCode,
-        }, { status: 422 });
-      }
-
-      const styleInstruction = style === 'shorter'
-        ? 'Make the source Summary meaningfully shorter while preserving its supported facts.'
-        : style === 'stronger'
-          ? 'Improve impact and wording without adding achievements, scope, or facts.'
-          : 'Improve the professional tone without adding facts.';
-      const response = await callWithRetry({
-        model: MODEL,
-        max_tokens: 360,
-        temperature: 0.35,
-        stream: false,
-        system: `Write one concise professional CV Summary in ${localeInfo.languageName} (${resolvedLocale}).
-Return plain Summary text only: no markdown, heading, list, quotation marks, or JSON.
-Use only CURRENT STRUCTURED CV FACTS and, for a rewrite, the supplied CURRENT SUMMARY.
-Employer names, dates, numbers, metrics, tools, duties, qualifications, and achievements must be copied from those sources; never invent them.
-Do not calculate new durations or metrics. Write two to four complete sentences.
-${operation === 'rewrite' ? styleInstruction : 'Create a complete Summary from the structured facts. Ignore any Summary text not explicitly supplied in this request.'}
-${genderNote}`,
-        messages: [{
-          role: 'user',
-          content: JSON.stringify({
-            contentLocale: resolvedLocale,
-            gender,
-            operation,
-            ...(style ? { style } : {}),
-            facts: safeFacts,
-            ...(operation === 'rewrite' ? { currentSummary: sourceSummary } : {}),
-          }),
-        }],
-      }, deadlineAt);
-
-      return jsonResponse({
-        result: getText(response),
-        simpleV1: true,
-        providerResultKind: 'text',
-      });
-    }
-
     if (action === 'summary') {
       const { locale, gender, experienceEntries, skills, languages, education } = params;
       const jobTitle = sanitizeField(params.jobTitle, 500);
@@ -2487,16 +2377,7 @@ ${sourceFactsText || '(none)'}`
       const { industry, level, locale, gender } = params;
       const position = sanitizeField(params.position, 500);
       const company = sanitizeField(params.company, 500);
-      // Recovery requests carry an immutable, entry-owned fact snapshot.  It
-      // outranks the visible textarea and the ordinary sourceDescription field
-      // so a prior unedited AI surface can never become fact authority.
-      const sourceDescription = sanitizeText(
-        params.factAuthorityDescription
-          ?? params.sourceDescription
-          ?? params.description
-          ?? '',
-        8000,
-      );
+      const sourceDescription = sanitizeText(params.sourceDescription ?? params.description ?? '', 8000);
       const isPresentRole = params.isPresent === true
         || params.isPresent === 'true'
         || String(params.endDate || '').toLowerCase() === 'present';
@@ -2653,9 +2534,7 @@ Infer ordinary day-to-day responsibilities from the job title and level. Output 
         aiResult = '';
       }
       if (!aiResult || !aiResult.includes('•')) {
-        aiResult = noopRepairRequested
-          ? ''
-          : hasCanonical
+        aiResult = hasCanonical
           ? generateBulletsOffline(
             (industry || 'general') as BulletIndustry,
             (level || 'mid') as BulletLevel,
@@ -2747,8 +2626,7 @@ Infer ordinary day-to-day responsibilities from the job title and level. Output 
         candidate: aiResult,
         isPresent: isPresentRole,
         deadlineAt,
-        allowDeterministicFallback: !noopRepairRequested,
-        repair: !noopRepairRequested && !bulletsForceRespond
+        repair: !bulletsForceRespond
           ? async (prompt) => {
               bulletsRepairStartedAt = Date.now();
               try {
@@ -2860,7 +2738,6 @@ Infer ordinary day-to-day responsibilities from the job title and level. Output 
         cvFidelityStatus: activated.status,
         repairAttempted: activated.repairAttempted,
         fallbackUsed: activated.fallbackUsed,
-        providerPhase: activated.providerPhase,
         usedFactIds: canonicalBullets.map((b) => b.id),
         violationCount: activated.violations.length,
       });

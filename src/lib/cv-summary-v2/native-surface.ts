@@ -17,8 +17,6 @@ import {
   detectUnresolvedGenderPlaceholder,
   type SummaryV2GenderMode,
 } from './gender';
-import { validateFrenchSummaryFiniteGrammar } from '../cv-french-summary-grounding';
-import { analyzePortugueseBrazilFirstPersonFiniteVerbs } from '../cv-portuguese-summary-grounding';
 
 export const SUMMARY_V2_NATIVE_SURFACE_386_REVISION =
   'summary-v2-native-surface-386-v1' as const;
@@ -34,10 +32,6 @@ export const SUMMARY_V2_SPANISH_PERSPECTIVE_NATIVE_SURFACE_391_REVISION =
 /** Spanish slot-wide first/third-person predicate guard. */
 export const SUMMARY_V2_SPANISH_SLOT_WIDE_PERSON_393_REVISION =
   'summary-v2-spanish-slot-wide-person-393-v1' as const;
-
-/** Hindi Summary first-person agreement is validated at every V2 candidate gate. */
-export const SUMMARY_V2_HINDI_FIRST_PERSON_AGREEMENT_427_REVISION =
-  'summary-v2-hindi-first-person-agreement-427-v1' as const;
 
 export type SummaryV2NativeSurfaceResult = {
   nativeSurfaceValidationPassed: boolean;
@@ -58,8 +52,6 @@ export type SummaryV2NativeSurfaceResult = {
   roleCaseValidationPassed: boolean;
   nativeCoordinationValidationPassed: boolean;
   sentenceCompletenessPassed: boolean;
-  hindiFirstPersonAgreementPassed: boolean;
-  hindiSentenceAgreementRecords: HindiSummarySentenceAgreementRecord[];
   /** SR/HR coordinated-predicate chain diagnostics (N/A → empty pass for other locales). */
   coordinatedPredicateCount: number;
   transformedCoordinatedPredicateCount: number;
@@ -70,28 +62,6 @@ export type SummaryV2NativeSurfaceResult = {
   predicateChainRejectionReasons: string[];
   sourcePredicateChainHash: string;
   finalPredicateChainHash: string;
-  frenchGrammarValidationPassed?: boolean;
-  frenchGrammarRejectionReason?: string | null;
-  frenchTokenBoundaryValidationPassed?: boolean;
-  frenchClauseCasingValidationPassed?: boolean;
-  ptbrFiniteVerbCount: number;
-  ptbrFirstPersonCompatibleFiniteVerbCount: number;
-  ptbrWrongPersonFiniteVerbCount: number;
-  ptbrWrongPersonFiniteVerbHashes: string[];
-  ptbrUnitPersonAgreementPassed: boolean;
-};
-
-export type HindiSummarySentenceAgreementRecord = {
-  sentenceIndex: number;
-  clauseIndex: number;
-  employmentState: 'present' | 'completed' | 'unknown';
-  perspectiveMode: 'first_person' | 'neutral_or_unspecified';
-  genderMode: SummaryV2GenderMode;
-  finiteVerbOrAuxiliaryDetected: boolean;
-  agreementMode: 'first_person_habitual' | 'first_person_perfective' | 'neutral' | 'unknown';
-  aspect: 'present_habitual' | 'past_habitual' | 'perfective' | 'mixed' | 'unknown';
-  grammarPassed: boolean;
-  grammarReasons: string[];
 };
 
 function capitalizeFirstLetter(text: string): string {
@@ -170,48 +140,8 @@ export function formatNativeDurationSentence(
   return `${capitalizeFirstLetter(raw)}.`;
 }
 
-const FRENCH_FUNCTION_WORDS = '(?:avec|pour|dans|chez|sur|par|et|ou|de|en|à)';
-const FRENCH_ARTICLE_WORDS = '(?:les|des|la|le|un|une|aux|au|du|d\u2019?)';
-const FRENCH_FUSED_BOUNDARY_RE = new RegExp(
-  `(^|[^\\p{L}])(${FRENCH_FUNCTION_WORDS})(${FRENCH_ARTICLE_WORDS})(?=[^\\p{L}]|$)`,
-  'giu',
-);
-
-/**
- * Repair token boundaries at the shared French duty-surface join point.
- * Function words and their following articles are separate lexical tokens;
- * this is intentionally structural rather than a fixture-specific replacement.
- */
-export function normalizeFrenchTokenBoundaries(text: string): string {
-  return (text || '')
-    .replace(FRENCH_FUSED_BOUNDARY_RE, '$1$2 $3')
-    .replace(/\s+/gu, ' ')
-    .trim();
-}
-
-export function detectFrenchTokenBoundaryDefect(text: string): boolean {
-  FRENCH_FUSED_BOUNDARY_RE.lastIndex = 0;
-  return FRENCH_FUSED_BOUNDARY_RE.test(text || '');
-}
-
-/** Lowercase a duty predicate only when it is embedded in a sentence. */
-export function normalizeFrenchDutyClause(text: string): string {
-  const normalized = normalizeFrenchTokenBoundaries(text);
-  const sentenceCased = normalized.replace(/^(\p{Lu})(?=\p{Ll})/u, (match) =>
-    match.toLocaleLowerCase('fr-FR'));
-  // A completed duty may carry its auxiliary explicitly ("ai Préparé")
-  // before the relative connector supplies "où j'ai". The participle is
-  // still sentence-internal and must not retain standalone-bullet casing.
-  return sentenceCased.replace(/^(ai|j['’]ai)(\s+)(\p{Lu})(?=\p{Ll})/iu,
-    (_match, auxiliary: string, spacing: string, initial: string) =>
-      `${auxiliary}${spacing}${initial.toLocaleLowerCase('fr-FR')}`);
-}
-
 function localeAndJoin(parts: string[], locale: Locale): string {
-  const clean = parts
-    .map((p) => (locale === 'fr' ? normalizeFrenchDutyClause(p) : p)
-      .replace(/[.;]+$/u, '').trim())
-    .filter(Boolean);
+  const clean = parts.map((p) => p.replace(/[.;]+$/u, '').trim()).filter(Boolean);
   if (clean.length === 0) return '';
   if (clean.length === 1) return clean[0];
   // Arabic uses the Arabic comma; never the Latin comma inside RTL prose.
@@ -219,7 +149,7 @@ function localeAndJoin(parts: string[], locale: Locale): string {
   const last = clean[clean.length - 1];
   if (locale === 'es') return `${head} y ${last}`;
   if (locale === 'pt-BR') return `${head} e ${last}`;
-  if (locale === 'fr') return normalizeFrenchTokenBoundaries(`${head} et ${last}`);
+  if (locale === 'fr') return `${head} et ${last}`;
   if (locale === 'it') return `${head} e ${last}`;
   if (locale === 'ru') return `${head} и ${last}`;
   if (locale === 'sr' || locale === 'hr') return `${head} i ${last}`;
@@ -228,59 +158,6 @@ function localeAndJoin(parts: string[], locale: Locale): string {
   if (locale === 'ja') return `${head}、${last}`;
   if (locale === 'de') return `${head} und ${last}`;
   return `${head} and ${last}`;
-}
-
-const FRENCH_FIRST_PERSON_PRESENT_IRREGULAR: Record<string, string> = {
-  a: 'ai',
-  est: 'suis',
-  fait: 'fais',
-  va: 'vais',
-  peut: 'peux',
-  doit: 'dois',
-  sait: 'sais',
-  prend: 'prends',
-  met: 'mets',
-  lit: 'lis',
-  écrit: 'écris',
-  voit: 'vois',
-  suit: 'suis',
-  tient: 'tiens',
-  vient: 'viens',
-  boit: 'bois',
-  croit: 'crois',
-  reçoit: 'reçois',
-};
-
-/** Realize every finite predicate in a French first-person duty chain. */
-function realizeFrenchFirstPersonDutyChain(
-  bullet: string,
-  tense: 'present' | 'completed',
-): string {
-  let text = (bullet || '').replace(/[.;。؟।]+$/u, '').trim();
-  text = text.replace(/^(?:je|j['’])\s+/iu, '');
-  if (!text) return '';
-  if (tense === 'completed') {
-    // `j'ai` is one auxiliary boundary. Normalize it to `ai` before the
-    // caller supplies the relative-clause `où j'` prefix.
-    text = text.replace(/^j['\u2019]ai\s+/iu, 'ai ');
-    text = text.replace(/((?:^|[,;]|\bet\b)\s*)j['\u2019]ai\s+/giu, '$1');
-    // Provider/deterministic bullets often carry a third-person auxiliary.
-    // The relative connector supplies j' outside this function, so return ai.
-    text = text.replace(/^(?:a|ont|avait|avaient|j['’]a)\s+/iu, 'ai ');
-    text = text.replace(/((?:^|[,;]|\bet\b)\s*)(?:a|ont|avait|avaient)\s+/giu, '$1');
-    // Imparfait chains must agree with je on every coordinated finite verb.
-    text = text.replace(/\b(\p{L}+?)ait\b/giu, (match, stem: string) =>
-      /^(?:f|déf|ref)$/iu.test(stem) ? match : `${stem}ais`);
-    text = text.replace(/\b(\p{L}+?)aient\b/giu, '$1aient');
-    return normalizeFrenchDutyClause(text);
-  }
-  // Present irregulars are the forms where 1sg and 3sg visibly diverge.
-  text = text.replace(/^(\p{L}+)/u, (match) => match.toLocaleLowerCase('fr-FR'));
-  text = text.replace(/(^|[,;]|\bet\b)\s*(\p{L}+)/giu, (all, prefix: string, verb: string) => {
-    const mapped = FRENCH_FIRST_PERSON_PRESENT_IRREGULAR[verb.toLocaleLowerCase('fr-FR')];
-    return `${prefix}${mapped || verb}`;
-  });
-  return text.replace(/\s+/g, ' ').trim();
 }
 
 /** Spanish/Portuguese 3sg → 1sg present morphology (no occupation tables). */
@@ -305,18 +182,7 @@ function romanceFirstPersonPast(lower: string, locale: 'es' | 'pt-BR'): string {
   if (/yó$/u.test(lower)) return `${lower.slice(0, -2)}í`;
   if (/ió$/u.test(lower)) return `${lower.slice(0, -2)}í`;
   if (locale === 'pt-BR') {
-    // Brazilian Portuguese third-person simple past -eu maps to the
-    // first-person -i form (desenvolveu -> desenvolvi, conheceu -> conheci).
-    if (/eu$/u.test(lower)) return `${lower.slice(0, -2)}i`;
-    if (/ou$/u.test(lower)) {
-      // Orthographic stem changes keep regular -car/-gar/-çar verbs valid
-      // before the first-person -ei ending (verificou -> verifiquei,
-      // pagou -> paguei, começou -> comecei).
-      if (/cou$/u.test(lower)) return `${lower.slice(0, -3)}quei`;
-      if (/gou$/u.test(lower)) return `${lower.slice(0, -3)}guei`;
-      if (/\u00e7ou$/u.test(lower)) return `${lower.slice(0, -3)}cei`;
-      return `${lower.slice(0, -2)}ei`;
-    }
+    if (/ou$/u.test(lower)) return `${lower.slice(0, -2)}ei`;
     if (/iu$/u.test(lower)) return `${lower.slice(0, -2)}i`;
     // -ava / -ia imperfect: 1sg == 3sg.
     return lower;
@@ -354,29 +220,6 @@ function realizeSpanishCoordinatedPredicates(rest: string, tense: 'present' | 'p
       }
       if (tense === 'past' && verb.length >= 4 && /(?:\u00f3|i\u00f3)$/u.test(verb)) {
         return `${connector}${romanceFirstPersonPast(verb, 'es')}`;
-      }
-      return `${connector}${rawVerb}`;
-    },
-  );
-}
-
-/**
- * Brazilian Portuguese duty clauses can carry several finite predicates in a
- * single bullet. Realizing only the leading verb leaves a mixed-person chain
- * such as `criei ..., desenvolveu ... e verificou ...`. Convert only
- * conjunction-following productive finite forms; objects and modifiers remain
- * untouched and are never treated as predicates.
- */
-function realizePortugueseCoordinatedPredicates(rest: string, tense: 'present' | 'past'): string {
-  return (rest || '').replace(
-    /((?:,\s*|\s+)(?:e|ou)\s+)([\p{L}]+)/giu,
-    (_whole, connector: string, rawVerb: string) => {
-      const verb = rawVerb.toLocaleLowerCase('pt-BR');
-      if (tense === 'present' && verb.length >= 4 && /(?:a|e)$/u.test(verb)) {
-        return `${connector}${romanceFirstPersonPresent(verb, 'pt-BR')}`;
-      }
-      if (tense === 'past' && verb.length >= 4 && /(?:ou|eu|iu)$/u.test(verb)) {
-        return `${connector}${romanceFirstPersonPast(verb, 'pt-BR')}`;
       }
       return `${connector}${rawVerb}`;
     },
@@ -452,59 +295,28 @@ export function analyzeSpanishCoordinatedPredicateMorphology(
 }
 
 const ARABIC_PAST_1SG_SUFFIX = 'ت';
-const ARABIC_DIACRITICS_RE = /[\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06ED]/gu;
-
-function stripArabicDiacritics(value: string): string {
-  return (value || '').replace(ARABIC_DIACRITICS_RE, '');
-}
 
 /** Arabic 3sg → 1sg realization for both present (يـ→أـ) and completed (+ـت). */
 function arabicFirstPersonVerb(verb: string, tense: 'present' | 'past'): string {
   const v = (verb || '').trim();
   if (!v) return v;
-  const plain = stripArabicDiacritics(v);
-  if (tense === 'past' && /ت$/u.test(plain)) {
-    const terminalGeminate = /([\p{Script=Arabic}])\u0651[\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06ED]*ت[\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06ED]*$/u.exec(v);
-    if (terminalGeminate) {
-      const base = plain.slice(0, -1);
-      return `${base}${base.slice(-1)}${ARABIC_PAST_1SG_SUFFIX}`;
-    }
-    return plain;
-  }
-  if (/^[يتن]/u.test(v)) {
+  if (/^ي/u.test(v)) {
     const present1sg = `أ${v.slice(1)}`;
     if (tense === 'present') return present1sg;
-    // A bare imperfective source has no safe perfect stem; use a first-person
-    // present predicate only when no past auxiliary supplied that authority.
+    // Completed entry with a present-form bullet: keep the 1sg present stem.
     return present1sg;
   }
   if (tense !== 'past') return v;
-  // A source feminine 3sg and 1sg perfect both end in ت orthographically.
-  // Remove vocalization, and expand only a terminal geminated radical: أعدّت → أعددت.
+  if (/[تُتِ]$/u.test(v) || /ت$/u.test(v)) return v;
   // Geminated final radical (أعدّ) expands before the 1sg suffix: أعددت.
-  if (/ّ[\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06ED]*$/u.test(v)) {
-    const base = stripArabicDiacritics(v);
+  if (/ّ$/u.test(v)) {
+    const base = v.replace(/ّ$/u, '');
     const last = base.slice(-1);
     return `${base}${last}${ARABIC_PAST_1SG_SUFFIX}`;
   }
-  if (/ى$/u.test(plain)) return `${plain.slice(0, -1)}يت`;
-  if (/[اوي]$/u.test(plain)) return `${plain}ت`;
-  return `${plain}${ARABIC_PAST_1SG_SUFFIX}`;
-}
-
-function arabicFirstPersonPredicateChain(raw: string, tense: 'present' | 'past'): string {
-  return raw.replace(
-    /(^|،\s*|\s+و)([\p{Script=Arabic}\p{M}]+)/gu,
-    (full, connector: string, token: string) => {
-      const plain = stripArabicDiacritics(token);
-      const shouldTransform = tense === 'present'
-        ? /^[يتن]/u.test(plain)
-        : connector === '' || /ت$/u.test(plain) || /^كانت$/u.test(plain);
-      if (!shouldTransform) return full;
-      if (tense === 'past' && /^كانت$/u.test(plain)) return `${connector}كنت`;
-      return `${connector}${arabicFirstPersonVerb(token, tense)}`;
-    },
-  );
+  if (/ى$/u.test(v)) return `${v.slice(0, -1)}يت`;
+  if (/[اوي]$/u.test(v)) return `${v}ت`;
+  return `${v}${ARABIC_PAST_1SG_SUFFIX}`;
 }
 
 /** Hindi masculine → selected-gender habitual/past participle agreement. */
@@ -516,10 +328,7 @@ function hindiApplyGender(text: string, mode: SummaryV2GenderMode): string {
     .replace(/था\s*\/\s*थी/gu, mode === 'female' ? 'थी' : 'था');
   if (mode === 'female') {
     t = t.replace(/(\p{L}+?)ता(?=\s+(?:हूँ|हूं|है|था|थी))/gu, '$1ती');
-    t = t.replace(/(?<![\p{L}\p{M}])था(?=[^\p{L}\p{M}]|$)/gu, 'थी');
-  } else if (mode === 'male') {
-    t = t.replace(/(\p{L}+?)ती(?=\s+(?:हूँ|हूं|है|हैं|था|थी|थीं))/gu, '$1ता');
-    t = t.replace(/(?<![\p{L}\p{M}])(?:थी|थीं)(?=[^\p{L}\p{M}]|$)/gu, 'था');
+    t = t.replace(/\bथा\b/gu, 'थी');
   }
   return t;
 }
@@ -579,26 +388,10 @@ export function realizeFirstPersonDutyClause(
   locale: Locale,
   employmentState: SummaryV2EmploymentState,
   gender?: string | null,
-  options?: { shellSuppliesCompletedAuxiliary?: boolean },
 ): string {
   const tense = dutyTenseFromEmploymentState(employmentState);
   const raw = (bullet || '').replace(/[.;。؟।]+$/u, '').trim();
   if (!raw) return '';
-
-  if (locale === 'ar' && employmentState === 'completed') {
-    // Third-person imperfective with a feminine past auxiliary is realized as
-    // first-person past auxiliary + first-person imperfective, independent of duty lexicon.
-    const auxiliary = /^كانت\s+([\p{Script=Arabic}\p{M}]+)([\s\S]*)$/u.exec(raw);
-    if (auxiliary) {
-      return `كنت ${arabicFirstPersonVerb(auxiliary[1], 'present')}${auxiliary[2] || ''}`
-        .replace(/\s+/g, ' ')
-        .trim();
-    }
-  }
-
-  if (locale === 'ar') {
-    return arabicFirstPersonPredicateChain(raw, tense);
-  }
 
   if (locale === 'sr' || locale === 'hr') {
     const realized = realizeSouthSlavicPredicateChain({
@@ -606,16 +399,8 @@ export function realizeFirstPersonDutyClause(
       locale,
       employmentState,
       gender,
-      shellSuppliesCompletedAuxiliary: options?.shellSuppliesCompletedAuxiliary,
     });
     return realized.text;
-  }
-
-  if (locale === 'fr') {
-    return realizeFrenchFirstPersonDutyChain(
-      raw,
-      tense === 'present' ? 'present' : 'completed',
-    );
   }
 
   // Combining marks (Arabic shadda, Devanagari matras) belong to the verb token.
@@ -629,6 +414,14 @@ export function realizeFirstPersonDutyClause(
     verb = tense === 'present'
       ? romanceFirstPersonPresent(lower, locale)
       : romanceFirstPersonPast(lower, locale);
+  } else if (locale === 'fr') {
+    if (tense === 'present') {
+      verb = lower; // many -er 1sg == 3sg
+    } else if (/ait$/u.test(lower)) {
+      verb = `${lower.slice(0, -3)}ais`;
+    } else {
+      verb = lower;
+    }
   } else if (locale === 'it') {
     // Biography passato prossimo bullets (Ha/Hanno + participle) → 1sg Ho.
     if (/^(ha|hanno|ho)\s+/iu.test(raw)) {
@@ -649,15 +442,10 @@ export function realizeFirstPersonDutyClause(
     }
   } else if (locale === 'ru') {
     if (tense === 'present') {
-      // Russian 1sg present replaces the finite ending with `-ю`; treating
-      // `-ует` as a bare `-ет` suffix retains the stem's `у` and creates
-      // malformed forms such as редактируу.
-      if (/(?:ает|яет|ует)$/u.test(lower)) verb = `${lower.slice(0, -2)}ю`;
+      if (/ает$/u.test(lower)) verb = `${lower.slice(0, -3)}аю`;
+      else if (/яет$/u.test(lower)) verb = `${lower.slice(0, -3)}яю`;
+      else if (/ет$/u.test(lower)) verb = `${lower.slice(0, -2)}у`;
       else if (/ит$/u.test(lower)) verb = `${lower.slice(0, -2)}ю`;
-      else if (/ировать$/u.test(lower)) verb = `${lower.slice(0, -7)}ирую`;
-      else if (/давать$/u.test(lower)) verb = `${lower.slice(0, -6)}даю`;
-      else if (/(?:ать|ять)$/u.test(lower)) verb = `${lower.slice(0, -2)}ю`;
-      else if (/ет$/u.test(lower)) verb = `${lower.slice(0, -2)}ю`;
       else verb = lower;
     } else {
       // Past tense agrees with the selected gender (проверял / проверяла).
@@ -666,17 +454,17 @@ export function realizeFirstPersonDutyClause(
       else if (mode !== 'female' && /ла$/u.test(lower)) verb = lower.slice(0, -1);
       else verb = lower;
     }
+  } else if (locale === 'ar') {
+    verb = arabicFirstPersonVerb(verb, tense);
   } else if (locale === 'hi') {
-    // Every finite Hindi habitual in a first-person shell needs the same
-    // person/number auxiliary; transforming only the terminal verb left
-    // coordinated provider/localization clauses as करती हैं / करती थीं.
+    // Present warehouse bullets use 3sg copula है — realize 1sg हूँ after first-person framing.
+    // Completed entries keep past था/थी (never leave present है after prior framing).
     const mode = resolveSummaryV2GenderMode(gender);
     let t = raw.replace(/[.;。؟।]+$/u, '').trim();
     if (tense === 'present') {
-      t = t.replace(/([\p{Script=Devanagari}\p{M}]+(?:ती|ता))\s+(?:हूँ|हूं|हैं|है)/gu, '$1 हूँ');
+      t = t.replace(/है$/u, 'हूँ');
     } else {
-      const priorAuxiliary = mode === 'female' ? 'थी' : mode === 'male' ? 'था' : 'थी';
-      t = t.replace(/([\p{Script=Devanagari}\p{M}]+(?:ती|ता))\s+(?:हूँ|हूं|हैं|है|थीं|थे|थी|था)/gu, `$1 ${priorAuxiliary}`);
+      t = t.replace(/है$/u, 'था');
     }
     return hindiApplyGender(t, mode);
   } else if (locale === 'ja') {
@@ -687,9 +475,7 @@ export function realizeFirstPersonDutyClause(
 
   const realizedRest = locale === 'es'
     ? realizeSpanishCoordinatedPredicates(rest, tense)
-    : locale === 'pt-BR'
-      ? realizePortugueseCoordinatedPredicates(rest, tense)
-      : rest;
+    : rest;
   return `${verb}${realizedRest}`.replace(/\s+/g, ' ').trim();
 }
 
@@ -747,21 +533,13 @@ export function buildNativeFirstPersonDutyTail(
   gender?: string | null,
 ): string {
   const clauses = bullets
-    .map((b) => realizeFirstPersonDutyClause(b, locale, employmentState, gender, {
-      shellSuppliesCompletedAuxiliary: (locale === 'sr' || locale === 'hr')
-        && employmentState === 'completed',
-    }))
+    .map((b) => realizeFirstPersonDutyClause(b, locale, employmentState, gender))
     .filter(Boolean);
   if (!clauses.length) return '';
   if (locale === 'fr') {
     // "où je" already supplies subject — keep verb forms lowercased.
     // Elide before vowel-/h-initial verbs: où j'effectue (not où je effectue).
-    const frenchClauses = employmentState === 'completed'
-      ? clauses.map((clause, index) => index === 0
-        ? clause
-        : clause.replace(/^ai\s+/iu, ''))
-      : clauses;
-    const joined = localeAndJoin(frenchClauses, locale);
+    const joined = localeAndJoin(clauses, locale);
     const needsElision = /^[aeiouhâàáâäæéèêëíìîïóòôöøúùûüœ]/iu.test(joined);
     const connector = needsElision ? ", où j'" : ', où je ';
     return `${connector}${joined}`;
@@ -816,10 +594,10 @@ const LOCALE_FINITE_CUE_RE: Record<string, RegExp> = {
   es: /(?:^|[^\p{L}])(?:cuento|tengo|dispongo|trabajo|trabajé|ejerzo|ejercí|soy|fui)(?=[^\p{L}]|$)/iu,
   fr: /(?:^|[^\p{L}])(?:dispose|ai|travaille|travaillé|exerce|suis|effectue|inspecte)(?=[^\p{L}]|$)/iu,
   it: /(?:^|[^\p{L}])(?:dispongo|ho|lavoro|lavorato|sono|svolgo|ricoperto)(?=[^\p{L}]|$)/iu,
-  'pt-BR': /(?:^|[^\p{L}])(?:tenho|disponho|trabalho|trabalhei|atuo|atuei|exerço|exerci|sou)(?=[^\p{L}]|$)/iu,
+  'pt-BR': /(?:^|[^\p{L}])(?:tenho|disponho|trabalho|trabalhei|exerço|exerci|sou)(?=[^\p{L}]|$)/iu,
   ru: /(?:у\s+меня|обладаю|имею|работа(?:ю|л|ла)|занима(?:ю|л|ла|лась))/iu,
   sr: /(?:^|[^\p{L}])(?:imam|raspolažem|radim|radio|radila|obavljam|obavljao|obavljala)(?=[^\p{L}]|$)/iu,
-  hr: /(?:^|[^\p{L}])(?:imam|raspolažem|radim|radio|radila|djelovao|djelovala|obavljam|obavljao|obavljala)(?=[^\p{L}]|$)/iu,
+  hr: /(?:^|[^\p{L}])(?:imam|raspolažem|radim|radio|radila|obavljam|obavljao|obavljala)(?=[^\p{L}]|$)/iu,
   ar: /(?:أمتلك|لدي|لديّ|أعمل|عملت|أشغل|شغلت)/u,
   hi: /(?:मेरे\s+पास|हूँ|हूं|है|था|थी|करता|करती)/u,
   ja: /(?:あります|います|です|ます|ました|でした)/u,
@@ -829,142 +607,21 @@ const LOCALE_FINITE_CUE_RE: Record<string, RegExp> = {
 const SUBORDINATE_OPENER_RE =
   /^(?:where|wo|donde|où|dove|onde|gd(?:j)?e|где|حيث|जहाँ|jahan)\b/iu;
 
-const HINDI_FIRST_PERSON_RE = /(?:^|[^\p{L}])मैं(?:ने)?(?=[^\p{L}]|$)/u;
-const HINDI_PRIOR_MARKER_RE = /इससे\s+(?:पहले|पूर्व)|पहले\s+मैं/u;
-const HINDI_HABITUAL_AUX_RE = /([\p{Script=Devanagari}\p{M}]+(?:ती|ता))\s+(हूँ|हूं|हैं|है|थीं|थे|थी|था)/gu;
-const HINDI_PERFECTIVE_TAIL_RE = /(?:[\p{Script=Devanagari}\p{M}]+(?:या|यी|ाई|ए|ीं)|की)(?=\s*(?:[,।.!?]|और|तथा|$))/u;
-
-/**
- * Brazilian Portuguese `exercer` takes a role through an explicit nominal
- * complement (`exercer a função de ...`), not the bare `exercer como ...`
- * shell emitted by the old Professional rewrite.  Keep this structural and
- * title-agnostic so every occupation and free-text role is covered.
- */
-export function detectPortugueseBrazilRoleIntroValencyDefect(text: string): boolean {
-  return /(?:^|[^\p{L}])(?:exerço|exerci|exerce|exerceu)\s+como\s+(?=\p{L})/iu.test(
-    (text || '').replace(/\s+/g, ' ').trim(),
-  );
-}
-
-/**
- * Privacy-safe Hindi clause grammar audit. It keys on subject, auxiliary and
- * inflection morphology only: no role, employer, duty vocabulary or text is
- * retained in the returned records.
- */
-export function analyzeHindiSummaryFirstPersonAgreement(options: {
-  text: string;
-  gender?: string | null;
-  perspectiveMode?: SummaryV2PerspectiveContract;
-}): HindiSummarySentenceAgreementRecord[] {
-  const mode = resolveSummaryV2GenderMode(options.gender);
-  const perspective = options.perspectiveMode ?? 'first_person';
-  return splitNativeSentences(options.text).flatMap((sentence, sentenceIndex) => {
-    const firstPerson = perspective === 'first_person' && HINDI_FIRST_PERSON_RE.test(sentence);
-    const employmentState = HINDI_PRIOR_MARKER_RE.test(sentence)
-      ? 'completed'
-      : (firstPerson ? 'present' : 'unknown');
-    const habituals = [...sentence.matchAll(HINDI_HABITUAL_AUX_RE)];
-    const hasPerfective = HINDI_PERFECTIVE_TAIL_RE.test(sentence);
-    const hasErgative = /(?:^|[^\p{L}])मैंने(?=[^\p{L}]|$)/u.test(sentence);
-    const finiteClauses = habituals.length > 0 ? habituals : [null];
-    return finiteClauses.map((match, clauseIndex) => {
-      const reasons: string[] = [];
-      if (firstPerson && match) {
-        const form = match[1] || '';
-        const auxiliary = match[2] || '';
-        const feminine = /ती$/u.test(form);
-        if ((mode === 'female' && !feminine) || (mode === 'male' && feminine)) {
-          reasons.push('hindi_first_person_gender_agreement_invalid');
-        }
-        const expected = employmentState === 'completed'
-          ? (mode === 'female' ? 'थी' : mode === 'male' ? 'था' : '')
-          : 'हूँ';
-        const normalizedAuxiliary = auxiliary === 'हूं' ? 'हूँ' : auxiliary;
-        if (expected && normalizedAuxiliary !== expected) {
-          reasons.push(employmentState === 'completed'
-            ? 'hindi_first_person_completed_auxiliary_invalid'
-            : 'hindi_first_person_present_auxiliary_invalid');
-        }
-      }
-      if (firstPerson && hasPerfective && !hasErgative) {
-        reasons.push('hindi_first_person_perfective_ergative_missing');
-      }
-      if (firstPerson && hasPerfective && habituals.length > 0) {
-        reasons.push('hindi_first_person_mixed_aspect_coordination');
-      }
-
-      const aspect = hasPerfective && habituals.length > 0
-        ? 'mixed'
-        : hasPerfective
-          ? 'perfective'
-          : habituals.length > 0
-            ? (employmentState === 'completed' ? 'past_habitual' : 'present_habitual')
-            : 'unknown';
-      return {
-        sentenceIndex,
-        clauseIndex,
-        employmentState,
-        perspectiveMode: firstPerson ? 'first_person' : 'neutral_or_unspecified',
-        genderMode: mode,
-        finiteVerbOrAuxiliaryDetected: Boolean(match) || /(?:हूँ|हूं|है|हैं|था|थी|थीं|थे)/u.test(sentence),
-        agreementMode: firstPerson
-          ? (hasPerfective ? 'first_person_perfective' : habituals.length ? 'first_person_habitual' : 'unknown')
-          : 'neutral',
-        aspect,
-        grammarPassed: reasons.length === 0,
-        grammarReasons: [...new Set(reasons)],
-      };
-    });
-  });
-}
-
 /**
  * Third-person duty forms that must never appear inside a first-person Summary.
  * Arabic: a duty verb after حيث / كما must be 1sg (أ… present, …ت past).
  */
 function detectThirdPersonDutyClause(text: string, locale: Locale): boolean {
   if (locale === 'ar') {
-    const dutyClauses = [...text.matchAll(/(?:حيث|كما)\s+([^.!؟]+)/gu)];
-    for (const match of dutyClauses) {
-      const clause = match[1];
-      const beforeClause = text.slice(0, match.index ?? 0).split(/[.!؟]/u).pop() || '';
-      const completedClause = /(?:سابق(?:اً|ا)|عملت|كنت)/u.test(beforeClause);
-      // Arabic waw is attached both as a conjunction and as the first letter
-      // of ordinary words (وثائق, وموقع). Commas delimit the independent duty
-      // heads here; coordinated present/feminine/geminated heads are already
-      // normalized by arabicFirstPersonPredicateChain.
-      const predicates = clause.split(/،/u);
-      for (const predicate of predicates) {
-        const predicateBody = predicate.replace(/^\s*كما\s+/u, '');
-        const verb = /^\s*([\p{Script=Arabic}\p{M}]+)/u.exec(predicateBody)?.[1] || '';
-        if (!verb) continue;
-        const plain = stripArabicDiacritics(verb);
-        // Attached waw in ordinary prepositional phrases (for example وفق
-        // "according to") is not a coordinated finite predicate.
-        if (completedClause && /^(?:فق|مع|بين|ضمن|حول|عبر|داخل|خارج|دون|لدى)$/u.test(plain)) {
-          continue;
-        }
-        if (/^كانت$/u.test(plain)) return true;
-        const firstPerson = completedClause
-          ? /ت$/u.test(plain)
-          : /^[أإآا]/u.test(plain) || /^كنت$/u.test(plain);
-        const thirdPersonFinite = completedClause
-          ? !/^ال/u.test(plain) && !firstPerson
-          : /^[يتن]/u.test(plain);
-        if (thirdPersonFinite && !firstPerson) return true;
-      }
-    }
-    // Provider prose may use a role-intro comma without حيث; validate the
-    // immediately following finite predicate without scanning unrelated duration coordination.
-    const re = /،\s*([\p{Script=Arabic}\p{M}]+)/gu;
+    const re = /(?:حيث|كما|و)\s+([\u0600-\u06FF\u0651]+)/gu;
     let m: RegExpExecArray | null = re.exec(text);
     while (m) {
       const verb = m[1];
-      const plain = stripArabicDiacritics(verb);
-      if (/^كانت$/u.test(plain)) return true;
-      const firstPerson = /^[أإآا]/u.test(plain) || /^كنت$/u.test(plain) || /ت$/u.test(plain);
-      const thirdPersonFinite = /^[يتن]/u.test(plain);
-      if (thirdPersonFinite && !firstPerson) return true;
+      const firstPerson = /^[أانن]/u.test(verb) || /ت$/u.test(verb) || /تُ$/u.test(verb);
+      const looksVerbal = verb.length >= 3 && !/^(?:ال|في|من|على|عن|إلى)/u.test(verb);
+      if (looksVerbal && !firstPerson && /^(?:راجع|أعد|ضبط|فحص|سجل|نفذ|قام|كتب|حدث|نسق)/u.test(verb)) {
+        return true;
+      }
       m = re.exec(text);
     }
     return false;
@@ -1002,44 +659,13 @@ function detectLocaleVerbMorphologyDefect(text: string, locale: Locale): string 
     }
   }
   if (locale === 'ar') {
-    // A shadda can never follow the 1sg past suffix ـت; duplicated suffixes
-    // remain invalid even when separated by sukun/fatha/other vocalization.
+    // A shadda can never follow the 1sg past suffix ـت.
     if (/ت\u0651/u.test(text)) return 'ar_malformed_gemination';
-    if (/ت[\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06ED]*ت(?=[^\p{Script=Arabic}]|$)/u.test(text)) {
-      return 'ar_duplicated_past_suffix';
-    }
   }
   if (locale === 'ru') {
-    // Parenthetical gender is caught separately; reject malformed first-person
-    // present forms independently of the builder that produced them. A
-    // duplicated `-у` is never a Russian finite 1sg ending and previously
-    // allowed `редактируу` to pass the Cyrillic-only checks.
-    if (/(?:^|[^\p{Script=Cyrillic}])\p{Script=Cyrillic}*уу(?=[^\p{Script=Cyrillic}]|$)/u.test(text)) {
-      return 'ru_malformed_first_person_present';
-    }
+    // Parenthetical gender is caught separately; bare 3sg duty forms here.
     if (/(?:^|\s)я\s+\p{L}+(?:ет|ит)(?=[^\p{L}]|$)/u.test(text)) {
       return 'ru_person_agreement';
-    }
-  }
-  if (locale === 'sr' || locale === 'hr') {
-    // A first-person South-Slavic shell already supplies `sam`; a retained
-    // third-person auxiliary after a feminine past participle is malformed
-    // (`gde sam kreirala je`).
-    if (/(?:gd(?:e|je))\s+sam\s+\p{L}+(?:ala|ela|ila)\s+je(?=\s|[,.!?]|$)/iu.test(text)) {
-      return 'sr_duplicate_past_auxiliary';
-    }
-    // Valid first-person standalone Serbian/Croatian bullets use
-    // `izrađivala sam …`; inside a `gde/gdje sam …` Summary shell that second
-    // auxiliary is redundant and makes the rendered clause ungrammatical.
-    if (/(?:gd(?:e|je))\s+sam\s+\p{L}+(?:ala|ela|ila)\s+sam(?=\s|[,.!?]|$)/iu.test(text)) {
-      return 'sr_duplicate_first_person_past_auxiliary';
-    }
-    // A loose `-e` present-verb heuristic can mistake noun-like surfaces such
-    // as `rasporede` for a predicate and mutate them into `rasporedem` or
-    // `rasporedela`. Reject that morphology rather than applying a visibly
-    // non-native duty; the rule is independent of role/employer vocabulary.
-    if (/(?:^|[^\p{L}])\p{L}{5,}red(?:em|ela)(?=[^\p{L}]|$)/iu.test(text)) {
-      return 'sr_malformed_noun_predicate_mutation';
     }
   }
   return null;
@@ -1053,38 +679,6 @@ function detectRoleCaseDefect(text: string, locale: Locale): boolean {
 
 /** Coordination that is ungrammatical or mechanical in the target language. */
 function detectCoordinationDefect(text: string, locale: Locale): string | null {
-  if (locale === 'hr') {
-    // Croatian Professional must introduce arbitrary nominative role titles
-    // with the first-person `radim/radio/radila kao` frame.  The former
-    // `obavljam ... poslove kao` shell is unidiomatic when used as a role
-    // introduction; scope this guard to the explicit current/prior opener so
-    // ordinary duty prose containing `obavljati poslove` remains valid.
-    if (
-      /\b(?:trenutno|trenutačno)\s+obavljam\s+poslove\s+kao\b/iu.test(text)
-      || /\b(?:prethodno|ranije|prije)\s+sam\s+obavlja(?:la|o)\s+poslove\s+kao\b/iu.test(text)
-    ) {
-      return 'hr_awkward_professional_role_intro';
-    }
-  }
-  if (locale === 'it') {
-    // `nonché` is valid for nominal coordination (for example,
-    // "materiali nonché strumenti"), but it is a poor bridge between two
-    // independent finite first-person clauses.  Stronger/Professional used to
-    // manufacture surfaces such as "preparo ..., nonché modifico ..." and
-    // "ho creato ..., nonché ho sviluppato ...".  Scope the guard to a comma
-    // clause boundary plus an Italian finite predicate/auxiliary so legitimate
-    // noun coordination remains accepted.
-    const finiteAfterNonche = /,\s*nonché\s+(?:ho|hai|ha|abbiamo|avete|hanno|sono|sei|è|siamo|siete|[\p{L}]+(?:o|avo|avi|ava|avano|ivo|ivi|iva|ivano|isco|isci|isce|iscono|iamo|ate|ono|ano))(?=[^\p{L}]|$)/iu;
-    if (finiteAfterNonche.test(text)) return 'it_nonche_finite_clause_coordination';
-
-    // A role/employer introduction needs a relative connector or a stronger
-    // clause boundary before its first-person duties.  This is deliberately
-    // limited to `lavoro/lavorato … come … presso …, <finite clause>` so it
-    // does not ban ordinary commas elsewhere in Italian prose or depend on
-    // a particular title, employer, or occupation.
-    const roleIntroCommaSplice = /(?:\b(?:attualmente\s+)?lavoro\s+come|\b(?:ho(?:\s+già)?|in\s+precedenza\s+ho)\s+lavorato\s+come)\s+[^,.]+?\s+presso\s+[^,.]+,\s*(?!(?:dove|e|ma|perché|mentre)\b)(?:ho\s+)?[\p{L}]+/iu;
-    if (roleIntroCommaSplice.test(text)) return 'it_role_intro_comma_splice';
-  }
   if (locale === 'fr') {
     // "ainsi que" coordinating a finite verb requires an explicit subject.
     const m = /ainsi qu[e’']\s*(\p{L}+)/iu.exec(text);
@@ -1122,8 +716,6 @@ export type SummaryV2NativeRealizationContract = {
   roleCaseValidationPassed: boolean;
   nativeCoordinationValidationPassed: boolean;
   sentenceCompletenessPassed: boolean;
-  hindiFirstPersonAgreementPassed: boolean;
-  hindiSentenceAgreementRecords: HindiSummarySentenceAgreementRecord[];
   nativeRealizationRejectionReasons: string[];
 };
 
@@ -1136,12 +728,10 @@ export function evaluateNativeRealizationContract(options: {
   text: string;
   locale: Locale;
   perspectiveMode?: SummaryV2PerspectiveContract;
-  gender?: string | null;
 }): SummaryV2NativeRealizationContract {
   void SUMMARY_V2_NATIVE_SURFACE_389_REVISION;
   void SUMMARY_V2_SPANISH_PERSPECTIVE_NATIVE_SURFACE_391_REVISION;
   void SUMMARY_V2_SPANISH_SLOT_WIDE_PERSON_393_REVISION;
-  void SUMMARY_V2_HINDI_FIRST_PERSON_AGREEMENT_427_REVISION;
   const text = (options.text || '').replace(/\s+/g, ' ').trim();
   const locale = options.locale;
   const perspective = options.perspectiveMode ?? 'first_person';
@@ -1159,35 +749,9 @@ export function evaluateNativeRealizationContract(options: {
     || durationSentences.every((s) => finiteCue.test(s));
   if (!finiteDurationSentencePassed) reasons.push('nominal_duration_fragment');
 
-  const hindiSentenceAgreementRecords = locale === 'hi'
-    ? analyzeHindiSummaryFirstPersonAgreement({
-      text,
-      gender: options.gender,
-      perspectiveMode: perspective,
-    })
-    : [];
-  const hindiFirstPersonAgreementPassed = hindiSentenceAgreementRecords.every(
-    (record) => record.grammarPassed,
-  );
-  const southSlavicPredicateChain = locale === 'sr' || locale === 'hr'
-    ? evaluateSouthSlavicSummaryPredicateChains({
-      text,
-      locale,
-    })
-    : null;
   const firstPersonPredicateChainPassed = perspective === 'cv_third_person'
-    || (!detectThirdPersonDutyClause(text, locale)
-      && hindiFirstPersonAgreementPassed
-      && (southSlavicPredicateChain?.predicateChainValidationPassed ?? true));
+    || !detectThirdPersonDutyClause(text, locale);
   if (!firstPersonPredicateChainPassed) reasons.push('third_person_duty_in_first_person_frame');
-  if (southSlavicPredicateChain && !southSlavicPredicateChain.predicateChainValidationPassed) {
-    reasons.push(...southSlavicPredicateChain.predicateChainRejectionReasons);
-  }
-  for (const record of hindiSentenceAgreementRecords) {
-    for (const reason of record.grammarReasons) {
-      reasons.push(`locale_verb_morphology:${reason}`);
-    }
-  }
 
   const spanishCoordination = locale === 'es'
     ? analyzeSpanishCoordinatedPredicateMorphology(text, perspective)
@@ -1196,15 +760,8 @@ export function evaluateNativeRealizationContract(options: {
   if (spanishCoordination.mixedTensePredicateChain) reasons.push('mixed_tense_predicate_chain');
 
   const morphologyDefect = detectLocaleVerbMorphologyDefect(text, locale);
-  const ptbrRoleIntroValencyDefect = locale === 'pt-BR'
-    && detectPortugueseBrazilRoleIntroValencyDefect(text);
-  const localeVerbMorphologyPassed = morphologyDefect === null
-    && !ptbrRoleIntroValencyDefect
-    && hindiFirstPersonAgreementPassed;
+  const localeVerbMorphologyPassed = morphologyDefect === null;
   if (morphologyDefect) reasons.push(`locale_verb_morphology:${morphologyDefect}`);
-  if (ptbrRoleIntroValencyDefect) {
-    reasons.push('locale_verb_morphology:ptbr_invalid_role_intro_valency');
-  }
 
   const roleCaseValidationPassed = !detectRoleCaseDefect(text, locale);
   if (!roleCaseValidationPassed) reasons.push('invalid_role_case');
@@ -1230,8 +787,6 @@ export function evaluateNativeRealizationContract(options: {
     roleCaseValidationPassed,
     nativeCoordinationValidationPassed,
     sentenceCompletenessPassed,
-    hindiFirstPersonAgreementPassed,
-    hindiSentenceAgreementRecords,
     nativeRealizationRejectionReasons: [...new Set(reasons)],
   };
 }
@@ -1242,21 +797,10 @@ export function evaluateSummaryV2NativeSurface(options: {
   hasCurrent?: boolean;
   hasPrior?: boolean;
   perspectiveMode?: SummaryV2PerspectiveContract;
-  gender?: string | null;
 }): SummaryV2NativeSurfaceResult {
   void SUMMARY_V2_NATIVE_SURFACE_386_REVISION;
   const text = (options.text || '').replace(/\s+/g, ' ').trim();
   const reasons: string[] = [];
-  const ptbrFinite = options.locale === 'pt-BR'
-    ? analyzePortugueseBrazilFirstPersonFiniteVerbs(text)
-    : {
-      finiteVerbCount: 0,
-      firstPersonCompatibleFiniteVerbCount: 0,
-      wrongPersonFiniteVerbCount: 0,
-      wrongPersonFiniteVerbHashes: [] as string[],
-      unitPersonAgreementPassed: true,
-      rejectionReasons: [] as string[],
-    };
   const latinScript = !['ar', 'hi', 'ja'].includes(options.locale);
 
   const capitalizationValidationPassed = (() => {
@@ -1306,27 +850,6 @@ export function evaluateSummaryV2NativeSurface(options: {
     }
     if (/,\s*;/u.test(text) || /;\s*,/u.test(text)) {
       reasons.push('malformed_punctuation');
-      return false;
-    }
-    return true;
-  })();
-
-  const frenchTokenBoundaryValidationPassed = options.locale !== 'fr'
-    || !detectFrenchTokenBoundaryDefect(text);
-  if (!frenchTokenBoundaryValidationPassed) {
-    reasons.push('french_token_boundary_violation');
-  }
-
-  const frenchClauseCasingValidationPassed = (() => {
-    if (options.locale !== 'fr') return true;
-    // After a French relative first-person frame, coordinated predicates are
-    // continuation clauses and must use sentence-internal lowercase.
-    const frame = /\b(?:où\s+je|où\s+j['’])\s+/iu.exec(text);
-    if (!frame) return true;
-    const tail = text.slice((frame.index ?? 0) + frame[0].length);
-    const defect = /(?:^|,\s+|\bet\s+)([\p{Lu}][\p{Ll}]+)/u.test(tail);
-    if (defect) {
-      reasons.push('french_embedded_clause_capitalization');
       return false;
     }
     return true;
@@ -1386,45 +909,21 @@ export function evaluateSummaryV2NativeSurface(options: {
       reasons.push('first_third_person_mismatch');
     }
   }
-  if (options.locale === 'pt-BR' && !ptbrFinite.unitPersonAgreementPassed) {
-    reasons.push(...ptbrFinite.rejectionReasons);
-  }
 
   const perspective = options.perspectiveMode ?? 'first_person';
-  const contract = evaluateNativeRealizationContract({
-    text,
-    locale: options.locale,
-    perspectiveMode: perspective,
-    gender: options.gender,
-  });
+  const contract = evaluateNativeRealizationContract({ text, locale: options.locale, perspectiveMode: perspective });
   for (const r of contract.nativeRealizationRejectionReasons) {
     if (!reasons.includes(r)) reasons.push(r);
-  }
-
-  const frenchGrammar = options.locale === 'fr'
-    ? validateFrenchSummaryFiniteGrammar(text)
-    : null;
-  if (frenchGrammar && !frenchGrammar.grammarValidationPassed) {
-    if (frenchGrammar.grammarRejectionReason) reasons.push(frenchGrammar.grammarRejectionReason);
   }
 
   const personOk = grammaticalPersonValidationPassed
     && !predicateChain.mixedPersonPredicateDetected
     && contract.firstPersonPredicateChainPassed
     && !(options.locale === 'es'
-      && analyzeSpanishCoordinatedPredicateMorphology(text, perspective).mixedPersonPredicateChain)
-    && (frenchGrammar?.grammarValidationPassed ?? true);
-
-  const frenchSurfaceValidationPassed = options.locale !== 'fr'
-    || (
-      (frenchGrammar?.grammarValidationPassed ?? true)
-      && frenchTokenBoundaryValidationPassed
-      && frenchClauseCasingValidationPassed
-    );
+      && analyzeSpanishCoordinatedPredicateMorphology(text, perspective).mixedPersonPredicateChain);
 
   const nativeSurfaceValidationPassed = capitalizationValidationPassed
     && personOk
-    && frenchSurfaceValidationPassed
     && nativePunctuationValidationPassed
     && !internalMarkerLeakageDetected
     && !englishMorphologyLeakageDetected
@@ -1434,7 +933,6 @@ export function evaluateSummaryV2NativeSurface(options: {
     && !contract.unresolvedGenderPlaceholderDetected
     && contract.finiteDurationSentencePassed
     && contract.localeVerbMorphologyPassed
-    && ptbrFinite.unitPersonAgreementPassed
     && contract.roleCaseValidationPassed
     && contract.nativeCoordinationValidationPassed
     && contract.sentenceCompletenessPassed;
@@ -1443,17 +941,13 @@ export function evaluateSummaryV2NativeSurface(options: {
     nativeSurfaceValidationPassed,
     unresolvedGenderPlaceholderDetected: contract.unresolvedGenderPlaceholderDetected,
     finiteDurationSentencePassed: contract.finiteDurationSentencePassed,
-    firstPersonPredicateChainPassed: contract.firstPersonPredicateChainPassed
-      && ptbrFinite.unitPersonAgreementPassed,
-    localeVerbMorphologyPassed: contract.localeVerbMorphologyPassed
-      && ptbrFinite.unitPersonAgreementPassed,
+    firstPersonPredicateChainPassed: contract.firstPersonPredicateChainPassed,
+    localeVerbMorphologyPassed: contract.localeVerbMorphologyPassed,
     roleCaseValidationPassed: contract.roleCaseValidationPassed,
     nativeCoordinationValidationPassed: contract.nativeCoordinationValidationPassed,
     sentenceCompletenessPassed: contract.sentenceCompletenessPassed,
-    hindiFirstPersonAgreementPassed: contract.hindiFirstPersonAgreementPassed,
-    hindiSentenceAgreementRecords: contract.hindiSentenceAgreementRecords,
     capitalizationValidationPassed,
-    grammaticalPersonValidationPassed: personOk && ptbrFinite.unitPersonAgreementPassed,
+    grammaticalPersonValidationPassed: personOk,
     currentTenseValidationPassed,
     priorTenseValidationPassed,
     finiteClauseValidationPassed,
@@ -1472,14 +966,5 @@ export function evaluateSummaryV2NativeSurface(options: {
     predicateChainRejectionReasons: predicateChain.predicateChainRejectionReasons,
     sourcePredicateChainHash: predicateChain.sourcePredicateChainHash,
     finalPredicateChainHash: predicateChain.finalPredicateChainHash,
-    frenchGrammarValidationPassed: frenchSurfaceValidationPassed,
-    frenchGrammarRejectionReason: frenchGrammar?.grammarRejectionReason ?? null,
-    frenchTokenBoundaryValidationPassed,
-    frenchClauseCasingValidationPassed,
-    ptbrFiniteVerbCount: ptbrFinite.finiteVerbCount,
-    ptbrFirstPersonCompatibleFiniteVerbCount: ptbrFinite.firstPersonCompatibleFiniteVerbCount,
-    ptbrWrongPersonFiniteVerbCount: ptbrFinite.wrongPersonFiniteVerbCount,
-    ptbrWrongPersonFiniteVerbHashes: ptbrFinite.wrongPersonFiniteVerbHashes,
-    ptbrUnitPersonAgreementPassed: ptbrFinite.unitPersonAgreementPassed,
   };
 }

@@ -2,116 +2,6 @@ import type { Locale } from '@/lib/i18n/translations';
 
 export type SummaryV2EmploymentState = 'present' | 'completed';
 
-export const SUMMARY_V2_PRINT_MATERIAL_CATEGORY = 'design_medium_print' as const;
-export type SummaryV2MaterialClaimCategory = typeof SUMMARY_V2_PRINT_MATERIAL_CATEGORY;
-
-export type SummaryV2MaterialAuthorityPhase = 'immutable_source_fact';
-
-/** Privacy-safe immutable authority captured before any localization/candidate work. */
-export type SummaryV2SourceMaterialAuthorityEvidence = {
-  owningEntryHash: string;
-  sourceFactHash: string;
-  sourceFactIdHash: string;
-  sourceLocale: Locale;
-  canonicalMaterialCategories: SummaryV2MaterialClaimCategory[];
-  detectorRevision: string;
-  authorityPhase: SummaryV2MaterialAuthorityPhase;
-  sourceFactEntryOwnershipPassed: boolean;
-};
-
-/** Privacy-safe proof for one category detected in one final owned unit. */
-export type SummaryV2FinalMaterialClaimAuthorityEvidence = {
-  canonicalCategory: SummaryV2MaterialClaimCategory;
-  finalUnitHash: string;
-  finalUnitRoleSlot: SummaryV2FinalUnitRoleSlot | null;
-  finalUnitOwningEntryHash: string | null;
-  detectedTargetLocale: Locale;
-  detectionResult: 'detected';
-  authorizingSourceEntryHash: string | null;
-  authorizingSourceFactHashes: string[];
-  authorityMatchPassed: boolean;
-  unsupportedReason:
-    | 'final_unit_owner_missing'
-    | 'owner_matching_source_authority_missing'
-    | 'source_authority_provenance_missing_or_contradictory'
-    | null;
-};
-
-export type SummaryV2SourceFactContentFingerprint = {
-  sourceFactHash: string;
-  sourceFactIdHash: string;
-  canonicalMaterialCategories: SummaryV2MaterialClaimCategory[];
-};
-
-/** Entry IDs alone are not content identity; this fingerprints immutable source content. */
-export type SummaryV2SelectedEntrySourceContentFingerprint = {
-  entryIdHash: string;
-  roleTitleSourceHash: string;
-  orderedSourceFactHashes: string[];
-  materialCategoriesBySourceFact: SummaryV2SourceFactContentFingerprint[];
-  sourceContentFingerprint: string;
-};
-
-/** One canonical result is consumed by final acceptance, diagnostics and invariants. */
-export type SummaryV2MaterialAuthorityResult = {
-  revision: string;
-  detectorRevision: string;
-  sourcePrintFactPresent: boolean;
-  sourcePrintFactPresentScope: 'aggregate_selected_manifest_authority';
-  sourceAuthorityEvidence: SummaryV2SourceMaterialAuthorityEvidence[];
-  finalClaimAuthorityEvidence: SummaryV2FinalMaterialClaimAuthorityEvidence[];
-  selectedEntrySourceContentFingerprints: SummaryV2SelectedEntrySourceContentFingerprint[];
-  printClaimDetected: boolean;
-  unsupportedPrintClaimCount: number;
-  unsupportedMaterialClaimCount: number;
-  invariantPassed: boolean;
-  invariantFailureReasons: string[];
-};
-
-export type SummaryV2CandidateSourceKind =
-  | 'provider'
-  | 'repaired_provider'
-  | 'deterministic'
-  | 'final_selected';
-
-export type SummaryV2FinalUnitRoleSlot = 'duration' | 'current_role' | 'prior_role';
-
-export type SummaryV2FinalUnitOwnershipEvidence = {
-  unitIndex: number;
-  unitHash: string;
-  roleSlot: SummaryV2FinalUnitRoleSlot;
-  /** Internal source-bound identity; never serialize outside the validator/finalizer. */
-  owningEntryId: string | null;
-  owningEntryHash: string | null;
-  priorOrdinal: number | null;
-  /** Every expressed role title in a role unit must resolve to that unit's owner. */
-  roleTitleOwnerEntryHash: string | null;
-  /** Every expressed employer in a role unit must resolve to that unit's owner. */
-  employerOwnerEntryHash: string | null;
-  /** Explicit start-date/current-status evidence, when present, is entry-owned. */
-  dateStatusOwnerEntryHash: string | null;
-  /** Source entries whose duty authority is represented by this role unit. */
-  dutyFactOwnerEntryHashes: string[];
-  /** Relational ownership is stricter than aggregate fact coverage. */
-  relationalOwnershipPassed: boolean;
-  relationalOwnershipFailureReasons: string[];
-};
-
-export type SummaryV2FactUnitCoverageEvidence = {
-  /** Internal source-bound identity; diagnostics serialize factHash instead. */
-  factId: string;
-  factHash: string;
-  /** Internal source-bound identity; diagnostics serialize owningEntryHash instead. */
-  owningEntryId: string;
-  owningEntryHash: string;
-  semanticRole: 'current_fact' | 'prior_fact';
-  matchedUnitHashes: string[];
-  matchedUnitOwnerHashes: string[];
-  matchedUnitRoleSlots: SummaryV2FinalUnitRoleSlot[];
-  ownershipPassed: boolean;
-  covered: boolean;
-};
-
 export type SummaryV2EntryFact = {
   factId: string;
   entryId: string;
@@ -121,48 +11,18 @@ export type SummaryV2EntryFact = {
   sourceFactHash: string;
   /** Locale of the immutable visible source fact; never the requested target locale. */
   sourceLocale: Locale;
-  sourceLocaleResolvedFrom?: 'detected' | 'declared' | 'fallback';
-  /** Immutable material authority captured before localization/projection. */
-  sourcePrintFactPresent?: boolean;
-  /** Canonical entry-owned material authority captured before localization. */
-  sourceMaterialClaimCategories?: SummaryV2MaterialClaimCategory[];
-  sourceMaterialAuthorityDetectorRevision?: string;
-  sourceMaterialAuthorityPhase?: SummaryV2MaterialAuthorityPhase;
-  /**
-   * A validated target-language presentation of the immutable source fact.
-   * These fields are never semantic authority and are populated only when the
-   * visible AI output is provenance/hash matched and unedited.
-   */
-  presentationText?: string;
-  presentationLocale?: Locale;
-  presentationTrusted?: boolean;
-  presentationSource?: 'validated_unedited_ai_output';
 };
 
 export type SummaryV2EntryOwned = {
   entryId: string;
+  /** Explicit user-authored titles are literal authority in generated prose. */
+  rolePresentationIsUserAuthoritative: boolean;
   role: string;
-  /** Immutable source role title retained across localized-manifest projection. */
-  sourceRoleTitle?: string;
   employer: string;
   startDate: string;
   endDate: string;
   isPresent: boolean;
   employmentState: SummaryV2EmploymentState;
-  /** Source-bound role-title lineage after localized-manifest projection. */
-  roleTitleLocalizationSource?: string;
-  sourceRoleTitleHash?: string;
-  /** Independent role-title locale provenance; aggregate sourceLocale is diagnostic only. */
-  roleSourceLocale?: Locale;
-  roleSourceLocaleResolvedFrom?: 'detected' | 'declared' | 'fallback';
-  /** Independent role presentation lineage; source role/fact authority stays immutable. */
-  presentationRole?: string;
-  presentationRoleLocale?: Locale;
-  presentationRoleTrusted?: boolean;
-  presentationSource?: 'validated_unedited_ai_output';
-  /** A user-authored role surface is presentation-authoritative and never
-   * replaced by deterministic occupation morphology. */
-  rolePresentationIsUserAuthoritative?: boolean;
   /** Authoritative locale of this entry's visible source material. */
   sourceLocale: Locale;
   /** Hash of live description used at snapshot time. */
@@ -196,9 +56,6 @@ export type SummaryV2SelectionManifest = {
   current: SummaryV2EntryOwned | null;
   /** Bounded prior entries (ownership preserved; no cross-entry merge). */
   priors: SummaryV2EntryOwned[];
-  /** Immutable snapshot entries, including unselected roles. They remain
-   * authority for rejecting cross-entry role/employer/date contamination. */
-  allEntries?: SummaryV2EntryOwned[];
   requiredCurrentFacts: SummaryV2EntryFact[];
   requiredPriorFacts: SummaryV2EntryFact[];
   maxDutiesPerEntry: number;
@@ -224,62 +81,21 @@ export type SummaryV2ValidationResult = {
   priorDutyTenseOk: boolean;
   staleResidueDetected: boolean;
   unsupportedClaimCount: number;
-  /** Evaluative quality/manner claims are semantic unless fact-owned. */
-  unsupportedQualityMannerClaimCount: number;
-  unsupportedQualityMannerClaimKinds: string[];
-  unsupportedQualityMannerClaimHashes: string[];
-  qualityMannerAuthorityPassed: boolean;
   targetLocalePurityPassed: boolean;
   sourceLanguageLeakageDetected: boolean;
   unexpectedLocaleCodes: Locale[];
   sourceLanguageLeakageTokens: string[];
   wrongLocaleUnitCount: number;
   wrongScriptUnitCount: number;
-  roleTitleSurfaceValidationPassed: boolean;
-  /** Applicable gendered role-title morphology gate. */
-  roleTitleGenderValidationPassed: boolean;
-  roleTitleSurfaceEvidence: Array<{
-    owningEntryHash: string;
-    detectedLocale: string | null;
-    detectedScript: string;
-    classification: 'translatable';
-    targetLocaleNativeSurfacePassed: boolean;
-    localizedTitleHash: string;
-    sourceRoleTitleHash: string;
-    genderValidationPassed: boolean;
+  /** Evidence for known gender-sensitive role-title presentation contracts. */
+  roleTitleGenderEvidence: Array<{
+    entryId: string;
     genderValidationApplicable: boolean;
-    genderValidationReason: string | null;
-    expectedRoleTitleHash: string | null;
-    provenance: string;
+    genderValidationPassed: boolean;
+    expectedSurface: string | null;
+    actualSurface: string;
   }>;
-  perspectiveValidationPassed: boolean;
-  arabicMorphologyValidationPassed: boolean;
-  russianMorphologyValidationPassed: boolean;
-  hindiFirstPersonAgreementPassed: boolean;
-  hindiSentenceAgreementRecords: Array<{
-    sentenceIndex: number;
-    clauseIndex: number;
-    employmentState: 'present' | 'completed' | 'unknown';
-    perspectiveMode: 'first_person' | 'neutral_or_unspecified';
-    genderMode: 'female' | 'male' | 'neutral' | 'unspecified';
-    finiteVerbOrAuxiliaryDetected: boolean;
-    agreementMode: 'first_person_habitual' | 'first_person_perfective' | 'neutral' | 'unknown';
-    aspect: 'present_habitual' | 'past_habitual' | 'perfective' | 'mixed' | 'unknown';
-    grammarPassed: boolean;
-    grammarReasons: string[];
-  }>;
-  printClaimDetected: boolean;
-  sourcePrintFactPresent: boolean;
-  unsupportedPrintClaimCount: number;
-  /** Canonical shared fact→category→entry→final-unit authority result. */
-  materialAuthority: SummaryV2MaterialAuthorityResult;
-  unitOwnershipValidationPassed: boolean;
-  unitOwnershipFailureReason: string | null;
-  relationalOwnershipValidationPassed: boolean;
-  relationalOwnershipFailureReasons: string[];
-  finalUnitOwnership: SummaryV2FinalUnitOwnershipEvidence[];
-  factUnitCoverageEvidence: SummaryV2FactUnitCoverageEvidence[];
-  factUnitOwnershipValidationPassed: boolean;
+  roleTitleGenderValidationPassed: boolean;
 };
 
 export type SummaryV2PipelineResult = {
@@ -304,8 +120,6 @@ export type SummaryV2PipelineResult = {
     candidateTransformationKind: string | null;
     candidateTransformationBeforeHash: string | null;
     candidateTransformationAfterHash: string | null;
-    appOwnedKnownRolePresentationViolation?: boolean;
-    appOwnedKnownRolePresentationRepairApplied?: boolean;
     crossLocaleLocalizationRequired: boolean;
     localizationAttempted: boolean;
     localizationRepairAttempted: boolean;
@@ -330,10 +144,6 @@ export type SummaryV2PipelineResult = {
     localizationTypedFailureReason: string | null;
     localizedManifestHash: string | null;
     localizedManifestRevision: string | null;
-    deterministicCandidateRoleSlots?: string[];
-    deterministicCandidateSemanticRolesBySentence?: string[][];
-    frenchStrongerSemanticValidationPassed?: boolean | null;
-    frenchStrongerSemanticRejectionReasons?: string[];
     styleFulfillment: {
       shorterStyleFulfilled: boolean;
       strongerStyleFulfilled: boolean;
@@ -383,11 +193,6 @@ export type SummaryV2PipelineResult = {
       predicateChainRejectionReasons?: string[];
       sourcePredicateChainHash?: string;
       finalPredicateChainHash?: string;
-      ptbrFiniteVerbCount?: number;
-      ptbrFirstPersonCompatibleFiniteVerbCount?: number;
-      ptbrWrongPersonFiniteVerbCount?: number;
-      ptbrWrongPersonFiniteVerbHashes?: string[];
-      ptbrUnitPersonAgreementPassed?: boolean;
       repeatedStyleModifierCount?: number;
       repeatedStyleModifierLemmas?: string[];
       stackedModifierDetected?: boolean;
@@ -396,32 +201,6 @@ export type SummaryV2PipelineResult = {
       structuralStrengtheningCount?: number;
       nativeStrongSurfacePassed?: boolean;
       nativeStrongSurfaceRejectionReasons?: string[];
-      frenchPredicateEvidence?: Array<{
-        sourceFactHash: string;
-        owningEntryHash: string;
-        employmentState: 'current' | 'completed';
-        expectedTense: 'present' | 'past';
-        realizedTense: 'present' | 'past' | 'mixed' | 'unknown';
-        tenseMatch: boolean;
-        sourcePredicate: string;
-        transformedPredicate: string;
-        sourceActionCategory: string;
-        transformedActionCategory: string;
-        actionIdentityPreserved: boolean;
-        responsibilityTierPreserved: boolean;
-        objectScopePreserved: boolean;
-        accepted?: boolean;
-        rejectionReason?: string | null;
-      }>;
-      frenchRoleTenseEvidence?: Array<{
-        owningEntryHash: string;
-        employmentState: 'current' | 'completed';
-        expectedTense: 'present' | 'past';
-        realizedTense: 'present' | 'past' | 'mixed' | 'unknown';
-        tenseMatch: boolean;
-        accepted?: boolean;
-        rejectionReason?: string | null;
-      }>;
     } | null;
     styleNoSafeMaterialChange: boolean;
   };

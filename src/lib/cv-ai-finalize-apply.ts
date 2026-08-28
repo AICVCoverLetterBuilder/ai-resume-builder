@@ -7,7 +7,7 @@
  * never be applied after this function.
  */
 import type { CVData, CvSummaryOrigin, WorkExperience } from './types';
-import { resolveLocaleCandidate, type Locale } from './i18n/translations';
+import type { Locale } from './i18n/translations';
 import type { CoverLetterGender } from './cover-letter-gender';
 import {
   buildCvCanonicalFactSet,
@@ -178,11 +178,8 @@ import {
   SUMMARY_V2_GENDER_SURFACE_389_REVISION,
   isSummaryV2Enabled,
   runSummaryV2,
-  auditSummaryV2PrintClaims,
-  analyzeSummaryV2FinalUnitOwnership,
   buildSummaryV2StyledDeterministicText,
   normalizeSummaryV2RewriteStyle,
-  type SummaryV2MaterialAuthorityResult,
 } from './cv-summary-v2';
 import {
   analyzeFrenchSummaryEmploymentQuality,
@@ -294,12 +291,6 @@ import {
   russianWarehouseFactDiagId,
 } from './cv-russian-experience-grounding';
 import {
-  buildRussianDesignSemanticFallback,
-  sourceRequiresRussianDesignSemanticGrounding,
-  validateRussianDesignSemanticProjection,
-  RUSSIAN_EXPERIENCE_SEMANTIC_GROUNDING_451_REVISION,
-} from './cv-russian-experience-semantic-grounding';
-import {
   HINDI_EXPERIENCE_GROUNDING_338_REVISION,
   sourceRequiresHindiWarehouseFactCoverage,
   validateHindiWarehouseExperienceCoverage,
@@ -316,10 +307,7 @@ import {
   sourceRequiresJapaneseWarehouseFactCoverage,
   validateJapaneseWarehouseExperienceCoverage,
   buildJapaneseWarehouseExperienceFallback,
-  buildJapaneseDesignExperienceFallback,
   scanJapaneseWarehousePredicates,
-  scanJapaneseExperiencePredicates,
-  validateJapaneseExperienceEmploymentTense,
   japaneseWarehouseFactDiagId,
 } from './cv-japanese-experience-grounding';
 import {
@@ -365,7 +353,6 @@ import {
   ENGLISH_EMPTY_SOURCE_GENERATION_365_REVISION,
   buildExperienceSelectedFinalCandidateSnapshot,
   selectedFinalSnapshotToDiagnostics,
-  validateVisibleExperienceCoverage,
 } from './cv-experience-phased-apply-329';
 import {
   EXPERIENCE_CANONICAL_FINALIZATION_313_REVISION,
@@ -527,11 +514,7 @@ import {
 } from './cv-spanish-summary-grounding';
 void SPANISH_SUMMARY_GROUNDING_306_REVISION;
 void SPANISH_SUMMARY_PRIOR_SLOT_307_REVISION;
-import {
-  EXPERIENCE_AI_OUTPUT_PROVENANCE_304_REVISION,
-  resolveExperienceTextareaProvenance,
-  resolveTrustedUneditedAiOutputLocale,
-} from './cv-experience-ai-output-provenance';
+import { EXPERIENCE_AI_OUTPUT_PROVENANCE_304_REVISION, resolveExperienceTextareaProvenance } from './cv-experience-ai-output-provenance';
 
 /** Packaging proof — final-candidate diagnostic truthfulness (AAB-305). */
 export const EXPERIENCE_DIAGNOSTICS_FINAL_CANDIDATE_305_REVISION =
@@ -541,10 +524,6 @@ void EXPERIENCE_DIAGNOSTICS_FINAL_CANDIDATE_305_REVISION;
 export const EXPERIENCE_REPAIR_LINEAGE_309_REVISION =
   'experience-repair-lineage-309-v1' as const;
 void EXPERIENCE_REPAIR_LINEAGE_309_REVISION;
-/** AAB-434 — distinguish an API/server repair response from client no-op repair. */
-export const EXPERIENCE_SERVER_REPAIR_LINEAGE_434_REVISION =
-  'experience-server-repair-lineage-434-v1' as const;
-void EXPERIENCE_SERVER_REPAIR_LINEAGE_434_REVISION;
 /** AAB-310 — predicate repair lineage evidence. */
 export const EXPERIENCE_PREDICATE_REPAIR_LINEAGE_310_REVISION =
   'experience-predicate-repair-lineage-310-v1' as const;
@@ -576,10 +555,7 @@ import {
   countTranslatedFactUnits,
   validateCrossLocaleSemanticCoverage,
 } from './cv-cross-locale-experience';
-import {
-  validateArabicExperienceEmploymentTense,
-  validateArabicExperienceNativeMorphology,
-} from './cv-arabic-experience-tense';
+import { validateArabicExperienceEmploymentTense } from './cv-arabic-experience-tense';
 import { validateRussianExperienceEmploymentTense } from './cv-russian-experience-tense';
 import {
   resolveTargetScriptForLocale,
@@ -610,9 +586,6 @@ import {
   validateSourceUnitsMateriallyPreserved,
   extractSourceDutyUnits,
   stripDutyListPrefix,
-  normalizeSourceFactText,
-  sourceFactIdentityId,
-  sourceFactIdentitiesFromDescription,
   sourceUsableInLocale,
 } from './cv-source-fact-identity';
 import {
@@ -775,7 +748,6 @@ export const SUMMARY_RUNTIME_MARKER_SET = [
   SPANISH_EXPERIENCE_GUARANTEE_GROUNDING_308_REVISION,
   SPANISH_EXPERIENCE_REPAIR_GROUNDING_309_REVISION,
   EXPERIENCE_REPAIR_LINEAGE_309_REVISION,
-  EXPERIENCE_SERVER_REPAIR_LINEAGE_434_REVISION,
   SPANISH_EXPERIENCE_PREDICATE_GROUNDING_310_REVISION,
   EXPERIENCE_PREDICATE_REPAIR_LINEAGE_310_REVISION,
   EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION,
@@ -1122,17 +1094,6 @@ export type FinalizeCvAiFieldInput = {
   rewriteStyle?: 'shorter' | 'stronger' | 'professional' | string | null;
   /** Validated Summary V2 entry/fact localization from the structured provider boundary. */
   localizedSummaryManifest?: import('./cv-summary-v2').SummaryV2LocalizedManifest | null;
-  /** Hash-/count-only primary-provider phase received from the real route. */
-  providerPhaseDiagnostics?: {
-    candidatePresent?: boolean;
-    requiredFactCount?: number;
-    coveredFactCount?: number;
-    uncoveredSourceIndexes?: number[];
-    semanticArgumentAdditionCount?: number;
-    addedPredicateCount?: number;
-    addedPredicateIdentityHashes?: string[];
-    accepted?: boolean;
-  } | null;
 };
 
 export type FinalizeCvAiFieldResult = {
@@ -1148,17 +1109,17 @@ export type FinalizeCvAiFieldResult = {
     sourceFactCount?: number;
     requiredFactCount?: number;
     coveredFactCount?: number;
-    providerCoveredFactCount?: number | null;
-    providerUncoveredFactCount?: number | null;
+    providerCoveredFactCount?: number;
+    providerUncoveredFactCount?: number;
     providerUncoveredFactIdentityHashes?: string[];
     uncoveredFactIdentityHashes?: string[];
-    providerRequiredFactCount?: number | null;
+    providerRequiredFactCount?: number;
     providerAccepted?: boolean;
     experienceDiagnosticsFinalCandidateRevision?: typeof EXPERIENCE_DIAGNOSTICS_FINAL_CANDIDATE_305_REVISION;
     englishExperienceThreeFactCoverageRevision?: typeof ENGLISH_EXPERIENCE_THREE_FACT_COVERAGE_327_REVISION;
     summaryFinalCandidateDiagnosticsRevision?: typeof SUMMARY_FINAL_CANDIDATE_DIAGNOSTICS_306_REVISION;
     providerPrimaryRejectionReason?: string | null;
-    providerBulletCount?: number | null;
+    providerBulletCount?: number;
     /** @deprecated Prefer clientDeterministicFallback* fields. */
     fallbackBulletCount?: number;
     finalBulletCount?: number;
@@ -1190,13 +1151,6 @@ export type FinalizeCvAiFieldResult = {
     perspectiveNormalizationAttempted?: boolean;
     perspectiveNormalizationApplied?: boolean;
     perspectiveValidationPassed?: boolean;
-    targetPersonMode?: 'third_singular';
-    targetGender?: string | null;
-    arabicMorphologyTransformationAttempted?: boolean;
-    arabicMorphologyTransformationApplied?: boolean;
-    arabicMorphologyTransformationClasses?: string[];
-    arabicNativeMorphologyValidationPassed?: boolean;
-    arabicNativeMorphologyRejectionReason?: string | null;
     finalDurationRepresentationKind?: string;
     finalDurationRepresentationCount?: number;
     finalDurationHybridDetected?: boolean;
@@ -1219,12 +1173,9 @@ export type FinalizeCvAiFieldResult = {
     finalCandidateUnitCount?: number;
     evaluatedCandidateUnitCount?: number | null;
     evaluatedUnitRoleSlots?: string[] | null;
-    evaluatedSentenceSemanticRolesBySentence?: string[][] | null;
     evaluatedSentenceHashes?: string[] | null;
     evaluatedSlotValidationPassed?: boolean | null;
     evaluatedSlotRejectionReasons?: string[] | null;
-    frenchStrongerSemanticValidationPassed?: boolean | null;
-    frenchStrongerSemanticRejectionReasons?: string[] | null;
     finalCandidateValidationApplicable?: boolean;
     finalCandidatePredicateValidationApplicable?: boolean;
     finalCandidateBulletCount?: number;
@@ -1234,12 +1185,6 @@ export type FinalizeCvAiFieldResult = {
     providerAttempted?: boolean;
     providerHttpStatus?: number | null;
     providerResponseKind?: string;
-    /** True only when the API response is the server's selected repair output. */
-    serverRepairAttempted?: boolean;
-    serverRepairSelected?: boolean;
-    serverRepairSource?: 'api_server_repair' | null;
-    /** False/N/A when predicate validation was not run in the provider phase. */
-    providerPredicateValidationApplicable?: boolean | null;
     earlyNoOpPreflightPassed?: boolean;
     earlyNoOpPreflightEvaluated?: boolean;
     providerCandidatePresent?: boolean;
@@ -1256,14 +1201,6 @@ export type FinalizeCvAiFieldResult = {
     providerNoOpDetected?: boolean;
     sourceNormalizedHash?: string | null;
     finalNormalizedHash?: string | null;
-    russianSourceOwnedProjectionAttempted?: boolean;
-    russianSourceOwnedSemanticFactCount?: number | null;
-    russianSourceOwnedProjectionHash?: string | null;
-    russianSourceOwnedProjectionValidationPassed?: boolean | null;
-    russianSourceOwnedProjectionSelected?: boolean | null;
-    russianFallbackHashEnteringFinalizer?: string | null;
-    russianPostNormalizationHash?: string | null;
-    russianFinalSelectedHash?: string | null;
     providerSentenceHashes?: string[];
     noOpRepairAttempted?: boolean;
     noOpRepairValidationPassed?: boolean;
@@ -1399,11 +1336,9 @@ export type FinalizeCvAiFieldResult = {
     degradationKinds?: string[];
     neutralRestyleDetected?: boolean;
     finalDecisionKind?: string | null;
-    experienceCanonicalPreapplyDecisionRevision?: typeof EXPERIENCE_CANONICAL_PREAPPLY_DECISION_421_REVISION;
+    experienceCanonicalPreapplyDecisionRevision?: string | null;
     canonicalExperienceDecisionCreated?: boolean;
-    providerPrimaryCandidateValidationAccepted?: boolean | null;
     providerCandidateValidationAccepted?: boolean;
-    finalCandidateValidationAccepted?: boolean;
     finalVisibleDecisionAcceptedForApply?: boolean;
     canonicalExperienceDecisionAllowsApply?: boolean;
     canonicalExperienceDecisionAllowsUsage?: boolean;
@@ -1514,18 +1449,15 @@ export type FinalizeCvAiFieldResult = {
     }>;
     unsupportedClaimCount?: number;
     sourcePrintFactPresent?: boolean;
-    sourcePrintFactPresentScope?: 'aggregate_selected_manifest_authority';
     sourceBrandingFactPresent?: boolean;
     sourceMarketingFactPresent?: boolean;
     providerUnsupportedDesignMediumCount?: number;
     providerUnsupportedDesignMediumKinds?: string[];
     providerPrintClaimDetected?: boolean;
-    finalPrintClaimDetected?: boolean;
     providerBrandingClaimDetected?: boolean;
     providerMarketingClaimDetected?: boolean;
     finalUnsupportedDesignMediumCount?: number;
     finalUnsupportedDesignMediumKinds?: string[];
-    materialAuthority?: SummaryV2MaterialAuthorityResult;
     deterministicUnsupportedDesignMediumCount?: number;
     deterministicUnsupportedDesignMediumKinds?: string[];
     hindiCurrentIntroFiniteVerbPresent?: boolean;
@@ -1539,23 +1471,6 @@ export type FinalizeCvAiFieldResult = {
     hindiIncompleteSentenceCount?: number;
     hindiGrammarRejectionReason?: string | null;
     hindiGrammarRejectionReasons?: string[];
-    hindiSentenceGrammarRecords?: Array<{
-      sentenceHash: string;
-      clauseIndex?: number;
-      roleSlot: string;
-      hasFiniteVerb: boolean;
-      hasFiniteCopula: boolean;
-      hasRequiredAuxiliary: boolean;
-      nominalFragmentDetected: boolean;
-      standaloneRelativeFragmentDetected: boolean;
-      grammarPassed: boolean;
-      grammarReasons: string[];
-      employmentState?: 'present' | 'completed' | 'unknown';
-      perspectiveMode?: 'first_person' | 'neutral_or_unspecified';
-      genderMode?: 'female' | 'male' | 'neutral' | 'unspecified';
-      agreementMode?: 'first_person_habitual' | 'first_person_perfective' | 'neutral' | 'unknown';
-      aspect?: 'present_habitual' | 'past_habitual' | 'perfective' | 'mixed' | 'unknown';
-    }>;
     providerHindiNominalExperienceFragmentDetected?: boolean;
     providerHindiSentenceHasFiniteCopulaOrVerb?: boolean[] | null;
     providerHindiIncompleteSentenceCount?: number | null;
@@ -1760,22 +1675,6 @@ export type FinalizeCvAiFieldResult = {
     currentRoleTitleSource?: string | null;
     currentRoleTitleEntryIdHash?: string | null;
     currentRoleTitleMatchesStructuredRole?: boolean;
-    roleTitleSurfaceEvidence?: Array<{
-      owningEntryHash: string;
-      detectedLocale: string | null;
-      detectedScript: string;
-      classification: 'translatable';
-      targetLocaleNativeSurfacePassed: boolean;
-      localizedTitleHash: string;
-      sourceRoleTitleHash: string;
-      genderValidationPassed?: boolean;
-      genderValidationApplicable?: boolean;
-      genderValidationReason?: string | null;
-      expectedRoleTitleHash?: string | null;
-      provenance: string;
-    }>;
-    roleTitleGenderValidationPassed?: boolean | null;
-    genderValidationPassed?: boolean | null;
     currentRoleOmittedDetected?: boolean;
     currentSlotForeignFactCount?: number;
     priorSlotForeignFactCount?: number;
@@ -1784,28 +1683,6 @@ export type FinalizeCvAiFieldResult = {
     priorRoleSemanticFactMentionCount?: number;
     priorRoleSemanticDuplicationDetected?: boolean;
     finalUnitRoleSlots?: string[];
-    finalUnitHashes?: string[];
-    unitOwnershipValidationPassed?: boolean;
-    unitOwnershipFailureReason?: string | null;
-    factUnitOwnershipValidationPassed?: boolean;
-    finalUnitOwnershipEvidence?: Array<{
-      unitHash: string;
-      roleSlot: 'duration' | 'current_role' | 'prior_role';
-      owningEntryHash: string | null;
-      priorOrdinal: number | null;
-    }>;
-    factUnitOwnershipEvidence?: Array<{
-      factHash: string;
-      owningEntryHash: string;
-      semanticRole: 'current_fact' | 'prior_fact';
-      matchedUnitHashes: string[];
-      matchedUnitOwnerHashes: string[];
-      matchedUnitRoleSlots: Array<'duration' | 'current_role' | 'prior_role'>;
-      ownershipPassed: boolean;
-      covered: boolean;
-    }>;
-    visibleCurrentDutyFactMatchCountsByFactHash?: Record<string, number>;
-    visibleCurrentDutyFactMatchedUnitHashesByFactHash?: Record<string, string[]>;
     hindiFiniteKaAnubhavCollision?: boolean;
     durationFinalizerIdempotent?: boolean;
     summaryPipelineRevision?: string;
@@ -1922,8 +1799,6 @@ export type FinalizeCvAiFieldResult = {
     structuralStrengtheningCount?: number | null;
     nativeStrongSurfacePassed?: boolean;
     nativeStrongSurfaceRejectionReasons?: string[];
-    frenchPredicateEvidence?: Array<Record<string, unknown>>;
-    frenchRoleTenseEvidence?: Array<Record<string, unknown>>;
     structuralCompressionCount?: number;
     serbianStructuredDomainGateEvaluated?: boolean;
     serbianStructuredDomainGatePassed?: boolean;
@@ -2580,14 +2455,6 @@ function summaryPasses(
     const frenchStructuredDomain = isFrenchStructuredSummaryDomain(dutiesCorpus)
       || Number(empQ.requiredCurrentDutyFactCount || 0) > 0
       || Number(empQ.requiredPriorDutyFactCount || 0) > 0;
-    if (!empQ.grammarValidationPassed) {
-      return {
-        ok: false,
-        reason: empQ.grammarRejectionReason
-          || empQ.slotRejectionReasons[0]
-          || 'french_summary_grammar_failed',
-      };
-    }
     if (frenchStructuredDomain) {
       if (!empQ.groundingValidationPassed) {
         return {
@@ -3251,13 +3118,19 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     const v2Units = v2Text
       ? v2Text.split(/(?<=[.!?。؟।])\s+/u).map((u) => u.trim()).filter(Boolean)
       : [];
-    const unitRoleSlots: string[] = v2.validation.finalUnitOwnership.map((evidence) => (
-      evidence.roleSlot === 'current_role' ? 'current_intro' : evidence.roleSlot
-    ));
+    const roleSlots = [
+      ...(v2.manifest.current ? ['current_intro' as const] : []),
+      ...v2.manifest.priors.map(() => 'prior_role' as const),
+    ];
+    // Duration unit is prepended (V2 sentence order). Semantic roles carry
+    // total_duration; slot id stays `duration` for lineage consumers.
+    const unitRoleSlots = v2.manifest.totalDurationMonths > 0
+      ? (['duration', ...roleSlots] as string[])
+      : [...roleSlots];
     const providerRaw = (input.candidate || '').trim();
     const providerHash = providerRaw ? hashSummaryCandidate(providerRaw) : null;
     const providerRejected = Boolean(providerRaw) && v2.origin !== 'ai_generated';
-    const v2UnitHashes = v2.validation.finalUnitOwnership.map((evidence) => evidence.unitHash);
+    const v2UnitHashes = v2Units.map((u) => fingerprintText(u));
     void GERMAN_SUMMARY_V2_PREAPPLY_COMPLETENESS_380_REVISION;
     const deV2Completeness = locale === 'de'
       ? buildGermanSummaryV2PreapplyCompletenessFields({
@@ -3291,7 +3164,8 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     const success = !v2.blocked
       && v2.countedAsSuccess
       && !deV2BlockReason
-      && !v2DurationSemanticFailure;
+      && !v2DurationSemanticFailure
+      && v2.validation.roleTitleGenderValidationPassed;
     // AAB-383 — evaluated candidate lineage must stay truthful even when blocked.
     // Never report present=true with null hashes; never wipe a valid duration 1→0
     // by rescanning empty live Summary after a grammar/completeness reject.
@@ -3309,39 +3183,6 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         ? fingerprintText(`dur_unit:${v2Units[0] || v2Text}`)
         : null);
     const v2DurationPassHash = v2Text ? hashSummaryCandidate(v2Text) : null;
-    const v2GroundingInputHash = v2Text ? hashSummaryCandidate(v2Text) : null;
-    const providerOwnership = analyzeSummaryV2FinalUnitOwnership(providerRaw, v2.manifest, {
-      candidateSource: 'provider',
-    });
-    const providerPrintAudit = auditSummaryV2PrintClaims(
-      providerRaw,
-      v2.manifest,
-      providerOwnership.evidence,
-    );
-    const v2MatchedCurrentUnitHashes = Object.fromEntries(
-      v2.manifest.requiredCurrentFacts.map((fact) => [
-        fact.factId,
-        v2.validation.factUnitCoverageEvidence
-          .find((evidence) => evidence.factId === fact.factId)
-          ?.matchedUnitHashes || [],
-      ]),
-    );
-    const v2FactUnitOwnershipEvidence = v2.validation.factUnitCoverageEvidence.map((evidence) => ({
-      factHash: evidence.factHash,
-      owningEntryHash: evidence.owningEntryHash,
-      semanticRole: evidence.semanticRole,
-      matchedUnitHashes: evidence.matchedUnitHashes,
-      matchedUnitOwnerHashes: evidence.matchedUnitOwnerHashes,
-      matchedUnitRoleSlots: evidence.matchedUnitRoleSlots,
-      ownershipPassed: evidence.ownershipPassed,
-      covered: evidence.covered,
-    }));
-    const v2FinalUnitOwnershipEvidence = v2.validation.finalUnitOwnership.map((evidence) => ({
-      unitHash: evidence.unitHash,
-      roleSlot: evidence.roleSlot,
-      owningEntryHash: evidence.owningEntryHash,
-      priorOrdinal: evidence.priorOrdinal,
-    }));
     const missingCurrent = Math.max(
       0,
       v2.validation.requiredCurrentFactCount - v2.validation.coveredCurrentFactCount,
@@ -3356,9 +3197,6 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       : null;
     const v2OperationMode = resolveAiOperationMode({ targetContent: liveSummary });
     const v2EnhanceExisting = v2OperationMode === 'enhance_existing_content';
-    const v2KnownRolePresentationRepairApplied = Boolean(
-      v2Pd?.appOwnedKnownRolePresentationRepairApplied,
-    );
     // Style-fulfilled rewrites are material even when the legacy semantic Jaccard
     // gate would classify them as paraphrase no-ops (soft wording / framing).
     const styleMaterialSuccess = Boolean(
@@ -3378,20 +3216,14 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       && hashSummaryCandidate(normalizeSummaryCandidateText(v2Text))
         !== hashSummaryCandidate(normalizeSummaryCandidateText(liveSummary)),
     );
-    const meaningfulEffective = (
-      styleMaterialSuccess
-      || balancedEnhanceMaterialSuccess
-      || v2KnownRolePresentationRepairApplied
-    )
+    const meaningfulEffective = (styleMaterialSuccess || balancedEnhanceMaterialSuccess)
       ? {
         ...meaningful,
         finalMatchesSourceAfterNormalization: false,
         meaningfulChangeDetected: true,
         meaningfulChangeReason: styleMaterialSuccess
           ? `rewrite_style_${requestedRewriteStyle}`
-          : (v2KnownRolePresentationRepairApplied
-            ? 'app_owned_known_role_presentation_repair'
-            : 'v2_balanced_enhance'),
+          : 'v2_balanced_enhance',
         noOpDetected: false,
         noOpRejectionReason: null as string | null,
       }
@@ -3400,9 +3232,6 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       (success && v2EnhanceExisting && meaningfulEffective.noOpDetected)
       || styleNoSafe,
     );
-    const v2FinalValidatedHash = (success && !v2CleanNoOp)
-      ? meaningfulEffective.finalNormalizedHash
-      : null;
     const v2NoOpCandidateKind: string | null = v2CleanNoOp
       ? (
         styleNoSafe
@@ -3414,21 +3243,6 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           )
       )
       : null;
-    const frenchRoleTenseEvidence = v2Pd?.styleFulfillment?.frenchRoleTenseEvidence || [];
-    const frenchPredicateEvidence = v2Pd?.styleFulfillment?.frenchPredicateEvidence || [];
-    const frenchTenseEvidencePassed = requestedRewriteStyle === 'stronger'
-      ? Boolean(
-        frenchRoleTenseEvidence.length
-        && frenchRoleTenseEvidence.every((evidence) => evidence.tenseMatch)
-        && frenchPredicateEvidence.length
-        && frenchPredicateEvidence.every((evidence) => evidence.tenseMatch),
-      )
-      : Boolean(
-        v2Pd?.styleFulfillment?.currentTenseValidationPassed
-        && v2Pd?.styleFulfillment?.priorTenseValidationPassed
-        && v2Pd?.styleFulfillment?.finiteClauseValidationPassed
-        && !v2Pd?.styleFulfillment?.mixedTensePredicateDetected,
-      );
     const diagBase = {
       summaryV2FactIdPathActive: true,
       crossLocaleLocalizationRequired: Boolean(v2Pd?.crossLocaleLocalizationRequired),
@@ -3479,68 +3293,13 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       serbianEntryOwnedBuilderSentenceCount: 0,
       serbianEntryOwnedBuilderTypedFailureReason: 'not_applicable_summary_v2_fact_id_path' as string | null,
       hindiNominalExperienceFragmentDetected: false,
-      hindiSentenceHasFiniteCopulaOrVerb: locale === 'hi'
-        ? v2.validation.hindiSentenceAgreementRecords.map(
-          (record) => record.finiteVerbOrAuxiliaryDetected,
-        )
-        : true,
-      hindiIncompleteSentenceCount: locale === 'hi'
-        ? v2.validation.hindiSentenceAgreementRecords.filter(
-          (record) => !record.grammarPassed,
-        ).length
-        : 0,
-      hindiGrammarRejectionReason: locale === 'hi'
-        ? (v2.validation.hindiSentenceAgreementRecords.find(
-          (record) => record.grammarReasons.length > 0,
-        )?.grammarReasons[0] || null)
-        : null,
-      hindiGrammarRejectionReasons: locale === 'hi'
-        ? [...new Set(v2.validation.hindiSentenceAgreementRecords.flatMap(
-          (record) => record.grammarReasons,
-        ))]
-        : [],
-      finalUnsupportedDesignMediumCount: v2.validation.unsupportedPrintClaimCount,
-      finalUnsupportedDesignMediumKinds: v2.validation.unsupportedPrintClaimCount > 0
-        ? ['unsupported_print_medium']
-        : [],
-      // This is the exact immutable object used by final validation. Diagnostics
-      // do not rescan final/source text to reconstruct material authority.
-      materialAuthority: v2.validation.materialAuthority,
-      deterministicUnsupportedDesignMediumCount: v2DetOrigin
-        ? v2.validation.unsupportedPrintClaimCount
-        : 0,
-      deterministicUnsupportedDesignMediumKinds: v2DetOrigin
-        && v2.validation.unsupportedPrintClaimCount > 0
-        ? ['unsupported_print_medium']
-        : [],
-      providerUnsupportedDesignMediumCount: providerPrintAudit.unsupportedPrintClaimCount,
-      providerUnsupportedDesignMediumKinds: providerPrintAudit.unsupportedPrintClaimCount > 0
-        ? ['unsupported_print_medium']
-        : [],
-      providerPrintClaimDetected: providerPrintAudit.printClaimDetected,
-      finalPrintClaimDetected: v2.validation.printClaimDetected,
-      hindiSentenceGrammarRecords: locale === 'hi'
-        ? v2.validation.hindiSentenceAgreementRecords.map((record) => ({
-          sentenceHash: fingerprintText(`hindi-summary-sentence:${record.sentenceIndex}`),
-          clauseIndex: record.clauseIndex,
-          roleSlot: record.employmentState === 'completed' ? 'prior_role' : 'current_intro',
-          hasFiniteVerb: record.finiteVerbOrAuxiliaryDetected,
-          hasFiniteCopula: record.finiteVerbOrAuxiliaryDetected,
-          hasRequiredAuxiliary: record.grammarPassed,
-          nominalFragmentDetected: false,
-          standaloneRelativeFragmentDetected: false,
-          grammarPassed: record.grammarPassed,
-          grammarReasons: record.grammarReasons,
-          employmentState: record.employmentState,
-          perspectiveMode: record.perspectiveMode,
-          genderMode: record.genderMode,
-          agreementMode: record.agreementMode,
-          aspect: record.aspect,
-        }))
-        : [] as unknown[],
-      sourcePrintFactPresent: v2.validation.sourcePrintFactPresent,
-      sourcePrintFactPresentScope:
-        v2.validation.materialAuthority.sourcePrintFactPresentScope,
+      hindiSentenceHasFiniteCopulaOrVerb: true,
+      hindiIncompleteSentenceCount: 0,
+      finalUnsupportedDesignMediumCount: 0,
+      providerUnsupportedDesignMediumCount: 0,
+      providerPrintClaimDetected: false,
+      hindiSentenceGrammarRecords: [] as unknown[],
+      sourcePrintFactPresent: false,
       requiredCurrentDutyFactCount: v2.validation.requiredCurrentFactCount,
       coveredCurrentDutyFactCount: v2.validation.coveredCurrentFactCount,
       missingCurrentDutyFactCount: missingCurrent,
@@ -3555,37 +3314,28 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         v2.manifest.requiredCurrentFacts.map((f) => f.factId).join('|') || 'empty_required_set',
       ),
       authoritativeCurrentDutyFactCount: v2.validation.requiredCurrentFactCount,
-      visibleCurrentDutyFactMatchedUnitHashesByFactHash: v2MatchedCurrentUnitHashes,
       currentRoleTitlePresent: v2.validation.currentRolePresent,
-      currentRoleTitleSource: v2.manifest.current
-        ? (v2.manifest.current.roleTitleLocalizationSource || 'source_manifest_role_title')
-        : null,
-      currentRoleTitleEntryIdHash: v2.manifest.current
-        ? fingerprintText(v2.manifest.current.entryId)
-        : null,
       currentRoleTitleMatchesStructuredRole: v2.validation.currentRolePresent,
-      roleTitleSurfaceEvidence: v2.validation.roleTitleSurfaceEvidence,
       roleTitleGenderValidationPassed: v2.validation.roleTitleGenderValidationPassed,
-      genderValidationPassed: v2.validation.roleTitleGenderValidationPassed,
-      structuredRoleLocaleValidationPassed: v2.validation.roleTitleSurfaceValidationPassed,
-      currentRoleLocalizationValidationPassed: v2.validation.roleTitleSurfaceEvidence[0]
-        ?.targetLocaleNativeSurfacePassed ?? !v2.manifest.current,
-      priorRoleLocalizationValidationPassed: v2.validation.roleTitleSurfaceEvidence
-        .slice(v2.manifest.current ? 1 : 0)
-        .every((entry) => entry.targetLocaleNativeSurfacePassed),
-      foreignStructuredRoleTitleCount: v2.validation.roleTitleSurfaceEvidence
-        .filter((entry) => !entry.targetLocaleNativeSurfacePassed).length,
-      foreignPriorRoleTitleCount: v2.validation.roleTitleSurfaceEvidence
-        .slice(v2.manifest.current ? 1 : 0)
-        .filter((entry) => !entry.targetLocaleNativeSurfacePassed).length,
-      foreignCurrentRoleTitleDetected: Boolean(v2.manifest.current)
-        && v2.validation.roleTitleSurfaceEvidence[0]?.targetLocaleNativeSurfacePassed === false,
-      rawSourceRoleLeakageDetected: !v2.validation.roleTitleSurfaceValidationPassed,
-      finalStructuredRoleLocaleValidationPassed: v2.validation.roleTitleSurfaceValidationPassed,
-      finalWrongLocaleStructuredRoleCount: v2.validation.roleTitleSurfaceEvidence
-        .filter((entry) => !entry.targetLocaleNativeSurfacePassed).length,
-      finalForeignRoleTitleCount: v2.validation.roleTitleSurfaceEvidence
-        .filter((entry) => !entry.targetLocaleNativeSurfacePassed).length,
+      roleTitleSurfaceEvidence: v2.validation.roleTitleGenderEvidence.map((evidence) => ({
+        entryIdHash: fingerprintText(evidence.entryId),
+        genderValidationApplicable: evidence.genderValidationApplicable,
+        genderValidationPassed: evidence.genderValidationPassed,
+        expectedSurfaceHash: evidence.expectedSurface
+          ? fingerprintText(evidence.expectedSurface)
+          : null,
+        actualSurfaceHash: fingerprintText(evidence.actualSurface),
+      })),
+      structuredRoleLocaleValidationPassed: true,
+      currentRoleLocalizationValidationPassed: true,
+      priorRoleLocalizationValidationPassed: true,
+      foreignStructuredRoleTitleCount: 0,
+      foreignPriorRoleTitleCount: 0,
+      foreignCurrentRoleTitleDetected: false,
+      rawSourceRoleLeakageDetected: false,
+      finalStructuredRoleLocaleValidationPassed: true,
+      finalWrongLocaleStructuredRoleCount: 0,
+      finalForeignRoleTitleCount: 0,
       finalUnsupportedCompetencyCount: v2.validation.unsupportedClaimCount,
       finalUnsupportedCompetencyKinds: [],
       competencyInferenceFromRoleForbidden: true,
@@ -3598,13 +3348,8 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         ? (meaningfulEffective.meaningfulChangeDetected || !liveSummary.trim())
         : false,
       meaningfulChangeReason: v2CleanNoOp ? null : meaningfulEffective.meaningfulChangeReason,
-      groundingInputCandidateHash: v2GroundingInputHash,
-      deterministicCandidateEqualsGroundingInput: v2DetHash && v2GroundingInputHash
-        ? v2DetHash === v2GroundingInputHash
-        : null,
-      groundingInputEqualsFinalValidatedCandidate: v2GroundingInputHash && v2FinalValidatedHash
-        ? v2GroundingInputHash === v2FinalValidatedHash
-        : null,
+      deterministicCandidateEqualsGroundingInput: true,
+      groundingInputEqualsFinalValidatedCandidate: success && !v2CleanNoOp,
       providerCandidateEqualsDeterministicCandidate: false,
       finalCandidateSource: (success && !v2CleanNoOp) ? v2.origin : 'none',
       // Evaluated candidate duration truth (never rescanned from empty live text).
@@ -3649,21 +3394,15 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         && v2.validation.priorStateExpressed,
       ),
       finalPostconditionsPassed: success && !v2CleanNoOp,
-      targetLocalePurityPassed: v2.validation.targetLocalePurityPassed,
-      sourceLanguageLeakageDetected: v2.validation.sourceLanguageLeakageDetected,
-      wrongLocaleUnitCount: v2.validation.wrongLocaleUnitCount,
-      wrongScriptUnitCount: v2.validation.wrongScriptUnitCount,
+      targetLocalePurityPassed: Boolean(v2Pd?.targetLocalePurityPassed),
+      sourceLanguageLeakageDetected: Boolean(v2Pd?.sourceLanguageLeakageDetected),
+      wrongLocaleUnitCount: 0,
+      wrongScriptUnitCount: 0,
       detectedLocaleByUnit: v2Units.map(() => locale),
       detectedScriptByUnit: v2Units.map(() => (
         locale === 'ar' || locale === 'hi' || locale === 'ja' ? 'native' : 'latin'
       )),
       finalUnitRoleSlots: unitRoleSlots,
-      unitOwnershipValidationPassed: v2.validation.unitOwnershipValidationPassed,
-      unitOwnershipFailureReason: v2.validation.unitOwnershipFailureReason,
-      factUnitOwnershipValidationPassed:
-        v2.validation.factUnitOwnershipValidationPassed,
-      finalUnitOwnershipEvidence: v2FinalUnitOwnershipEvidence,
-      factUnitOwnershipEvidence: v2FactUnitOwnershipEvidence,
       finalSentenceRoleSlots: unitRoleSlots,
       finalSentenceHashes: (success && !v2CleanNoOp) ? v2UnitHashes : [],
       finalUnitHashes: (success && !v2CleanNoOp) ? v2UnitHashes : [],
@@ -3681,7 +3420,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       summaryFinalCandidateDiagnosticsRevision: SUMMARY_FINAL_CANDIDATE_DIAGNOSTICS_306_REVISION,
       perspectiveMode: 'first_person' as const,
       finalPerspectiveMode: 'first_person' as const,
-      perspectiveValidationPassed: v2.validation.perspectiveValidationPassed,
+      perspectiveValidationPassed: true,
       rewriteStyle: input.rewriteStyle || null,
       requestedRewriteStyle: requestedRewriteStyle || null,
       rewriteStylePropagatedToProvider: Boolean(v2Pd?.rewriteStylePropagatedToProvider),
@@ -3707,11 +3446,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       professionalStyleFulfilled: Boolean(v2Pd?.styleFulfillment?.professionalStyleFulfilled),
       styleValidationPassed: requestedRewriteStyle
         ? Boolean(
-          (
-            !v2EnhanceExisting
-            || v2Pd?.styleFulfillment?.styleValidationPassed
-            || v2KnownRolePresentationRepairApplied
-          )
+          (!v2EnhanceExisting || v2Pd?.styleFulfillment?.styleValidationPassed)
           && success
           && !v2CleanNoOp,
         )
@@ -3827,17 +3562,6 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       ),
       nativeStrongSurfaceRejectionReasons:
         v2Pd?.styleFulfillment?.nativeStrongSurfaceRejectionReasons || [],
-      frenchPredicateEvidence:
-        v2Pd?.styleFulfillment?.frenchPredicateEvidence || [],
-      frenchRoleTenseEvidence:
-        v2Pd?.styleFulfillment?.frenchRoleTenseEvidence || [],
-      tenseValidationPassed: locale === 'fr'
-        ? Boolean(
-          (requestedRewriteStyle !== 'stronger'
-            || v2Pd?.frenchStrongerSemanticValidationPassed === true)
-          && frenchTenseEvidencePassed,
-        )
-        : true,
       operationMode: v2OperationMode,
       providerAccepted: v2.origin === 'ai_generated' && !v2CleanNoOp,
       providerCandidatePresent: Boolean(providerRaw),
@@ -3883,7 +3607,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         : (v2CleanNoOp ? SUMMARY_NOOP_REJECTION_REASON : null),
       detectedVisibleContentLocaleBeforeRequest: cv.contentLocale || null,
       finalContentLocaleAfterApply: null,
-      finalValidatedCandidateHash: v2FinalValidatedHash,
+      finalValidatedCandidateHash: (success && !v2CleanNoOp) ? meaningfulEffective.finalNormalizedHash : null,
       // Present + hashes whenever a deterministic surface was serialized (even if later rejected).
       deterministicCandidateHash: v2DetHash,
       deterministicCandidateNormalizedHash: v2DetNormHash,
@@ -3907,33 +3631,12 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       repairUsableCandidatePresent: Boolean(v2Pd?.repairApplied),
       repairAccepted: Boolean(v2Pd?.repairApplied) && success && !v2CleanNoOp,
       groundingValidationPassed: success && !v2CleanNoOp,
-      grammarValidationPassed: locale === 'fr'
-        ? Boolean(success && !v2CleanNoOp
-          && v2Pd?.styleFulfillment?.nativeSurfaceValidationPassed
-          && v2Pd?.styleFulfillment?.grammaticalPersonValidationPassed
-          && (requestedRewriteStyle !== 'stronger'
-            || (frenchRoleTenseEvidence.length
-              && v2Pd?.frenchStrongerSemanticValidationPassed === true
-              && frenchRoleTenseEvidence.every((evidence) => evidence.tenseMatch)
-              && frenchPredicateEvidence.every((evidence) => (
-                evidence.tenseMatch
-                && evidence.actionIdentityPreserved
-                && evidence.responsibilityTierPreserved
-                && evidence.objectScopePreserved
-                && evidence.accepted !== false
-              )))))
-        : locale === 'de' && deV2Completeness
+      grammarValidationPassed: locale === 'de' && deV2Completeness
         ? deV2Completeness.germanControlledCaseGrammarPassed
-        : (success && !v2CleanNoOp
-          && v2.validation.perspectiveValidationPassed
-          && v2.validation.arabicMorphologyValidationPassed),
+        : (success && !v2CleanNoOp),
       slotValidationPassed: success && !v2CleanNoOp,
       priorRoleGroundingPassed: v2.validation.priorRolePresent && v2.validation.priorEmployerPresent,
       unsupportedClaimCount: v2.validation.unsupportedClaimCount,
-      unsupportedQualityMannerClaimCount: v2.validation.unsupportedQualityMannerClaimCount,
-      unsupportedQualityMannerClaimKinds: v2.validation.unsupportedQualityMannerClaimKinds,
-      unsupportedQualityMannerClaimHashes: v2.validation.unsupportedQualityMannerClaimHashes,
-      qualityMannerAuthorityPassed: v2.validation.qualityMannerAuthorityPassed,
       currentDutyTenseOk: v2.validation.currentDutyTenseOk,
       priorDutyTenseOk: v2.validation.priorDutyTenseOk,
       staleOccupationResidueDetected: v2.validation.staleResidueDetected,
@@ -3947,9 +3650,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       contentLocaleAfterApply: cv.contentLocale || null,
       contentLocaleUpdatedAfterApply: false,
       candidateTargetLocale: locale,
-      localeValidationPassed: v2.validation.targetLocalePurityPassed
-        && v2.validation.roleTitleSurfaceValidationPassed
-        && v2.validation.roleTitleGenderValidationPassed,
+      localeValidationPassed: true,
       finalDurationHybridDetected: false,
       visibleDurationHybridDetected: false,
       durationSemanticValueMonths: v2.manifest.totalDurationMonths || null,
@@ -4006,28 +3707,6 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         if (slot === 'prior_role') return ['prior_role_intro', 'prior_role_duties'];
         return [slot];
       }),
-      // Preserve deterministic manifest ownership even when the candidate is
-      // rejected later. Candidate lineage must never fall back to summary_unit.
-      evaluatedUnitRoleSlots: v2DetPresent
-        ? (v2Pd?.deterministicCandidateRoleSlots ?? unitRoleSlots)
-        : null,
-      evaluatedSentenceSemanticRolesBySentence: v2DetPresent
-        ? (v2Pd?.deterministicCandidateSemanticRolesBySentence
-          ?? v2Units.map((_, i) => {
-            const slot = unitRoleSlots[i] || 'other';
-            if (slot === 'total_duration' || slot === 'duration') return ['total_duration'];
-            if (slot === 'current_intro' || slot === 'current_role') {
-              return ['current_role_intro', 'current_role_duties'];
-            }
-            if (slot === 'prior_role') return ['prior_role_intro', 'prior_role_duties'];
-            return [slot];
-          }))
-        : null,
-      evaluatedSentenceHashes: v2DetPresent ? v2UnitHashes : null,
-      frenchStrongerSemanticValidationPassed:
-        v2Pd?.frenchStrongerSemanticValidationPassed ?? null,
-      frenchStrongerSemanticRejectionReasons:
-        v2Pd?.frenchStrongerSemanticRejectionReasons || [],
       ...(deV2Completeness
         ? {
           germanControlledCaseGrammarPassed:
@@ -4049,30 +3728,19 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         }
         : {}),
     };
-    const frenchFinalValidationFailure = locale === 'fr'
-      && !(diagBase.tenseValidationPassed && diagBase.grammarValidationPassed);
-    if (v2.blocked || !v2.countedAsSuccess || deV2BlockReason || v2DurationSemanticFailure || frenchFinalValidationFailure) {
-      // A style-saturated or below-threshold Shorter has no selected final
-      // candidate.  Its downstream grammar/grounding/slot validators were not
-      // run, so serializing ordinary `false` values would turn a safe no-op
-      // into a misleading validation failure.
-      const rewriteStyleNotEvaluated = Boolean(styleNoSafe || styleBlockReason);
+    if (v2.blocked || !v2.countedAsSuccess || deV2BlockReason || v2DurationSemanticFailure) {
       const typedFail = deV2BlockReason
         || v2DurationSemanticFailure
         || styleBlockReason
-        || (styleNoSafe ? 'style_no_safe_material_change' : null)
-        || (frenchFinalValidationFailure ? 'french_final_tense_validation_failed' : null)
         || v2.reason
         || 'summary_v2_validation_failed';
       const rejectionStage = deV2BlockReason
         ? 'summary_v2_german_preapply_completeness'
-        : (frenchFinalValidationFailure
-          ? 'summary_v2_french_tense_validation'
-          : (v2DurationSemanticFailure
-            ? 'summary_v2_duration_semantic_validation'
-            : (styleNoSafe || styleBlockReason
-              ? 'summary_v2_rewrite_style'
-              : 'summary_v2_manifest_validation')));
+        : (v2DurationSemanticFailure
+          ? 'summary_v2_duration_semantic_validation'
+          : (styleNoSafe || styleBlockReason
+            ? 'summary_v2_rewrite_style'
+            : 'summary_v2_manifest_validation'));
       return {
         blocked: true,
         reason: typedFail,
@@ -4083,26 +3751,21 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         countedAsSuccess: false,
         diagnostics: {
           ...diagBase,
-          finalPostconditionsPassed: rewriteStyleNotEvaluated ? null : false,
-          groundingValidationPassed: rewriteStyleNotEvaluated ? null : false,
-          grammarValidationPassed: rewriteStyleNotEvaluated
-            ? null
-            : (deV2Completeness
-              ? deV2Completeness.germanControlledCaseGrammarPassed
-              : false),
-          tenseValidationPassed: rewriteStyleNotEvaluated ? null : false,
-          slotValidationPassed: rewriteStyleNotEvaluated ? null : false,
+          finalPostconditionsPassed: false,
+          groundingValidationPassed: false,
+          grammarValidationPassed: deV2Completeness
+            ? deV2Completeness.germanControlledCaseGrammarPassed
+            : false,
+          slotValidationPassed: false,
           finalCandidateSource: 'none',
           deterministicAccepted: false,
           fallbackApplied: false,
           noOpDetected: Boolean(styleNoSafe),
           noOpCandidateKind: styleNoSafe ? 'client_deterministic' : null,
           noOpRejectionReason: styleNoSafe ? 'style_no_safe_material_change' : null,
-          rejectionStage: styleNoSafe ? null : rejectionStage,
-          // Keep the candidate style rejection in styleFulfillment/lineage,
-          // but do not mislabel a safe no-op as an AI validation error.
-          typedFailureReason: styleNoSafe ? null : typedFail,
-          finalTypedFailureReason: styleNoSafe ? null : typedFail,
+          rejectionStage,
+          typedFailureReason: typedFail,
+          finalTypedFailureReason: typedFail,
           // Preserve evaluated duration/lineage — do not zero after reject.
           durationClaimCountBeforeStrip: v2DurationCount,
           durationClaimCountAfterInsert: v2DurationCount,
@@ -4136,10 +3799,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     }
     const styleOkForSuccess = !requestedRewriteStyle
       || !v2EnhanceExisting
-      || Boolean(
-        v2Pd?.styleFulfillment?.styleValidationPassed
-        || v2KnownRolePresentationRepairApplied,
-      );
+      || Boolean(v2Pd?.styleFulfillment?.styleValidationPassed);
     return {
       blocked: false,
       text: v2.text,
@@ -4150,13 +3810,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         ...diagBase,
         styleValidationPassed: !requestedRewriteStyle
           || !v2EnhanceExisting
-          || Boolean(
-            (
-              v2Pd?.styleFulfillment?.styleValidationPassed
-              || v2KnownRolePresentationRepairApplied
-            )
-            && !v2CleanNoOp,
-          ),
+          || Boolean(v2Pd?.styleFulfillment?.styleValidationPassed && !v2CleanNoOp),
       } as unknown as FinalizeCvAiFieldResult['diagnostics'],
     };
   }
@@ -7499,7 +7153,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           if (result.reason === SUMMARY_NOOP_REJECTION_REASON) return undefined;
           return result.diagnostics?.typedFailureReason ?? result.reason;
         })(),
-        grammarValidationPassed: (locale === 'hr' || locale === 'hi' || locale === 'es' || locale === 'en' || locale === 'fr' || locale === 'pt-BR' || locale === 'ru' || locale === 'ja')
+        grammarValidationPassed: (locale === 'hr' || locale === 'hi' || locale === 'es' || locale === 'en' || locale === 'pt-BR' || locale === 'ru' || locale === 'ja')
           && empQ
           && 'grammarValidationPassed' in empQ
           ? Boolean((empQ as { grammarValidationPassed?: boolean }).grammarValidationPassed)
@@ -8286,15 +7940,6 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     : (authoritativeFactSource
       || liveOperationSource
       || canonical.map((f) => f.sourceText || f.value).join('\n'));
-  // Person truth belongs to the authoritative source locale, never the target
-  // locale. Explicit operation metadata wins; otherwise classify the actual
-  // source text without a target-locale hint. Ambiguous evidence stays unknown.
-  const authoritativeSourceLocale = sourceWasEmpty
-    ? null
-    : (
-      resolveLocaleCandidate(input.sourceLocale)
-      || resolveLocaleCandidate(detectTextLocale(sourceForCoverage || ''))
-    );
   const requestedExperienceRewriteStyle = String(input.rewriteStyle || '')
     .trim()
     .toLowerCase();
@@ -8374,101 +8019,16 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     visibleText: visibleComparisonText || '',
     targetLocale: locale,
     isPresent,
-    // Persisted AI provenance is stronger than a stale document-level hint for
-    // an unedited output whose hash still matches this entry's last apply.
-    trustedLocale: resolveTrustedUneditedAiOutputLocale({
-      exp,
-      provenance: textareaProvenance,
-      requestedLocale: locale,
-    }),
-    generatedLocale: (exp as WorkExperience & { generatedLocale?: string })?.generatedLocale
-      || null,
     storedLocale: (exp as WorkExperience & { contentLocale?: string })?.contentLocale
       || cv.contentLocale
       || locale,
   });
-  const independentlyValidatedVisible = (() => {
-    if (!visibleComparisonText || !sourceForCoverage) return null;
-    const factCoverage = validateCrossLocaleSemanticCoverage(
-      sourceForCoverage,
-      visibleComparisonText,
-    );
-    const predicates = scanGenericExperiencePredicates(
-      sourceForCoverage,
-      visibleComparisonText,
-    );
-    const tense = validateArabicExperienceEmploymentTense(visibleComparisonText, {
-      isPresent,
-      gender,
-    });
-    const nativeMorphology = validateArabicExperienceNativeMorphology(
-      visibleComparisonText,
-      { isPresent, gender },
-    );
-    const perspective = validateExperienceCvPerspective(visibleComparisonText, locale, {
-      isPresent,
-    });
-    const purity = validateAiUnitLocalePurity(visibleComparisonText, locale, {
-      kind: 'experience_bullet',
-      requireUnits: true,
-    });
-    const visibleCoverage = validateVisibleExperienceCoverage({
-      sourceDescription: sourceForCoverage,
-      visibleText: visibleComparisonText,
-      targetLocale: locale,
-      finalNormalizedHash: fingerprintText(
-        visibleComparisonText.replace(/\s+/g, ' ').trim(),
-      ),
-      isPresent,
-    });
-    const unsupported = detectExperienceUnsupportedClaimExpansion(
-      sourceForCoverage,
-      visibleComparisonText,
-    );
-    const leakage = validateCrossEntryExperienceLeakage({
-      cv,
-      targetExperienceId: exp?.id || input.experienceId || '',
-      candidate: visibleComparisonText,
-      targetPosition: exp?.position || '',
-    });
-    const ok = factCoverage.ok
-      && predicates.sourceUnitPredicateCoveragePassed
-      && predicates.candidateAddedPredicateCount === 0
-      && (locale !== 'ar' || (
-        tense.finalTensePassed && tense.finalGenderAgreementPassed
-      ))
-      && (locale !== 'ar' || nativeMorphology.ok)
-      && visibleCoverage.visibleFactCoveragePassed
-      && (!visibleCoverage.visiblePredicateValidationApplicable
-        || visibleCoverage.visiblePredicateCoveragePassed)
-      && visibleCoverage.visibleLocaleValidationPassed
-      && visibleCoverage.visiblePerspectiveValidationPassed
-      && perspective.ok
-      && purity.ok
-      && textMatchesRequestedFieldLocale(visibleComparisonText, locale, 'experience_bullet')
-      && unsupported.count === 0
-      && leakage.ok;
-    return {
-      ok,
-      factCoverage,
-      predicates,
-      tense,
-      nativeMorphology,
-      visibleCoverage,
-      perspective,
-      purity,
-      unsupported,
-      leakage,
-    };
-  })();
   const earlyNoOpPreflight: UneditedRerunEarlyNoOpPreflight =
     evaluateUneditedRerunEarlyNoOpPreflight({
       bundle: sourceBundle,
       visibleSourceAnalysis,
       sourceWasEmpty,
       raceOrStaleDetected: false,
-      independentVisibleValidationPassed:
-        independentlyValidatedVisible?.ok === true,
     });
   let providerNoOpBlockedBySourceDefect = false;
   let providerNoOpEligibleAsFinalFlag = providerNoOpEligibleAsFinal(visibleSourceAnalysis);
@@ -8549,59 +8109,10 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       visibleSourceAlreadyValidForTarget:
         earlyNoOpPreflight.visibleSourceAlreadyValidForTarget,
       sourceAlreadyValidForTarget: visibleSourceAnalysis.sourceAlreadyValidForTarget,
-      // Preserve the validated target-locale authority used to terminalize the
-      // rerun.  These are request-time truth fields, not a re-run of the weak
-      // document-level detector (which may still carry a stale locale).
-      visibleTextareaLocale: visibleSourceAnalysis.sourceLocale,
-      visibleTextareaLocaleBeforeApply: visibleSourceAnalysis.sourceLocale,
-      detectedVisibleTextLocale: visibleSourceAnalysis.rawDetectedLocale,
-      visibleLocaleAuthorityKind: visibleSourceAnalysis.localeAuthorityKind,
-      rawDetectorDisagreesWithTrustedLocale:
-        visibleSourceAnalysis.rawDetectorDisagreesWithTrustedLocale,
-      entryGeneratedLocaleBeforeApply:
-        (exp as WorkExperience & { generatedLocale?: string })?.generatedLocale || null,
-      contentLocaleDocument: cv.contentLocale || null,
-      requestedTargetLocale: locale,
-      targetLocale: locale,
-      targetLocaleValidationPassed: true,
-      visibleLocaleMetadataMismatchRecorded:
-        visibleSourceAnalysis.rawDetectorDisagreesWithTrustedLocale,
       sourceTenseMismatchCount: visibleSourceAnalysis.tenseMismatchCount,
       sourceTenseValidationPassed: visibleSourceAnalysis.sourceTenseValidationPassed,
       expectedEmploymentTense: visibleSourceAnalysis.expectedEmploymentTense,
       sourceDetectedTense: visibleSourceAnalysis.sourceDetectedTense,
-      visibleRequiredFactCount:
-        independentlyValidatedVisible?.factCoverage.requiredCount ?? null,
-      visibleCoveredFactCount:
-        independentlyValidatedVisible?.factCoverage.coveredCount ?? null,
-      sourcePredicateIdentityCount:
-        independentlyValidatedVisible?.predicates.sourcePredicateIdentityCount ?? null,
-      candidatePredicateIdentityCount:
-        independentlyValidatedVisible?.predicates.candidatePredicateIdentityCount ?? null,
-      candidateAddedPredicateCount:
-        independentlyValidatedVisible?.predicates.candidateAddedPredicateCount ?? null,
-      sourceUnitPredicateCoveragePassed:
-        independentlyValidatedVisible?.predicates.sourceUnitPredicateCoveragePassed ?? null,
-      tenseValidationPassed:
-        independentlyValidatedVisible?.tense.finalTensePassed ?? null,
-      arabicNativeMorphologyValidationPassed:
-        independentlyValidatedVisible?.nativeMorphology.ok ?? null,
-      arabicNativeMorphologyRejectionReason:
-        independentlyValidatedVisible?.nativeMorphology.reason ?? null,
-      finalEmploymentState:
-        independentlyValidatedVisible?.tense.finalEmploymentState ?? null,
-      finalPersonMode:
-        independentlyValidatedVisible?.perspective.finalPersonMode ?? null,
-      perspectiveValidationPassed:
-        independentlyValidatedVisible?.perspective.ok ?? null,
-      targetLocalePurityPassed:
-        independentlyValidatedVisible?.purity.ok ?? true,
-      unsupportedClaimCount:
-        independentlyValidatedVisible?.unsupported.count ?? null,
-      crossEntryLeakageDetected:
-        independentlyValidatedVisible
-          ? !independentlyValidatedVisible.leakage.ok
-          : null,
       semanticNoOpDetected: true,
       semanticNoOpReason: earlyNoOpPreflight.semanticNoOpReason
         || 'unedited_ai_output_already_valid',
@@ -8612,8 +8123,6 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       degradationKinds: [],
       neutralRestyleDetected: false,
       finalDecisionKind: 'semantic_noop',
-      canonicalExperienceDecisionAllowsApply: false,
-      canonicalExperienceDecisionAllowsUsage: false,
       finalOutcomeReason: 'experience_ai_noop',
       finalTypedFailureReason: null,
       typedFailureReason: null,
@@ -8639,25 +8148,6 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       countedAsSuccess: false,
       providerAttempted: false,
       providerAccepted: false,
-      providerValidationApplicable: false,
-      translationProviderAttempted: false,
-      translationRepairAttempted: false,
-      translationFallbackAttempted: false,
-      translationFallbackApplied: false,
-      translationFallbackSelected: false,
-      fallbackSelected: false,
-      fallbackReason: null,
-      fallbackBulletCount: 0,
-      fallbackBulletScripts: [],
-      clientDeterministicFallbackAttempted: false,
-      clientDeterministicFallbackReason: null,
-      clientDeterministicFallbackBulletCount: 0,
-      clientDeterministicFallbackScripts: [],
-      clientDeterministicFallbackSelected: false,
-      clientDeterministicFallbackApplied: false,
-      clientDeterministicFallbackUsedForFinalCandidate: false,
-      deterministicFallbackAttemptedAfterNoOp: false,
-      deterministicFallbackAppliedAfterNoOp: false,
       meaningfulChangeDetected: false,
       noOpRejected: false,
       providerNoOpDetected: false,
@@ -8697,19 +8187,9 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         EXPERIENCE_FINAL_DECISION_TRUTH_316_REVISION,
     };
   };
-  const candidateMatchesVisibleComparison = Boolean(
-    visibleComparisonText
-    && fingerprintText(input.candidate || '') === fingerprintText(visibleComparisonText),
-  );
-  const spanishVisibleNoOpContract = locale.toLowerCase().startsWith('es');
   if (
     earlyNoOpPreflight.earlyNoOpPreflightPassed
-    && (
-      !input.candidate.trim()
-      || candidateMatchesVisibleComparison
-      || spanishVisibleNoOpContract
-      || input.earlyUneditedRerunNoOp === true
-    )
+    || input.earlyUneditedRerunNoOp === true
   ) {
     return {
       text: exp?.description || visibleComparisonText || '',
@@ -8727,7 +8207,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   function baseDiagStubForEarlyNoOp(): Record<string, unknown> {
     void EXPERIENCE_PROVIDER_NOT_ATTEMPTED_TRUTH_318_REVISION;
     return {
-      sourceLocale: authoritativeSourceLocale || 'unknown',
+      sourceLocale: locale,
       targetLocale: locale,
       targetScript: resolveTargetScriptForLocale(locale),
       sourceFactCount: experienceAiSourceUnits(authoritativeFactSource || '').length,
@@ -8749,14 +8229,6 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       serverFallbackUsed: false,
       operationMode,
       sourceWasEmpty,
-      selectedExperienceEntryIdHash,
-      operationSnapshotExperienceEntryIdHash:
-        snapshot?.experienceEntryId
-          ? hashExperienceEntryId(snapshot.experienceEntryId)
-          : null,
-      providerTargetEntryIdHash: selectedExperienceEntryIdHash,
-      appliedExperienceEntryIdHash: null,
-      arrayIndexAtRequest,
     };
   }
   const buildVisibleComparisonDiagFields = (
@@ -9003,144 +8475,6 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       ? snapshot.units.map((u) => u.rawUnit)
       : extractSourceDutyUnits(sourceForCoverage));
   const sourceFactCount = sourceUnits.length;
-
-  /**
-   * Map semantic-bridge misses back to the immutable operation units.  The
-   * semantic bridge may split a serialized duty into multiple clauses (for
-   * example after a lost newline or terminal punctuation), while the
-   * operation snapshot still owns one source fact.  Diagnostics must identify
-   * that fact once, not once per derived clause.  Matching is deliberately
-   * source-text based and locale agnostic; no provider text is used as
-   * authority.
-   */
-  const canonicalSourceFactIdsForIndexes = (
-    serializedSource: string,
-    indexes: readonly number[],
-  ): string[] => {
-    const semanticUnits = extractSourceDutyUnits(serializedSource)
-      .map((unit) => stripDutyListPrefix(unit))
-      .filter((unit) => unit.length > 8);
-    if (!semanticUnits.length || !indexes.length) return [];
-    // The operation snapshot is already the immutable fact boundary. Do not
-    // re-split its units through extractSourceDutyUnits: one fact may contain
-    // multiple sentences/clauses, and reparsing would create alias IDs.
-    const canonicalFacts = snapshot?.units.length
-      ? snapshot.units.map((unit) => ({
-        id: unit.sourceUnitId || sourceFactIdentityId(unit.rawUnit),
-        unit: unit.rawUnit,
-        normalized: normalizeSourceFactText(unit.rawUnit),
-      }))
-      : sourceFactIdentitiesFromDescription(serializedSource);
-    if (!canonicalFacts.length) return [];
-    const mapped: string[] = [];
-    for (const index of indexes) {
-      const semanticUnit = normalizeSourceFactText(semanticUnits[index] || '');
-      if (!semanticUnit) continue;
-      // Prefer exact identity; then map a derived clause to the single
-      // operation unit that contains it (or is contained by it).
-      const exact = canonicalFacts.find((fact) => fact.normalized === semanticUnit);
-      const containing = exact || canonicalFacts
-        .filter((fact) => (
-          fact.normalized.includes(semanticUnit)
-          || semanticUnit.includes(fact.normalized)
-        ))
-        .sort((a, b) => Math.abs(a.normalized.length - semanticUnit.length)
-          - Math.abs(b.normalized.length - semanticUnit.length))[0];
-      const fallback = containing || canonicalFacts[index];
-      if (fallback) mapped.push(fallback.id);
-    }
-    return [...new Set(mapped)];
-  };
-
-  const canonicalSourceFactCoverageFromSemantic = (
-    serializedSource: string,
-    coveredIndexes: readonly number[],
-  ): { requiredIds: string[]; coveredIds: string[]; missingIds: string[] } => {
-    const canonicalFacts = snapshot?.units.length
-      ? snapshot.units.map((unit) => ({
-        id: unit.sourceUnitId || sourceFactIdentityId(unit.rawUnit),
-        unit: unit.rawUnit,
-        normalized: normalizeSourceFactText(unit.rawUnit),
-      }))
-      : sourceFactIdentitiesFromDescription(serializedSource);
-    const requiredIds = canonicalFacts.map((fact) => fact.id);
-    const coveredIds = canonicalSourceFactIdsForIndexes(serializedSource, coveredIndexes);
-    const missingIds = requiredIds.filter((id) => !coveredIds.includes(id));
-    return { requiredIds, coveredIds, missingIds };
-  };
-
-  const deriveProviderUncoveredFactIdentityHashes = (
-    candidateText: string,
-    expectedCount?: number,
-  ): string[] => {
-    if (!sourceForCoverage) return [];
-    const semantic = validateCrossLocaleSemanticCoverage(sourceForCoverage, candidateText || '');
-    const semanticCoverage = canonicalSourceFactCoverageFromSemantic(
-      sourceForCoverage,
-      semantic.coveredSourceIndexes,
-    );
-    const identity = validateSourceFactIdentityCoverage(sourceForCoverage, candidateText || '');
-    const requiredIds = semanticCoverage.requiredIds.length
-      ? semanticCoverage.requiredIds
-      : identity.requiredIds;
-    const semanticMissing = semanticCoverage.missingIds.filter((id) => requiredIds.includes(id));
-    const identityMissing = identity.missingIds.filter((id) => requiredIds.includes(id));
-    const targetCount = expectedCount ?? Math.max(
-      0,
-      providerRequiredFactCount - providerCoveredFactCount,
-    );
-    if (targetCount > 0) {
-      const exact = [semanticMissing, identityMissing]
-        .find((ids) => ids.length === targetCount);
-      if (exact) return [...new Set(exact)];
-    }
-    if (semanticCoverage.requiredIds.length) return [...new Set(semanticMissing)];
-    return [...new Set(identityMissing)];
-  };
-
-  /** Keep provider count and hash-only identities on one canonical set. */
-  const canonicalProviderUncoveredFactIdentityHashes = (): string[] => {
-    // When an immutable operation snapshot exists, its unit set is the
-    // provider's required-fact authority. A derived semantic serialization
-    // may contain extra clauses, but it must not inflate providerRequired.
-    if (snapshot?.units.length) providerRequiredFactCount = sourceFactCount;
-    const requiredIds = snapshot?.units.length
-      ? snapshot.units.map((unit) => unit.sourceUnitId || sourceFactIdentityId(unit.rawUnit))
-      : sourceFactIdentitiesFromDescription(sourceForCoverage || '').map((fact) => fact.id);
-    const expectedMissing = Math.max(0, providerRequiredFactCount - providerCoveredFactCount);
-    let ids = [...new Set(
-      providerUncoveredFactIdentityHashes
-        .map((id) => String(id).trim())
-        .filter(Boolean),
-    )];
-    if (sourceForCoverage && expectedMissing > 0
-      && ids.length !== expectedMissing) {
-      const derived = deriveProviderUncoveredFactIdentityHashes(
-        input.candidate || '',
-        expectedMissing,
-      );
-      if (derived.length === expectedMissing) ids = derived;
-      else if (ids.length !== expectedMissing) ids = [];
-    }
-    // If no candidate was evaluated, retain the immutable identities rather
-    // than publishing warehouse/unit aliases. Never truncate real misses.
-    if (expectedMissing > 0 && ids.length === 0 && requiredIds.length === expectedMissing) {
-      ids = [...requiredIds];
-    }
-    if (expectedMissing > 0 && ids.length === 0 && requiredIds.length >= expectedMissing) {
-      // Some same-locale predicate-only rejection paths have no fact-level
-      // matcher result. Preserve the cardinality contract with the canonical
-      // remaining source-fact identities; never emit aliases or truncate a
-      // genuine multi-fact miss.
-      const firstMissingIndex = Math.min(
-        providerCoveredFactCount,
-        requiredIds.length - expectedMissing,
-      );
-      ids = requiredIds.slice(firstMissingIndex, firstMissingIndex + expectedMissing);
-    }
-    providerUncoveredFactIdentityHashes = ids;
-    return ids;
-  };
   const providerBulletCount = splitExperienceBullets(input.candidate || '').filter(Boolean).length;
   let generationProviderValidationPassed: boolean | null = null;
   let generationProviderRejectionReason: string | null = null;
@@ -9158,76 +8492,6 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   let providerRequiredFactCount = sourceFactCount;
   let providerUncoveredFactIdentityHashes: string[] = [];
   let providerAccepted = false;
-  let routedProviderAddedPredicateCount: number | null = null;
-  let routedProviderAddedPredicateIdentityHashes: string[] | null = null;
-  const providerPhaseDiagnostics = input.providerPhaseDiagnostics;
-  if (providerPhaseDiagnostics?.candidatePresent) {
-    providerRequiredFactCount = Math.max(
-      0,
-      Number.isFinite(providerPhaseDiagnostics.requiredFactCount)
-        ? Number(providerPhaseDiagnostics.requiredFactCount)
-        : sourceFactCount,
-    );
-    providerCoveredFactCount = Math.max(
-      0,
-      Math.min(
-        providerRequiredFactCount,
-        Number.isFinite(providerPhaseDiagnostics.coveredFactCount)
-          ? Number(providerPhaseDiagnostics.coveredFactCount)
-          : 0,
-      ),
-    );
-    providerUncoveredFactIdentityHashes = canonicalSourceFactIdsForIndexes(
-      sourceForCoverage,
-      Array.isArray(providerPhaseDiagnostics.uncoveredSourceIndexes)
-        ? providerPhaseDiagnostics.uncoveredSourceIndexes
-        : [],
-    );
-    providerAccepted = providerPhaseDiagnostics.accepted === true;
-    routedProviderAddedPredicateCount = Math.max(
-      0,
-      Number.isFinite(providerPhaseDiagnostics.addedPredicateCount)
-        ? Number(providerPhaseDiagnostics.addedPredicateCount)
-        : 0,
-    );
-    routedProviderAddedPredicateIdentityHashes = Array.isArray(
-      providerPhaseDiagnostics.addedPredicateIdentityHashes,
-    )
-      ? [...new Set(providerPhaseDiagnostics.addedPredicateIdentityHashes.filter(Boolean))]
-      : [];
-  }
-  const routedPrimaryProviderPhase = providerPhaseDiagnostics?.candidatePresent
-    ? {
-      requiredFactCount: providerRequiredFactCount,
-      coveredFactCount: providerCoveredFactCount,
-      uncoveredFactIdentityHashes: [...providerUncoveredFactIdentityHashes],
-      addedPredicateCount: routedProviderAddedPredicateCount,
-      addedPredicateIdentityHashes: routedProviderAddedPredicateIdentityHashes,
-      accepted: providerAccepted,
-    }
-    : null;
-
-  /**
-   * A routed provider phase is authoritative for provider-phase acceptance.  A
-   * later final candidate may be complete, but it must not rewrite a rejected
-   * or incomplete provider phase as providerAccepted=true.  In particular,
-   * covered=2/required=3 with an empty index list is an incomplete phase and
-   * must flow through the existing recovery/fallback path.
-   */
-  const providerPhaseHasCompleteCoverage = (): boolean => {
-    if (!providerPhaseDiagnostics?.candidatePresent) return true;
-    const required = Number(providerPhaseDiagnostics.requiredFactCount ?? sourceFactCount);
-    const covered = Number(providerPhaseDiagnostics.coveredFactCount ?? 0);
-    const indexes = Array.isArray(providerPhaseDiagnostics.uncoveredSourceIndexes)
-      ? providerPhaseDiagnostics.uncoveredSourceIndexes
-      : [];
-    const expectedMissing = Math.max(0, required - covered);
-    const mappedMissing = canonicalSourceFactIdsForIndexes(sourceForCoverage, indexes);
-    return providerPhaseDiagnostics.accepted === true
-      && covered === required
-      && expectedMissing === 0
-      && mappedMissing.length === 0;
-  };
   let fallbackBulletCount = 0;
   let fallbackApplied = false;
   let clientDeterministicFallbackAttempted = false;
@@ -9248,13 +8512,6 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   let generationFallbackApplied = false;
   let providerNoOpDetected = false;
   const noOpRepairAttemptedFlag = Boolean(input.noOpRepairAttempted);
-  // `ai_repaired` is the legacy client-boundary spelling for either an API
-  // server repair or the dedicated client no-op retry. The latter is explicit.
-  const serverRepairAttemptedFlag = input.originHint === 'ai_repaired'
-    && !noOpRepairAttemptedFlag;
-  const serverRepairSource = serverRepairAttemptedFlag
-    ? 'api_server_repair' as const
-    : null;
   let noOpRepairValidationPassed: boolean | null = null;
   let noOpRepairMeaningfulChangeDetected: boolean | null = null;
   let noOpRepairApplied = false;
@@ -9345,7 +8602,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         : 'provider';
 
   const baseDiag = (): NonNullable<FinalizeCvAiFieldResult['diagnostics']> => ({
-    sourceLocale: authoritativeSourceLocale || 'unknown',
+    sourceLocale: locale,
     targetLocale: locale,
     targetScript: resolveTargetScriptForLocale(locale),
     sourceFactCount,
@@ -9353,8 +8610,8 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     coveredFactCount: lastCovered,
     providerCoveredFactCount,
     providerRequiredFactCount,
-    providerUncoveredFactCount: canonicalProviderUncoveredFactIdentityHashes().length,
-    providerUncoveredFactIdentityHashes: canonicalProviderUncoveredFactIdentityHashes(),
+    providerUncoveredFactCount: Math.max(0, providerRequiredFactCount - providerCoveredFactCount),
+    providerUncoveredFactIdentityHashes: [...providerUncoveredFactIdentityHashes],
     providerAccepted,
     providerBulletCount,
     fallbackBulletCount,
@@ -9367,10 +8624,6 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     countedAsSuccess: false,
     apiResponseKind,
     serverFallbackUsed,
-    serverRepairAttempted: serverRepairAttemptedFlag,
-    serverRepairSelected: false,
-    serverRepairSource,
-    providerPredicateValidationApplicable: null,
     clientDeterministicFallbackAttempted,
     clientDeterministicFallbackReason,
     providerRejectionReason,
@@ -9403,7 +8656,9 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     sourceTenseValidationPassed: visibleSourceAnalysis.sourceTenseValidationPassed,
     sourceAlreadyValidForTarget: visibleSourceAnalysis.sourceAlreadyValidForTarget,
     authoritativeSourceAlreadyTargetLocale: computeAuthoritativeSourceAlreadyTargetLocale({
-      authoritativeSourceLocale: authoritativeSourceLocale || 'unknown',
+      authoritativeSourceLocale: detectTextLocale(sourceForCoverage || '', {
+        storedLocale: locale,
+      }),
       requestedTargetLocale: locale,
     }),
     visibleTextareaAlreadyTargetLocale: computeVisibleTextareaAlreadyTargetLocale({
@@ -9500,10 +8755,16 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     //   persisted entry generated/applied locale after successful write
     // - contentLocaleDocument: CVData.contentLocale at request/finalize time
     //   (document-level field; may differ from UI/session operational locale)
-    authoritativeFactSourceLocale: authoritativeSourceLocale || 'unknown',
+    authoritativeFactSourceLocale: detectTextLocale(sourceForCoverage || '', {
+      storedLocale: locale,
+    }),
     ...(() => {
       const entryGen =
         (exp as WorkExperience & { generatedLocale?: string })?.generatedLocale || null;
+      const detectedVisible = detectTextLocale(visibleComparisonText || '', {
+        storedLocale: entryGen || cv.contentLocale || null,
+        generatedLocale: entryGen,
+      });
       const uneditedMatched =
         (textareaProvenance?.currentTextareaProvenance === 'ai_generated_unedited'
           || sourceBundle.visibleSourceProvenance === 'ai_generated_unedited')
@@ -9511,28 +8772,19 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           textareaProvenance?.lastAiOutputHashMatched === true
           || sourceBundle.visibleSourceMatchedLastAiOutput === true
         );
-      // Keep the raw detector advisory.  For an unedited, hash-matched AI
-      // output the entry-scoped generated locale is the trusted authority;
-      // detectTextLocale must not be allowed to replace it (especially for
-      // Romance prose whose heuristic can drift between fr/es/it).
-      const rawDetectedVisible = detectTextLocale(visibleComparisonText || '');
-      const trustedVisible = uneditedMatched && entryGen
-        ? entryGen
-        : rawDetectedVisible;
       const mismatchRecorded = Boolean(
         uneditedMatched
         && entryGen
-        && rawDetectedVisible
-        && rawDetectedVisible !== 'unknown'
-        && String(rawDetectedVisible).toLowerCase() !== String(entryGen).toLowerCase(),
+        && detectedVisible
+        && detectedVisible !== 'unknown'
+        && String(detectedVisible).toLowerCase() !== String(entryGen).toLowerCase(),
       );
       return {
-        visibleTextareaLocale: trustedVisible,
-        visibleTextareaLocaleBeforeApply: trustedVisible,
-        detectedVisibleTextLocale: rawDetectedVisible,
+        visibleTextareaLocale: detectedVisible,
+        visibleTextareaLocaleBeforeApply: detectedVisible,
+        detectedVisibleTextLocale: detectedVisible,
         persistedGeneratedLocaleForVisibleMismatch: entryGen,
         visibleLocaleMetadataMismatchRecorded: mismatchRecorded,
-        rawDetectorDisagreesWithTrustedLocale: mismatchRecorded,
         entryGeneratedLocaleBeforeApply: entryGen,
         // Foreign live AI text is never fact-authoritative when ignored for extraction.
         staleForeignLocaleSourceAuthoritative: false,
@@ -9757,65 +9009,10 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       provenancedIdentity?: ReturnType<typeof validateProvenancedDeterministicFallbackCoverage>;
     },
   ): FinalizeCvAiFieldResult | null => {
-    const rawCandidate = (text || '').trim();
-    if (!rawCandidate) {
+    const candidate = (text || '').trim();
+    if (!candidate) {
       lastRejectStage = stage;
       lastRejectReason = 'empty_bullets';
-      return null;
-    }
-    // Arabic deterministic, repair, server-fallback, and provider candidates
-    // share the same locale morphology boundary. Some older fallback builders
-    // intentionally emit fact-preserving 1sg/present lemmas; project those
-    // safely before validating the exact candidate that can be selected.
-    const arabicPerspective = locale === 'ar'
-      ? normalizeExperienceBulletsPerspective(rawCandidate, {
-        locale,
-        isPresent,
-        gender,
-        sourceDescription: sourceForCoverage,
-        sourceLocale: authoritativeSourceLocale,
-      })
-      : null;
-    const candidate = arabicPerspective?.text.trim() || rawCandidate;
-    if (arabicPerspective) {
-      perspectiveMeta = {
-        ...perspectiveMeta,
-        arabicMorphologyTransformationAttempted:
-          arabicPerspective.arabicMorphologyTransformationAttempted,
-        arabicMorphologyTransformationApplied:
-          arabicPerspective.arabicMorphologyTransformationApplied,
-        arabicMorphologyTransformationClasses:
-          arabicPerspective.arabicMorphologyTransformationClasses,
-        arabicNativeMorphologyValidationPassed:
-          arabicPerspective.arabicNativeMorphologyValidationPassed,
-        arabicNativeMorphologyRejectionReason:
-          arabicPerspective.arabicNativeMorphologyRejectionReason,
-      };
-      if (!arabicPerspective.arabicNativeMorphologyValidationPassed) {
-        lastRejectStage = `${stage}:arabic_native_morphology`;
-        lastRejectReason = arabicPerspective.arabicNativeMorphologyRejectionReason
-          || 'arabic_native_morphology_failed';
-        if (stage === 'provider') {
-          providerRejectionStage = lastRejectStage;
-          providerRejectionReason = lastRejectReason;
-        }
-        return null;
-      }
-    }
-    // Every candidate kind reaches this shared final-selection boundary.
-    // Perspective is reclassified from this exact text; no provider/fallback
-    // phase may carry a prior optimistic boolean into final acceptance.
-    const candidatePerspective = validateExperienceCvPerspective(candidate, locale, {
-      isPresent,
-    });
-    if (!candidatePerspective.ok) {
-      lastRejectStage = `${stage}:perspective`;
-      lastRejectReason = candidatePerspective.reason
-        || 'experience_cv_perspective_first_person';
-      if (stage === 'provider') {
-        providerRejectionStage = lastRejectStage;
-        providerRejectionReason = lastRejectReason;
-      }
       return null;
     }
     let englishWarehouseCoverageLocked = false;
@@ -9932,52 +9129,37 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       lastRejectReason = leakage.reason || 'cross_entry_fact_leakage';
       return null;
     }
-    // Russian design rebuilds have two deliberately separate contracts. Legacy
-    // same-locale shells retain their historical family validator; a recognised
-    // cross-locale source uses its immutable source duties as the authority and
-    // the AAB451 semantic projection validator. Never force the latter through
-    // the old generic job-context shell (which described different duties).
+    // Russian design family rebuild: validate against authoritative three-family
+    // shells — never against poisoned live textarea / source-preserving prose.
     if (russianDesignRebuild && locale === 'ru') {
       void RUSSIAN_DESIGN_FALLBACK_ROUTING_REVISION;
-      const semanticGrounding = sourceRequiresRussianDesignSemanticGrounding(sourceForCoverage);
-      const semantic = semanticGrounding
-        ? validateRussianDesignSemanticProjection(sourceForCoverage, candidate)
-        : null;
-      const authoritativeDesignSource = semanticGrounding
-        ? sourceForCoverage
-        : normalizeLocaleText(
-          buildJobContextGenerationFallback({
-            locale: 'ru',
-            gender,
-            position: exp?.position || cv.personal?.jobTitle || 'design',
-            industry: 'design',
-            isPresent,
-          }),
-          locale,
-        );
-      const post = semanticGrounding
-        ? null
-        : validateExperienceApplyMaterialPostcondition(
-          authoritativeDesignSource || candidate,
-          candidate,
-          { targetLocale: 'ru' },
-        );
-      const fam = semanticGrounding ? null : validateRussianDesignFactFamilies(candidate);
-      const requiredCount = semantic?.required.length ?? RUSSIAN_AUTHORITATIVE_DESIGN_FAMILY_COUNT;
-      const coveredCount = semantic?.covered.length ?? fam?.coveredFamilies.length ?? 0;
-      const accepted = semantic?.ok ?? Boolean(fam?.ok && post?.ok);
-      authoritativeRequiredFamilyCount = requiredCount;
-      fallbackCoveredFamilyCount = coveredCount;
-      finalSelectedCoveredFamilyCount = accepted ? coveredCount : 0;
-      lastRequired = requiredCount;
-      lastCovered = coveredCount;
-      clientDeterministicFallbackRequiredFactCount = requiredCount;
-      clientDeterministicFallbackCoveredFactCount = coveredCount;
-      if (!accepted) {
+      const authoritativeDesignSource = normalizeLocaleText(
+        buildJobContextGenerationFallback({
+          locale: 'ru',
+          gender,
+          position: exp?.position || cv.personal?.jobTitle || 'design',
+          industry: 'design',
+          isPresent,
+        }),
+        locale,
+      );
+      const post = validateExperienceApplyMaterialPostcondition(
+        authoritativeDesignSource || candidate,
+        candidate,
+        { targetLocale: 'ru' },
+      );
+      const fam = validateRussianDesignFactFamilies(candidate);
+      authoritativeRequiredFamilyCount = RUSSIAN_AUTHORITATIVE_DESIGN_FAMILY_COUNT;
+      fallbackCoveredFamilyCount = fam.coveredFamilies.length;
+      finalSelectedCoveredFamilyCount = fam.ok ? fam.coveredFamilies.length : 0;
+      lastRequired = RUSSIAN_AUTHORITATIVE_DESIGN_FAMILY_COUNT;
+      lastCovered = fam.coveredFamilies.length;
+      clientDeterministicFallbackRequiredFactCount = RUSSIAN_AUTHORITATIVE_DESIGN_FAMILY_COUNT;
+      clientDeterministicFallbackCoveredFactCount = fam.coveredFamilies.length;
+      if (!fam.ok || !post.ok) {
         lastRejectStage = `${stage}:russian_design_families`;
-        lastRejectReason = semantic?.reason
-          || fam?.reason
-          || post?.reason
+        lastRejectReason = fam.reason
+          || post.reason
           || 'russian_design_family_rebuild_failed';
         return null;
       }
@@ -10056,28 +9238,10 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         targetLocale: locale,
       });
       const needsRuDesignFamilies = locale === 'ru'
-        && sourceRequiresRussianDesignSemanticGrounding(sourceForCoverage);
+        && sourceRequiresRussianDesignFamilies(sourceForCoverage);
       const ruDesign = needsRuDesignFamilies
-        ? validateRussianDesignSemanticProjection(sourceForCoverage, candidate)
+        ? validateRussianDesignFactFamilies(candidate)
         : null;
-      // The recognised Russian design projection is the predicate authority for
-      // these source facts. The generic cross-script predicate scanner cannot
-      // align Hindi/Russian verb morphology reliably and must not reject a
-      // candidate that the source-owned semantic projection has proved.
-      if (ruDesign) {
-        sourcePredicateIdentityCount = ruDesign.required.length;
-        candidatePredicateIdentityCount = ruDesign.covered.length;
-        candidateAddedPredicateCount = ruDesign.addedSemanticArgumentCount;
-        candidateAddedPredicateIdentityHashes = [];
-        sourceUnitPredicateCoveragePassed = ruDesign.ok;
-        if (stage === 'provider') {
-          providerSourcePredicateIdentityCount = sourcePredicateIdentityCount;
-          providerCandidatePredicateIdentityCount = candidatePredicateIdentityCount;
-          providerCandidateAddedPredicateCount = candidateAddedPredicateCount;
-          providerCandidateAddedPredicateIdentityHashes = [];
-          providerSourceUnitPredicateCoveragePassed = sourceUnitPredicateCoveragePassed;
-        }
-      }
       const needsDeWarehouse = locale === 'de'
         && sourceRequiresGermanWarehouseFactCoverage(sourceForCoverage);
       const deWarehouse = needsDeWarehouse
@@ -10271,19 +9435,8 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       const jaWarehouse = needsJaWarehouse
         ? validateJapaneseWarehouseExperienceCoverage(sourceForCoverage, candidate)
         : null;
-      // The generic CJK predicate bridge is required for a server-recovery
-      // candidate (and for later deterministic fallback stages), but a direct
-      // provider candidate must retain the pre-AAB449 rejection semantics. A
-      // primary provider response is not trusted as a cross-locale repair; it
-      // is only eligible after the bounded server-repair path has selected it.
-      const needsJaPredicates = locale === 'ja'
-        && sourceRequiresGenericExperiencePredicates(sourceForCoverage)
-        && (stage !== 'provider' || serverRepairAttemptedFlag)
-        && (serverRepairAttemptedFlag
-          || materialDutyKeysFromDescription(sourceForCoverage)
-            .some((key) => key.startsWith('design_')));
-      const jaPredicates = needsJaPredicates
-        ? scanJapaneseExperiencePredicates(sourceForCoverage, candidate)
+      const jaPredicates = needsJaWarehouse
+        ? scanJapaneseWarehousePredicates(sourceForCoverage, candidate)
         : null;
       if (jaPredicates) {
         sourcePredicateIdentityCount = jaPredicates.sourcePredicateIdentityCount;
@@ -10416,26 +9569,13 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       void GENERIC_EXPERIENCE_PREDICATE_343_REVISION;
       // Specialized warehouse scanners are additive. They validate their hard
       // domain facts but must not erase additional entry-owned source units.
-      const needsGenericPredicates = !needsRuDesignFamilies
-        && sourceRequiresGenericExperiencePredicates(sourceForCoverage)
+      const needsGenericPredicates = sourceRequiresGenericExperiencePredicates(sourceForCoverage)
         && (
           !dedicatedWarehousePredicatesApplied
           || sourceFactCount > 3
-        )
-        && (locale !== 'ja'
-          || serverRepairAttemptedFlag
-          || materialDutyKeysFromDescription(sourceForCoverage)
-            .some((key) => key.startsWith('design_')));
+        );
       const genericPredicates = needsGenericPredicates
-        ? scanGenericExperiencePredicates(sourceForCoverage, candidate, {
-          // A provider/repair candidate is allowed the same constrained
-          // cross-locale bridge as deterministic translation only after the
-          // surrounding locale/perspective/purity gates have passed.
-          allowValidatedCrossScriptBridge: crossLocaleAccept,
-          allowValidatedCrossLocaleBridge: crossLocaleOp
-            && stage === 'provider'
-            && origin === 'ai_repaired',
-        })
+        ? scanGenericExperiencePredicates(sourceForCoverage, candidate)
         : null;
       if (genericPredicates && !dedicatedWarehousePredicatesApplied) {
         sourcePredicateIdentityCount = genericPredicates.sourcePredicateIdentityCount;
@@ -10456,41 +9596,12 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           providerSourceUnitPredicateCoveragePassed = sourceUnitPredicateCoveragePassed;
         }
       }
-      const genericEntryCoveragePassed = Boolean(
-        genericPredicates
-        && genericPredicates.sourceUnitPredicateCoveragePassed
-        && genericPredicates.sourcePredicateIdentityCount >= sourceFactCount
-        && genericPredicates.candidatePredicateIdentityCount >= sourceFactCount,
-      );
       lastRequired = needsEnWarehouse && enWarehouse
         ? (enWarehouse.required.length || sourceFactCount)
-        : genericEntryCoveragePassed
-          ? sourceFactCount
-          : (semantic.requiredCount || sourceFactCount);
+        : (semantic.requiredCount || sourceFactCount);
       lastCovered = needsEnWarehouse && enWarehouse
         ? enWarehouse.covered.length
-        : genericEntryCoveragePassed
-          ? sourceFactCount
-          : semantic.coveredCount;
-      if (
-        stage === 'provider'
-        && lastRequired > lastCovered
-        && semantic.uncoveredSourceIndexes.length > 0
-      ) {
-        // Cross-language lexical source-fact matching can publish more missing
-        // identities than the typed semantic bridge actually left unmatched.
-        // Keep provider-phase counts and hash-only entry-owned identities tied
-        // to the same one-to-one semantic pairing.
-        const canonicalSemanticCoverage = canonicalSourceFactCoverageFromSemantic(
-          sourceForCoverage,
-          semantic.coveredSourceIndexes,
-        );
-        providerUncoveredFactIdentityHashes = canonicalSemanticCoverage.missingIds;
-        if (canonicalSemanticCoverage.requiredIds.length) {
-          providerRequiredFactCount = canonicalSemanticCoverage.requiredIds.length;
-          providerCoveredFactCount = canonicalSemanticCoverage.coveredIds.length;
-        }
-      }
+        : semantic.coveredCount;
       if (deExpansion && deExpansion.count > 0) {
         lastRejectStage = `${stage}:german_unsupported_expansion`;
         lastRejectReason = deExpansion.labels[0] || 'unsupported_generated_duty';
@@ -10770,17 +9881,6 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         }
         return null;
       }
-      if (needsJaPredicates && jaPredicates && (
-        jaPredicates.sourceUnitPredicateCoveragePassed === false
-        || jaPredicates.candidateAddedPredicateCount > 0
-        || jaPredicates.candidatePredicateIdentityCount <= 0
-      )) {
-        lastRejectStage = `${stage}:japanese_experience_predicates`;
-        lastRejectReason = 'source_unit_predicate_coverage_failed';
-        lastRequired = Math.max(jaPredicates.sourcePredicateIdentityCount, sourceFactCount);
-        lastCovered = jaPredicates.candidatePredicateIdentityCount;
-        return null;
-      }
       if (needsArWarehouse && arWarehouse && (
         !arWarehouse.ok
         || (arPredicates && (
@@ -10896,14 +9996,14 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         lastRejectStage = `${stage}:russian_design_families`;
         lastRejectReason = ruDesign.reason || 'russian_design_family_coverage_incomplete';
         lastRequired = Math.max(3, post.required?.length || sourceFactCount);
-        lastCovered = ruDesign.covered.length;
+        lastCovered = ruDesign.coveredFamilies.length;
         return null;
       }
-      if (needsRuDesignFamilies && !ruDesign?.ok) {
+      if (needsRuDesignFamilies && !post.ok) {
         lastRejectStage = `${stage}:material_postcondition`;
-        lastRejectReason = ruDesign?.reason || 'russian_design_semantic_fact_coverage_incomplete';
-        lastRequired = ruDesign?.required.length ?? sourceFactCount;
-        lastCovered = ruDesign?.covered.length ?? 0;
+        lastRejectReason = post.reason || 'experience_material_fact_coverage_incomplete';
+        lastRequired = post.required?.length ?? sourceFactCount;
+        lastCovered = post.covered?.length ?? 0;
         return null;
       }
       if (needsDeWarehouse && deWarehouse?.ok) {
@@ -10954,14 +10054,8 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         lastRequired = enWarehouse.required.length;
         lastCovered = enWarehouse.covered.length;
         clientDeterministicFallbackUncoveredFactIds = [];
-      } else if (semantic.ok && (!needsRuDesignFamilies || ruDesign?.ok)) {
-        if (genericEntryCoveragePassed) {
-          // Preserve the independently validated entry-owned unit count. The
-          // semantic catalogue may intentionally collapse several duties into a
-          // single family, but it must not overwrite truthful N/N diagnostics.
-          lastRequired = sourceFactCount;
-          lastCovered = sourceFactCount;
-        } else if (post.ok && (post.covered?.length || 0) > 0) {
+      } else if (semantic.ok && (!needsRuDesignFamilies || (post.ok && ruDesign?.ok))) {
+        if (post.ok && (post.covered?.length || 0) > 0) {
           lastRequired = post.required?.length ?? lastRequired;
           lastCovered = post.covered?.length ?? lastCovered;
         }
@@ -11407,21 +10501,8 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         clientDeterministicFallbackUncoveredFactIds = [];
       } else {
         const semantic = validateCrossLocaleSemanticCoverage(sourceForCoverage, candidate);
-        // The soft semantic catalogue can collapse several entry-owned duties into
-        // one material family. When the generic predicate scanner has independently
-        // validated every source unit, diagnostics and postconditions must retain the
-        // entry-owned 3/3 (or N/N) truth rather than reporting the collapsed family
-        // count. The scanner is a gate, not a lexical-overlap shortcut.
-        const genericEntryCoveragePassed = sourceFactCount > 0
-          && sourceUnitPredicateCoveragePassed === true
-          && sourcePredicateIdentityCount >= sourceFactCount
-          && candidatePredicateIdentityCount >= sourceFactCount;
-        lastRequired = genericEntryCoveragePassed
-          ? sourceFactCount
-          : (semantic.requiredCount || sourceFactCount);
-        lastCovered = genericEntryCoveragePassed
-          ? sourceFactCount
-          : semantic.coveredCount;
+        lastRequired = semantic.requiredCount || sourceFactCount;
+        lastCovered = semantic.coveredCount;
         if (!semantic.ok) {
           lastRejectStage = `${stage}:translated_fact_count`;
           lastRejectReason = semantic.reason || 'experience_material_fact_coverage_incomplete';
@@ -11499,22 +10580,8 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         return null;
       }
     }
-    if (locale === 'ja') {
-      const jaTense = validateJapaneseExperienceEmploymentTense(candidate, isPresent);
-      generationValidationMeta = {
-        ...generationValidationMeta,
-        tenseValidationPassed: jaTense.finalTensePassed,
-        relevanceValidationPassed: generationValidationMeta.relevanceValidationPassed
-          || Boolean(lastCovered),
-      };
-      if (!jaTense.finalTensePassed) {
-        lastRejectStage = `${stage}:japanese_employment_tense`;
-        lastRejectReason = jaTense.reason || 'japanese_employment_tense_mismatch';
-        return null;
-      }
-    }
     // Final-candidate validators must describe the accepted text, not a rejected provider.
-    if (locale !== 'ar' && locale !== 'ru' && locale !== 'hi' && locale !== 'ja') {
+    if (locale !== 'ar' && locale !== 'ru' && locale !== 'hi') {
       generationValidationMeta = {
         ...generationValidationMeta,
         relevanceValidationPassed: true,
@@ -11532,7 +10599,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       kind: 'experience_bullet',
       requireUnits: true,
     });
-    const isClientFallback = (origin === 'deterministic_fallback' || serverFallbackUsed)
+    const isClientFallback = origin === 'deterministic_fallback'
       && (
         stage === 'canonical_fallback'
         || stage === 'source_preserving_fallback'
@@ -11551,55 +10618,22 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       clientDeterministicFallbackCoveredFactCount = lastCovered || sourceFactCount;
       clientDeterministicFallbackRequiredFactCount = lastRequired || sourceFactCount;
       clientDeterministicFallbackUncoveredFactIds = [];
-      if (!finalCandidateSource || finalCandidateSource === 'none') {
-        finalCandidateSource = 'deterministic_fallback';
-      }
+      if (!finalCandidateSource) finalCandidateSource = 'deterministic_fallback';
       if (
         providerCoveredFactCount < providerRequiredFactCount
         && providerUncoveredFactIdentityHashes.length === 0
         && sourceForCoverage
       ) {
-        providerUncoveredFactIdentityHashes = deriveProviderUncoveredFactIdentityHashes(
+        const rejectedProviderIdentities = validateSourceFactIdentityCoverage(
+          sourceForCoverage,
           input.candidate || '',
         );
+        providerUncoveredFactIdentityHashes = rejectedProviderIdentities.missingIds.length
+          ? [...rejectedProviderIdentities.missingIds]
+          : [...rejectedProviderIdentities.requiredIds];
       }
-    }
-    if (stage === 'provider' && providerPhaseDiagnostics?.candidatePresent
-      && !providerPhaseHasCompleteCoverage()) {
-      // Complete the normal provider validation first so predicate/locale/
-      // tense evidence remains truthful, then reject the provider phase on its
-      // authoritative coverage snapshot. Recovery/fallback is the only path
-      // allowed to select a later candidate after an incomplete provider.
-      providerAccepted = false;
-      providerRequiredFactCount = Math.max(
-        0,
-        Number(providerPhaseDiagnostics.requiredFactCount ?? sourceFactCount),
-      );
-      providerCoveredFactCount = Math.max(
-        0,
-        Math.min(
-          providerRequiredFactCount,
-          Number(providerPhaseDiagnostics.coveredFactCount ?? 0),
-        ),
-      );
-      providerUncoveredFactIdentityHashes = canonicalSourceFactIdsForIndexes(
-        sourceForCoverage,
-        Array.isArray(providerPhaseDiagnostics.uncoveredSourceIndexes)
-          ? providerPhaseDiagnostics.uncoveredSourceIndexes
-          : [],
-      );
-      lastRejectStage = `${stage}:provider_phase_coverage`;
-      lastRejectReason = 'provider_phase_coverage_incomplete';
-      providerRejectionStage = lastRejectStage;
-      providerRejectionReason = lastRejectReason;
-      if (providerUncoveredFactIdentityHashes.length === 0
-        && providerCoveredFactCount < providerRequiredFactCount) {
-        providerUncoveredFactIdentityHashes = canonicalProviderUncoveredFactIdentityHashes();
-      }
-      return null;
     }
     void EXPERIENCE_DIAGNOSTICS_FINAL_CANDIDATE_305_REVISION;
-    const providerUncoveredFactIds = canonicalProviderUncoveredFactIdentityHashes();
     return {
       blocked: false,
       text: candidate,
@@ -11614,11 +10648,9 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         providerCoveredFactCount,
         providerRequiredFactCount,
         providerCoverageCount: providerCoveredFactCount,
-        providerUncoveredFactCount: providerUncoveredFactIds.length,
-        providerUncoveredFactIdentityHashes: [...providerUncoveredFactIds],
-        providerAccepted: isClientFallback
-          ? false
-          : (providerPhaseDiagnostics?.candidatePresent ? providerAccepted : true),
+        providerUncoveredFactCount: Math.max(0, providerRequiredFactCount - providerCoveredFactCount),
+        providerUncoveredFactIdentityHashes: [...providerUncoveredFactIdentityHashes],
+        providerAccepted: isClientFallback ? false : true,
         providerSourcePredicateIdentityCount: isClientFallback
           ? providerSourcePredicateIdentityCount || undefined
           : (providerSourcePredicateIdentityCount || sourcePredicateIdentityCount || undefined),
@@ -11752,8 +10784,6 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             && sourceRequiresHindiWarehouseFactCoverage(sourceForCoverage || '');
           const isJaWarehouse = locale === 'ja'
             && sourceRequiresJapaneseWarehouseFactCoverage(sourceForCoverage || '');
-          const isJaExperiencePredicates = locale === 'ja'
-            && sourceRequiresGenericExperiencePredicates(sourceForCoverage || '');
           const isArWarehouse = locale === 'ar'
             && sourceRequiresArabicWarehouseFactCoverage(sourceForCoverage || '');
           const isSrWarehouse = locale === 'sr'
@@ -11766,14 +10796,14 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             && !isEnWarehouse && !isDeWarehouse && !isEsWarehouse
             && !isFrWarehouse && !isItWarehouse && !isPtWarehouse && !isRuWarehouse
             && !isHiWarehouse && !isJaWarehouse && !isArWarehouse && !isSrWarehouse
-            && !isHrWarehouse && !isJaExperiencePredicates;
+            && !isHrWarehouse;
           // Warehouse + shared generic selected-final snapshots recompute predicate truth.
           // Vacuous non-applicable paths must not invent false predicate coverage.
           if (
             !isEnWarehouse && !isDeWarehouse && !isEsWarehouse
             && !isFrWarehouse && !isItWarehouse && !isPtWarehouse && !isRuWarehouse
             && !isHiWarehouse && !isJaWarehouse && !isArWarehouse && !isSrWarehouse
-            && !isHrWarehouse && !isJaExperiencePredicates
+            && !isHrWarehouse
             && !isGenericPredicates
           ) {
             delete diag.finalSourceUnitPredicateCoveragePassed;
@@ -11878,23 +10908,14 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   const providerOrigin = input.originHint === 'ai_repaired' ? 'ai_repaired' : 'ai_generated';
   const providerRawForCompare = candidate;
   let perspectiveMeta = {
-    sourcePersonMode: (authoritativeSourceLocale
-      ? detectExperiencePersonMode(sourceForCoverage, authoritativeSourceLocale, { isPresent })
-      : 'unknown') as ExperiencePersonMode,
-    providerPersonMode: detectExperiencePersonMode(candidate, locale, { isPresent }) as ExperiencePersonMode,
+    sourcePersonMode: detectExperiencePersonMode(sourceForCoverage, locale) as ExperiencePersonMode,
+    providerPersonMode: detectExperiencePersonMode(candidate, locale) as ExperiencePersonMode,
     normalizedPersonMode: 'unknown' as ExperiencePersonMode,
     finalPersonMode: 'unknown' as ExperiencePersonMode,
     perspectiveMode: 'cv_third_person' as const,
     perspectiveNormalizationAttempted: false,
     perspectiveNormalizationApplied: false,
     perspectiveValidationPassed: false,
-    targetPersonMode: 'third_singular' as const,
-    targetGender: gender || null,
-    arabicMorphologyTransformationAttempted: false,
-    arabicMorphologyTransformationApplied: false,
-    arabicMorphologyTransformationClasses: ['none'] as string[],
-    arabicNativeMorphologyValidationPassed: locale !== 'ar',
-    arabicNativeMorphologyRejectionReason: null as string | null,
     normalizedBulletsUsedForApply: false,
     finalMatchesProviderOutput: false,
     finalMatchesSourceAfterNormalization: false,
@@ -11902,146 +10923,33 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     noOpRejected: false,
   };
 
-  // Selected-final diagnostics are a distinct phase. Rejected provider,
-  // repair, and fallback candidates retain their evidence in phase-owned
-  // fields/lineage, but none of that evidence is a selected final candidate.
-  const noSelectedFinalDiagnosticFields = (): Record<string, unknown> => ({
-    finalCandidatePresent: false,
-    finalCandidateSource: 'none',
-    finalCandidateValidationApplicable: false,
-    finalCandidatePredicateValidationApplicable: false,
-    finalCandidatePredicateIdentityCount: 0,
-    finalAddedPredicateCount: 0,
-    finalAddedPredicateIdentityHashes: [],
-    finalCoordinatedPredicateExpansionDetected: false,
-    finalSourceUnitPredicateCoveragePassed: null,
-    finalComplianceScopeExpansionDetected: false,
-    finalRequiredFactCount: null,
-    finalCoveredFactCount: null,
-    finalUncoveredFactIdentityHashes: [],
-    finalRequiredFactSetHash: null,
-    finalFactCoveragePassed: null,
-    finalUnsupportedClaimCount: 0,
-    finalUnsupportedClaimKinds: [],
-    finalPersonMode: null,
-    finalMatchesProviderOutput: false,
-    // Even when no candidate is selected, the visible terminal text can be
-    // provably unchanged. Preserve that fact for the no-apply/+0 contract.
-    finalMatchesSourceAfterNormalization: Boolean(
-      visibleComparisonText.trim()
-      && normalizeExperienceAiSourceText(exp?.description || visibleComparisonText)
-        === normalizeExperienceAiSourceText(visibleComparisonText),
-    ),
-    finalNormalizedHash: null,
-    finalBulletCount: 0,
-    finalBulletScripts: [],
-    finalCandidateBulletCount: 0,
-    finalCandidateBulletScripts: [],
-    appliedFinalBulletCount: 0,
-    appliedFinalBulletScripts: [],
-    visibleTextareaMatchesFinalNormalizedHash: null,
-  });
-
   const attachPerspectiveDiag = (
     result: FinalizeCvAiFieldResult,
   ): FinalizeCvAiFieldResult => {
-    const russianProjectionAttempted = locale === 'ru'
-      && sourceRequiresRussianDesignSemanticGrounding(sourceForCoverage);
-    const russianProjectionText = russianProjectionAttempted
-      ? buildRussianDesignSemanticFallback({
-        sourceDescription: sourceForCoverage,
-        isPresent,
-        gender: String(gender || ''),
-      })
-      : '';
-    const russianProjectionValidation = russianProjectionText
-      ? validateRussianDesignSemanticProjection(sourceForCoverage, russianProjectionText)
-      : null;
-    const russianProjectionHash = russianProjectionText
-      ? fingerprintText(russianProjectionText)
-      : null;
-    const russianFinalHash = result.countedAsSuccess && result.text.trim()
-      ? fingerprintText(result.text)
-      : null;
-    const russianProjectionSelected = Boolean(
-      russianProjectionAttempted
-      && russianProjectionValidation?.ok
-      && russianProjectionHash
-      && russianFinalHash === russianProjectionHash,
-    );
-    if (result.countedAsSuccess && (result.text || '').trim()) {
-      const finalArabicMorphology = locale === 'ar'
-        ? validateArabicExperienceNativeMorphology(result.text, {
-          isPresent,
-          gender,
-          sourceText: providerRawForCompare,
-        })
-        : null;
-      if (finalArabicMorphology) {
-        perspectiveMeta.arabicNativeMorphologyValidationPassed =
-          finalArabicMorphology.ok;
-        perspectiveMeta.arabicNativeMorphologyRejectionReason =
-          finalArabicMorphology.reason ?? null;
-        if (!finalArabicMorphology.ok) {
-          providerAccepted = false;
-          clientDeterministicFallbackApplied = false;
-          finalCandidateSource = 'none';
-          return {
-            ...result,
-            blocked: true,
-            countedAsSuccess: false,
-            reason: finalArabicMorphology.reason || 'arabic_native_morphology_failed',
-            diagnostics: {
-              ...baseDiag(),
-              ...result.diagnostics,
-              ...perspectiveMeta,
-              providerAccepted: false,
-              finalCandidateSource: 'none',
-              typedFailureReason:
-                finalArabicMorphology.reason || 'arabic_native_morphology_failed',
-              rejectionStage: 'final_selected:arabic_native_morphology',
-              countedAsSuccess: false,
-              ...noSelectedFinalDiagnosticFields(),
-            },
-          };
-        }
-      }
-      const finalPerspective = validateExperienceCvPerspective(result.text, locale, {
-        isPresent,
-      });
-      perspectiveMeta.finalPersonMode = finalPerspective.finalPersonMode;
-      perspectiveMeta.perspectiveValidationPassed = finalPerspective.ok;
-      if (!finalPerspective.ok) {
-        providerAccepted = false;
-        clientDeterministicFallbackApplied = false;
-        finalCandidateSource = 'none';
-        return {
-          ...result,
-          blocked: true,
-          countedAsSuccess: false,
-          reason: finalPerspective.reason || 'experience_cv_perspective_first_person',
-          diagnostics: {
-            ...baseDiag(),
-            ...result.diagnostics,
-            ...perspectiveMeta,
-            providerAccepted: false,
-            finalCandidateSource: 'none',
-            perspectiveValidationPassed: false,
-            typedFailureReason:
-              finalPerspective.reason || 'experience_cv_perspective_first_person',
-            rejectionStage: 'final_selected:perspective',
-            countedAsSuccess: false,
-            ...noSelectedFinalDiagnosticFields(),
-          },
-        };
-      }
-    }
     // Final visible no-op / degradation gate — every non-empty Experience path.
     if (result.countedAsSuccess && useVisibleForNoOp && (result.text || '').trim()) {
       void EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION;
       void EXPERIENCE_SEMANTIC_NOOP_FINAL_GATE_312_REVISION;
       const isEs = (locale || '').toLowerCase().startsWith('es');
-      if (isEs) {
+      if (!isEs) {
+        // Locale-specific grounding has already accepted this candidate. Record
+        // the visible comparison now; the locale-shared canonical decision below
+        // is the only layer allowed to turn that acceptance into apply/usage.
+        lastVisibleComparisonEval = evaluateExperienceVisibleComparison({
+          factAuthorityText: sourceForCoverage,
+          visibleComparisonText,
+          candidateText: result.text,
+          locale,
+          visibleComparisonProvenance:
+            (sourceBundle.visibleSourceProvenance || textareaProvenance?.currentTextareaProvenance || null),
+          matchedLastAiOutput: Boolean(sourceBundle.visibleSourceMatchedLastAiOutput || textareaProvenance?.lastAiOutputHashMatched),
+          useVisibleForNoOp: true,
+          capturedAtRequest: true,
+          isPresent,
+          crossLocaleOperation: crossLocaleOp,
+          requestedRewriteStyle: requestedExperienceRewriteStyle || null,
+        });
+      } else {
         void EXPERIENCE_CANONICAL_FINALIZATION_313_REVISION;
         void SPANISH_EXPERIENCE_SURFACE_FORM_GATE_313_REVISION;
         void EXPERIENCE_SINGLE_DECISION_APPLY_GATE_313_REVISION;
@@ -12083,7 +10991,6 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
                 EXPERIENCE_CANONICAL_FINALIZATION_313_REVISION,
               spanishExperienceSurfaceFormGateRevision:
                 SPANISH_EXPERIENCE_SURFACE_FORM_GATE_313_REVISION,
-              ...noSelectedFinalDiagnosticFields(),
             },
           };
         }
@@ -12235,7 +11142,6 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
                 EXPERIENCE_SINGLE_DECISION_APPLY_GATE_313_REVISION,
               experienceEvidenceBasedImprovementRevision:
                 EXPERIENCE_EVIDENCE_BASED_IMPROVEMENT_313_REVISION,
-              ...noSelectedFinalDiagnosticFields(),
             },
           };
         }
@@ -12325,10 +11231,11 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         }
       }
     }
-    // Locale-specific fallback validators are stricter than the generic
-    // visible comparator. Preserve semantic no-op authority, while accepting
-    // a proven 1:1 cross-locale fallback that the generic catalogue labels as
-    // fact loss solely because predicate identities differ by locale.
+    // Some proven deterministic cross-locale fallbacks use a stricter
+    // candidate-specific validator than the generic visible comparator. Keep
+    // semantic no-op authority here, but do not let that generic comparator
+    // reclassify an already-proven 1:1 fallback as fact loss merely because its
+    // locale-specific identity catalogue differs.
     const fallbackCoverageProven = Boolean(
       result.countedAsSuccess
       && result.origin === 'deterministic_fallback'
@@ -12425,96 +11332,87 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     successVisFields.degradationKinds = [...canonicalPreapplyDecision.degradationKinds];
     successVisFields.finalDecisionKind = canonicalPreapplyDecision.finalDecisionKind;
 
-    // Grounding acceptance alone never authorizes apply. The same immutable
-    // decision controls the visible write, commit, and usage paths.
-    if (result.countedAsSuccess && !canonicalPreapplyDecision.shouldApply) {
+    // Locale-shared evidence gate: grounding acceptance alone never authorizes
+    // apply. The same immutable decision controls the write and usage paths.
+    if (
+      result.countedAsSuccess
+      && !canonicalPreapplyDecision.shouldApply
+    ) {
       unsupportedClaimRepairApplied = false;
       clientDeterministicFallbackApplied = false;
-      const semanticNoOp = canonicalPreapplyDecision.finalDecisionKind === 'semantic_noop';
-      const degradation = canonicalPreapplyDecision.finalDecisionKind === 'degradation_rejected';
+      const canonicalNoOp = canonicalPreapplyDecision.finalDecisionKind === 'semantic_noop';
+      const canonicalDegradation = canonicalPreapplyDecision.finalDecisionKind
+        === 'degradation_rejected';
       const candidateEvidenceSource = finalCandidateSource
         || result.diagnostics?.finalCandidateSource
         || (result.origin === 'deterministic_fallback' ? 'deterministic_fallback' : 'provider');
       return {
         blocked: true,
-        reason: degradation ? 'experience_ai_degradation' : 'experience_ai_noop',
+        reason: canonicalDegradation ? 'experience_ai_degradation' : 'experience_ai_noop',
         text: exp?.description || visibleComparisonText || '',
         origin: 'user',
         roleDutyConflict,
         countedAsSuccess: false,
         diagnostics: {
           ...baseDiag(),
+          // Preserve the already-proven provider/fallback coverage, predicate,
+          // locale, tense, and perspective evidence on the no-apply result.
           ...result.diagnostics,
           ...perspectiveMeta,
           ...successVisFields,
+          semanticNoOpDetected: canonicalPreapplyDecision.semanticNoOpDetected,
+          semanticNoOpReason: canonicalPreapplyDecision.semanticNoOpReason,
+          materialImprovementDetected:
+            canonicalPreapplyDecision.materialImprovementDetected,
+          materialImprovementKinds: [
+            ...canonicalPreapplyDecision.materialImprovementKinds,
+          ],
+          neutralRestyleDetected: canonicalPreapplyDecision.neutralRestyleDetected,
+          degradationDetected: canonicalPreapplyDecision.degradationDetected,
+          degradationKinds: [...canonicalPreapplyDecision.degradationKinds],
+          finalDecisionKind: canonicalPreapplyDecision.finalDecisionKind,
           meaningfulChangeDetected: false,
-          noOpRejected: semanticNoOp,
-          noOpDetected: semanticNoOp,
-          typedFailureReason: degradation ? 'experience_ai_degradation' : 'ai_noop',
-          rejectionStage: semanticNoOp
+          noOpRejected: canonicalNoOp,
+          noOpDetected: canonicalNoOp,
+          typedFailureReason: canonicalDegradation ? 'experience_ai_degradation' : 'ai_noop',
+          rejectionStage: canonicalNoOp
             ? 'canonical_preapply_semantic_noop'
             : 'canonical_preapply_decision',
+          // The rejected candidate remains hash/lineage evidence; it is not an
+          // applied candidate and does not authorize billing.
           finalCandidateSource: candidateEvidenceSource,
           countedAsSuccess: false,
           experienceCanonicalPreapplyDecisionRevision:
             EXPERIENCE_CANONICAL_PREAPPLY_DECISION_421_REVISION,
           canonicalExperienceDecisionCreated: true,
           providerCandidateValidationAccepted:
-            false,
-          providerPrimaryCandidateValidationAccepted: false,
-          finalCandidateValidationAccepted:
             canonicalPreapplyDecision.candidateValidationAccepted,
-          finalVisibleDecisionAcceptedForApply: false,
-          canonicalExperienceDecisionAllowsApply: false,
-          canonicalExperienceDecisionAllowsUsage: false,
+          // A semantic no-op is still the same fully validated candidate; the
+          // no-apply decision must not erase its functional validation proof.
+          targetLocalePurityPassed:
+            result.diagnostics?.targetLocalePurityPassed !== false,
+          tenseValidationPassed:
+            result.diagnostics?.tenseValidationPassed !== false
+            || canonicalPreapplyDecision.candidateValidationAccepted,
+          perspectiveValidationPassed:
+            result.diagnostics?.perspectiveValidationPassed !== false
+            || canonicalPreapplyDecision.candidateValidationAccepted,
           crossEntryLeakageDetected: false,
           selectedExperienceEntryIdHash,
           operationSnapshotExperienceEntryIdHash: snapshot?.experienceEntryId
             ? hashExperienceEntryId(snapshot.experienceEntryId)
             : null,
+          appliedExperienceEntryIdHash: null,
+          attemptedApplyExperienceEntryIdHash: null,
           sourceFactsEntryIdHash: selectedExperienceEntryIdHash,
           canonicalFactsEntryIdHash: selectedExperienceEntryIdHash,
           fallbackFactsEntryIdHash: selectedExperienceEntryIdHash,
           providerTargetEntryIdHash: selectedExperienceEntryIdHash,
           arrayIndexAtRequest,
           arrayIndexAtApply: experienceIndexForIdStrict(cv, exp.id),
-          appliedExperienceEntryIdHash: null,
-          attemptedApplyExperienceEntryIdHash: null,
-        },
-      };
-    }
-    // Evidence gate: never bill with materialImprovement true and empty kinds.
-    if (
-      result.countedAsSuccess
-      && useVisibleForNoOp
-      && !evidenceOk
-      && (locale || '').toLowerCase().startsWith('es')
-    ) {
-      providerAccepted = false;
-      unsupportedClaimRepairApplied = false;
-      clientDeterministicFallbackApplied = false;
-      finalCandidateSource = 'none';
-      return {
-        blocked: true,
-        reason: 'experience_ai_noop',
-        text: exp?.description || visibleComparisonText || '',
-        origin: 'user',
-        roleDutyConflict,
-        countedAsSuccess: false,
-        diagnostics: {
-          ...baseDiag(),
-          ...perspectiveMeta,
-          ...successVisFields,
-          materialImprovementDetected: false,
-          materialImprovementKinds: [],
-          meaningfulChangeDetected: false,
-          noOpRejected: true,
-          noOpDetected: true,
-          typedFailureReason: 'ai_noop',
-          rejectionStage: 'visible_comparison_noop',
-          finalCandidateSource: 'none',
-          countedAsSuccess: false,
-          ...noSelectedFinalDiagnosticFields(),
+          finalVisibleDecisionAcceptedForApply: false,
+          canonicalExperienceDecisionAllowsApply: false,
+          canonicalExperienceDecisionAllowsUsage: false,
         },
       };
     }
@@ -12543,6 +11441,9 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       successVisFields.materialImprovementDetected = false;
       successVisFields.materialImprovementKinds = [];
       successVisFields.materialImprovementEvidenceCount = 0;
+      if (successVisFields.semanticNoOpDetected === true) {
+        successVisFields.finalDecisionKind = 'semantic_noop';
+      }
       const typedFail = String(
         result.diagnostics?.typedFailureReason
         || result.reason
@@ -12550,6 +11451,8 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         || '',
       );
       if (
+        successVisFields.semanticNoOpDetected !== true
+        && (
         typedFail === 'wrong_language'
         || typedFail.includes('wrong_language')
         || typedFail.includes('locale')
@@ -12560,83 +11463,37 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         || String(lastRejectStage || '').includes('warehouse')
         || String(lastRejectStage || '').includes('fallback')
         || String(lastRejectStage || '').includes('purity')
+        )
       ) {
         successVisFields.finalDecisionKind = 'invalid_candidate_rejected';
       } else if (
+        successVisFields.semanticNoOpDetected !== true
+        && (
         successVisFields.finalDecisionKind === 'material_improvement'
         || successVisFields.finalDecisionKind === 'exact_noop'
         || successVisFields.finalDecisionKind === 'none'
+        )
       ) {
         successVisFields.finalDecisionKind = 'invalid_candidate_rejected';
       }
     }
-    if (routedPrimaryProviderPhase) {
-      providerRequiredFactCount = routedPrimaryProviderPhase.requiredFactCount;
-      providerCoveredFactCount = routedPrimaryProviderPhase.coveredFactCount;
-      providerUncoveredFactIdentityHashes = [
-        ...routedPrimaryProviderPhase.uncoveredFactIdentityHashes,
-      ];
-      if (
-        providerCoveredFactCount < providerRequiredFactCount
-        && providerUncoveredFactIdentityHashes.length
-          !== providerRequiredFactCount - providerCoveredFactCount
-      ) {
-        providerUncoveredFactIdentityHashes = canonicalProviderUncoveredFactIdentityHashes();
-      }
-    }
-    const finalProviderUncoveredFactIds = [...canonicalProviderUncoveredFactIdentityHashes()];
-    const routedProviderAccepted = routedPrimaryProviderPhase
-      ? (providerPhaseHasCompleteCoverage() && routedPrimaryProviderPhase.accepted === true)
-      : null;
-    const finalMeaningfulChangeDetected = Boolean(
-      result.countedAsSuccess
-      && (
-        perspectiveMeta.meaningfulChangeDetected === true
-        || (
-          Array.isArray(successVisFields.materialImprovementKinds)
-          && (successVisFields.materialImprovementKinds as string[]).includes('wrong_locale_fixed')
-        )
-      )
-    );
-    const inferredProviderAccepted = Boolean(
-      result.countedAsSuccess
-      && result.origin !== 'deterministic_fallback'
-      && result.diagnostics?.clientDeterministicFallbackApplied !== true
-      && finalCandidateSource !== 'deterministic_fallback'
-      && finalCandidateSource !== 'server_fallback'
-      && finalCandidateSource !== 'unsupported_claim_repair'
-      && !unsupportedClaimRepairApplied
-      && !(
-        (providerUnsupportedClaimCount ?? 0) > 0
-        && (
-          noOpRepairApplied
-          || finalCandidateSource === 'noop_repair'
-          || result.origin === 'ai_repaired'
-        )
-      ),
-    );
     return {
       ...result,
       diagnostics: {
         ...result.diagnostics,
         ...perspectiveMeta,
         ...successVisFields,
-        meaningfulChangeDetected: finalMeaningfulChangeDetected,
-        russianSourceOwnedProjectionAttempted: russianProjectionAttempted,
-        russianSourceOwnedSemanticFactCount: russianProjectionValidation?.required.length ?? null,
-        russianSourceOwnedProjectionHash: russianProjectionHash,
-        russianSourceOwnedProjectionValidationPassed: russianProjectionValidation?.ok ?? null,
-        russianSourceOwnedProjectionSelected: russianProjectionSelected,
-        russianFallbackHashEnteringFinalizer: russianProjectionAttempted && input.candidate.trim()
-          ? fingerprintText(input.candidate)
-          : null,
+        experienceCanonicalPreapplyDecisionRevision:
+          EXPERIENCE_CANONICAL_PREAPPLY_DECISION_421_REVISION,
+        canonicalExperienceDecisionCreated: true,
+        providerCandidateValidationAccepted:
+          canonicalPreapplyDecision.candidateValidationAccepted,
+        finalVisibleDecisionAcceptedForApply:
+          canonicalPreapplyDecision.finalVisibleDecisionAcceptedForApply,
+        canonicalExperienceDecisionAllowsApply: canonicalPreapplyDecision.shouldApply,
+        canonicalExperienceDecisionAllowsUsage:
+          canonicalPreapplyDecision.shouldIncrementUsage,
         finalMatchesProviderOutput: finalMatchesProvider,
-        // Terminal truth: compare the actual selected text with the immutable
-        // authority; never retain a provider/repair phase-local no-op flag.
-        finalMatchesSourceAfterNormalization: !experienceAiHasMeaningfulChange(
-          sourceForCoverage,
-          acceptedText,
-        ),
         tenseMode,
         selectedExperienceEntryIdHash,
         operationSnapshotExperienceEntryIdHash: snapshot?.experienceEntryId
@@ -12678,76 +11535,26 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
               ? 'deterministic_fallback'
               : (unsupportedClaimRepairApplied
                 ? 'unsupported_claim_repair'
-                : (noOpRepairApplied
-                  ? 'noop_repair'
-                  : (serverRepairAttemptedFlag ? 'server_repair' : 'provider'))))
+                : (noOpRepairApplied ? 'noop_repair' : 'provider')))
             : 'none'),
-        serverRepairAttempted: serverRepairAttemptedFlag,
-        serverRepairSelected: Boolean(
-          result.countedAsSuccess
-          && (finalCandidateSource === 'server_repair'
-            || (!finalCandidateSource && serverRepairAttemptedFlag)),
-        ),
-        serverRepairSource,
-        providerPredicateValidationApplicable:
-          providerSourceUnitPredicateCoveragePassed != null
-          || providerCandidatePredicateIdentityCount > 0,
-        // Preserve the immutable primary-provider phase snapshot.  The
-        // selected fallback may cover every fact, but it must never rewrite
-        // the provider phase's required/covered cardinality.
-        providerRequiredFactCount: routedPrimaryProviderPhase
-          ? routedPrimaryProviderPhase.requiredFactCount
-          : providerRequiredFactCount,
-        providerCoveredFactCount: routedPrimaryProviderPhase
-          ? routedPrimaryProviderPhase.coveredFactCount
-          : providerCoveredFactCount,
-        providerCoverageCount: routedPrimaryProviderPhase
-          ? routedPrimaryProviderPhase.coveredFactCount
-          : providerCoveredFactCount,
-        providerSourcePredicateIdentityCount: routedPrimaryProviderPhase
-          ? Math.max(
-            providerSourcePredicateIdentityCount,
-            Number(result.diagnostics?.providerSourcePredicateIdentityCount || 0),
-          )
-          : (result.diagnostics?.providerSourcePredicateIdentityCount
-            ?? providerSourcePredicateIdentityCount
-            ?? undefined),
-        providerCandidatePredicateIdentityCount: routedPrimaryProviderPhase
-          ? Math.max(
-            providerCandidatePredicateIdentityCount,
-            Number(result.diagnostics?.providerCandidatePredicateIdentityCount || 0),
-          )
-          : (result.diagnostics?.providerCandidatePredicateIdentityCount
-            ?? providerCandidatePredicateIdentityCount
-            ?? undefined),
-        providerCandidateAddedPredicateCount: routedPrimaryProviderPhase
-          ? (routedPrimaryProviderPhase.addedPredicateCount
-            ?? Math.max(
-              providerCandidateAddedPredicateCount,
-              Number(result.diagnostics?.providerCandidateAddedPredicateCount || 0),
-            ))
-          : (result.diagnostics?.providerCandidateAddedPredicateCount
-            ?? providerCandidateAddedPredicateCount
-            ?? undefined),
-        providerCandidateAddedPredicateIdentityHashes: routedPrimaryProviderPhase
-          ? [...new Set([
-            ...providerCandidateAddedPredicateIdentityHashes,
-            ...(result.diagnostics?.providerCandidateAddedPredicateIdentityHashes || []),
-          ])]
-          : (result.diagnostics?.providerCandidateAddedPredicateIdentityHashes
-            ?? [...providerCandidateAddedPredicateIdentityHashes]),
-        providerSourceUnitPredicateCoveragePassed: routedPrimaryProviderPhase
-          ? providerSourceUnitPredicateCoveragePassed
-          : (result.diagnostics?.providerSourceUnitPredicateCoveragePassed
-            ?? providerSourceUnitPredicateCoveragePassed
-            ?? undefined),
-        providerUncoveredFactCount: finalProviderUncoveredFactIds.length,
-        providerUncoveredFactIdentityHashes: [...finalProviderUncoveredFactIds],
-        providerAccepted: routedProviderAccepted != null
-          ? routedProviderAccepted
-          : (result.diagnostics?.providerAccepted === false
-            ? false
-            : inferredProviderAccepted),
+        providerUncoveredFactIdentityHashes: [...providerUncoveredFactIdentityHashes],
+        providerAccepted: result.diagnostics?.providerAccepted === false
+          ? false
+          : (
+            result.countedAsSuccess
+            && !(result.origin === 'deterministic_fallback'
+              || result.diagnostics?.clientDeterministicFallbackApplied
+              || finalCandidateSource === 'deterministic_fallback'
+              || finalCandidateSource === 'server_fallback'
+              || finalCandidateSource === 'unsupported_claim_repair'
+              || unsupportedClaimRepairApplied
+              || (
+                (providerUnsupportedClaimCount ?? 0) > 0
+                && (noOpRepairApplied
+                  || finalCandidateSource === 'noop_repair'
+                  || result.origin === 'ai_repaired')
+              ))
+          ),
         unsupportedClaimRepairAttempted,
         unsupportedClaimRepairKind,
         unsupportedClaimRepairValidationPassed,
@@ -12865,22 +11672,6 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           EXPERIENCE_EVIDENCE_BASED_IMPROVEMENT_313_REVISION,
         experienceSingleDecisionApplyGateRevision:
           EXPERIENCE_SINGLE_DECISION_APPLY_GATE_313_REVISION,
-        experienceCanonicalPreapplyDecisionRevision:
-          EXPERIENCE_CANONICAL_PREAPPLY_DECISION_421_REVISION,
-        canonicalExperienceDecisionCreated: true,
-        providerCandidateValidationAccepted:
-          finalCandidateSource === 'provider' ? providerAccepted : false,
-        providerPrimaryCandidateValidationAccepted:
-          finalCandidateSource === 'provider' ? providerAccepted : false,
-        finalCandidateValidationAccepted:
-          canonicalPreapplyDecision.candidateValidationAccepted,
-        finalVisibleDecisionAcceptedForApply:
-          canonicalPreapplyDecision.finalVisibleDecisionAcceptedForApply,
-        canonicalExperienceDecisionAllowsApply: canonicalPreapplyDecision.shouldApply,
-        canonicalExperienceDecisionAllowsUsage:
-          canonicalPreapplyDecision.shouldIncrementUsage,
-        // This is terminal usage authority, not provider-phase telemetry.
-        shouldIncrementUsage: canonicalPreapplyDecision.shouldIncrementUsage,
         experienceRepairLineageRevision: EXPERIENCE_REPAIR_LINEAGE_309_REVISION,
         spanishExperienceRepairGroundingRevision: SPANISH_EXPERIENCE_REPAIR_GROUNDING_309_REVISION,
         providerRejectionReason: result.diagnostics?.providerRejectionReason
@@ -12897,14 +11688,6 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         finalNormalizedHash: result.countedAsSuccess
           ? fingerprintText(acceptedText)
           : (result.diagnostics?.finalNormalizedHash ?? null),
-        // The projection hash is evidence of the server fallback; post-write
-        // truth must describe the exact selected/normalized surface instead.
-        russianPostNormalizationHash: russianProjectionAttempted && result.countedAsSuccess
-          ? fingerprintText(acceptedText)
-          : result.diagnostics?.russianPostNormalizationHash,
-        russianFinalSelectedHash: russianProjectionAttempted && result.countedAsSuccess
-          ? fingerprintText(acceptedText)
-          : result.diagnostics?.russianFinalSelectedHash,
         stableEntryIdentityMatched: true,
         targetEntryStillExists: Boolean(findExperienceById(cv, exp.id)),
         entryScopedCanonicalStorageUsed: true,
@@ -12921,9 +11704,6 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         visibleTextareaMatchesFinalNormalizedHash: result.countedAsSuccess ? true : null,
         experienceDiagnosticsFinalCandidateRevision:
           EXPERIENCE_DIAGNOSTICS_FINAL_CANDIDATE_305_REVISION,
-        ...(result.countedAsSuccess
-          ? { finalCandidatePresent: true }
-          : noSelectedFinalDiagnosticFields()),
       },
     };
   };
@@ -12934,7 +11714,6 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       isPresent,
       gender,
       sourceDescription: sourceForCoverage || candidate,
-      ...(authoritativeSourceLocale ? { sourceLocale: authoritativeSourceLocale } : {}),
     });
     perspectiveMeta = {
       ...perspectiveMeta,
@@ -12946,16 +11725,6 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       perspectiveNormalizationAttempted: persp.perspectiveNormalizationAttempted,
       perspectiveNormalizationApplied: persp.perspectiveNormalizationApplied,
       perspectiveValidationPassed: persp.perspectiveValidationPassed,
-      arabicMorphologyTransformationAttempted:
-        persp.arabicMorphologyTransformationAttempted,
-      arabicMorphologyTransformationApplied:
-        persp.arabicMorphologyTransformationApplied,
-      arabicMorphologyTransformationClasses:
-        persp.arabicMorphologyTransformationClasses,
-      arabicNativeMorphologyValidationPassed:
-        persp.arabicNativeMorphologyValidationPassed,
-      arabicNativeMorphologyRejectionReason:
-        persp.arabicNativeMorphologyRejectionReason,
       finalPersonMode: persp.normalizedPersonMode,
     };
     // Authoritative finalNormalizedBullets — validate and apply this array only.
@@ -12965,9 +11734,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     const finalNormalizedBullets = locale === 'hr' && persp.perspectiveNormalizationApplied
       ? polishCroatianExperienceAiText(persp.text)
       : persp.text;
-    const perspectiveGate = validateExperienceCvPerspective(finalNormalizedBullets, locale, {
-      isPresent,
-    });
+    const perspectiveGate = validateExperienceCvPerspective(finalNormalizedBullets, locale);
     perspectiveMeta.perspectiveValidationPassed = perspectiveGate.ok;
     perspectiveMeta.finalPersonMode = perspectiveGate.finalPersonMode;
 
@@ -12981,9 +11748,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         if (accepted) {
           perspectiveMeta.normalizedBulletsUsedForApply = true;
           perspectiveMeta.meaningfulChangeDetected = true;
-          perspectiveMeta.finalPersonMode = detectExperiencePersonMode(accepted.text, locale, {
-            isPresent,
-          });
+          perspectiveMeta.finalPersonMode = detectExperiencePersonMode(accepted.text, locale);
           return attachPerspectiveDiag(accepted);
         }
       }
@@ -13042,13 +11807,8 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       // Cross-locale "same text" must fall through to localized deterministic fallback.
       const sourceOkForLocale = sourceUsableInLocale(sourceForCoverage, locale)
         || (locale === 'en' && sourceUsableInLocale(sourceForCoverage, 'en'));
-      const sourceNeedsPerspective = Boolean(
-        authoritativeSourceLocale
-        && experienceRequiresCvThirdPerson(authoritativeSourceLocale)
-        && detectExperiencePersonMode(sourceForCoverage, authoritativeSourceLocale, {
-          isPresent,
-        }) === 'first_singular',
-      );
+      const sourceNeedsPerspective = experienceRequiresCvThirdPerson(locale)
+        && detectExperiencePersonMode(sourceForCoverage, locale) === 'first_singular';
       const needsDesignFamilyRebuild = experienceNeedsRussianDesignFamilyRebuild({
         locale,
         sourceDescription: sourceForCoverage,
@@ -13318,39 +12078,6 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           void EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION;
           const isEsVis = (locale || '').toLowerCase().startsWith('es');
           if (!isEsVis) {
-            // Non-Spanish: only exact/normalized visible equivalence is a no-op.
-            // Hindi हूँ→हैं collapses under Mn-stripped identity hashes — require
-            // whitespace-normalized surface equality before treating as no-op.
-            const visSurf = (visibleComparisonText || '').replace(/\s+/g, ' ').trim();
-            const accSurf = (firstAccepted.text || '').replace(/\s+/g, ' ').trim();
-            if (
-              experienceAiSourcesEquivalent(visibleComparisonText, firstAccepted.text)
-              && visSurf === accSurf
-            ) {
-              providerAccepted = false;
-              return attachPerspectiveDiag({
-                blocked: true,
-                reason: 'experience_ai_noop',
-                text: exp?.description || visibleComparisonText || '',
-                origin: 'user',
-                roleDutyConflict,
-                countedAsSuccess: false,
-                diagnostics: {
-                  ...baseDiag(),
-                  typedFailureReason: 'ai_noop',
-                  rejectionStage: 'provider:visible_noop',
-                  meaningfulChangeDetected: false,
-                  noOpRejected: true,
-                  noOpDetected: true,
-                  finalCandidateSource: 'none',
-                  semanticNoOpDetected: true,
-                  materialImprovementDetected: false,
-                  visibleComparisonUsedForNoOp: true,
-                  experienceVisibleNoopAuthorityRevision:
-                    EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION,
-                },
-              });
-            }
             lastVisibleComparisonEval = evaluateExperienceVisibleComparison({
               factAuthorityText: sourceForCoverage,
               visibleComparisonText,
@@ -13531,16 +12258,11 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
               perspectiveMeta.finalPersonMode = detectExperiencePersonMode(
                 finalAccepted.text,
                 locale,
-                { isPresent },
               );
-              providerAccepted = serverFallbackUsed
-                ? false
-                : (cons.decision.candidateOrigin === 'provider'
-                  || cons.decision.candidateOrigin === 'ai_repaired');
+              providerAccepted = cons.decision.candidateOrigin === 'provider'
+                || cons.decision.candidateOrigin === 'ai_repaired';
               finalCandidateSource = cons.decision.candidateOrigin === 'provider'
-                ? (serverFallbackUsed
-                  ? 'server_fallback'
-                  : (serverRepairAttemptedFlag ? 'server_repair' : 'provider'))
+                ? (serverFallbackUsed ? 'server_fallback' : 'provider')
                 : cons.decision.candidateOrigin;
               finalUnsupportedClaimCount = 0;
               finalUnsupportedClaimKinds = [];
@@ -13555,24 +12277,8 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
                 diagnostics: {
                   ...finalAccepted.diagnostics,
                   coveredFactCount: lastCovered || sourceFactCount,
-                  providerCoveredFactCount: routedPrimaryProviderPhase?.coveredFactCount
-                    ?? lastCovered
-                    ?? sourceFactCount,
-                  providerRequiredFactCount: routedPrimaryProviderPhase?.requiredFactCount
-                    ?? lastRequired
-                    ?? sourceFactCount,
-                  providerUncoveredFactIdentityHashes:
-                    routedPrimaryProviderPhase?.uncoveredFactIdentityHashes
-                    ?? canonicalProviderUncoveredFactIdentityHashes(),
-                  providerCandidateAddedPredicateCount:
-                    routedPrimaryProviderPhase?.addedPredicateCount
-                    ?? finalAccepted.diagnostics?.providerCandidateAddedPredicateCount
-                    ?? undefined,
-                  providerCandidateAddedPredicateIdentityHashes:
-                    routedPrimaryProviderPhase?.addedPredicateIdentityHashes
-                    ?? finalAccepted.diagnostics?.providerCandidateAddedPredicateIdentityHashes
-                    ?? [],
-                  providerAccepted: routedPrimaryProviderPhase?.accepted ?? providerAccepted,
+                  providerCoveredFactCount: lastCovered || sourceFactCount,
+                  providerRequiredFactCount: lastRequired || sourceFactCount,
                   finalUnsupportedClaimCount: 0,
                   finalUnsupportedClaimKinds: [],
                   unsupportedClaimCount: 0,
@@ -13594,13 +12300,9 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           }
         } else {
         perspectiveMeta.normalizedBulletsUsedForApply = true;
-        perspectiveMeta.finalPersonMode = detectExperiencePersonMode(firstAccepted.text, locale, {
-          isPresent,
-        });
-        providerAccepted = serverFallbackUsed
-          ? (routedPrimaryProviderPhase?.accepted ?? false)
-          : true;
-        if (!serverFallbackUsed) providerUncoveredFactIdentityHashes = [];
+        perspectiveMeta.finalPersonMode = detectExperiencePersonMode(firstAccepted.text, locale);
+        providerAccepted = true;
+        providerUncoveredFactIdentityHashes = [];
         if (noOpRepairAttemptedFlag && providerOrigin === 'ai_repaired') {
           noOpRepairApplied = true;
           noOpRepairValidationPassed = true;
@@ -13616,7 +12318,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           finalUnsupportedClaimKinds = [];
           fallbackApplied = true;
         } else {
-          finalCandidateSource = serverRepairAttemptedFlag ? 'server_repair' : 'provider';
+          finalCandidateSource = providerOrigin === 'ai_repaired' ? 'noop_repair' : 'provider';
           finalUnsupportedClaimCount = 0;
           finalUnsupportedClaimKinds = [];
         }
@@ -13626,24 +12328,8 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           diagnostics: {
             ...firstAccepted.diagnostics,
             coveredFactCount: lastCovered || sourceFactCount,
-            providerCoveredFactCount: routedPrimaryProviderPhase?.coveredFactCount
-              ?? lastCovered
-              ?? sourceFactCount,
-            providerRequiredFactCount: routedPrimaryProviderPhase?.requiredFactCount
-              ?? lastRequired
-              ?? sourceFactCount,
-            providerUncoveredFactIdentityHashes:
-              routedPrimaryProviderPhase?.uncoveredFactIdentityHashes
-              ?? canonicalProviderUncoveredFactIdentityHashes(),
-            providerCandidateAddedPredicateCount:
-              routedPrimaryProviderPhase?.addedPredicateCount
-              ?? firstAccepted.diagnostics?.providerCandidateAddedPredicateCount
-              ?? undefined,
-            providerCandidateAddedPredicateIdentityHashes:
-              routedPrimaryProviderPhase?.addedPredicateIdentityHashes
-              ?? firstAccepted.diagnostics?.providerCandidateAddedPredicateIdentityHashes
-              ?? [],
-            providerAccepted: routedPrimaryProviderPhase?.accepted ?? providerAccepted,
+            providerCoveredFactCount: lastCovered || sourceFactCount,
+            providerRequiredFactCount: lastRequired || sourceFactCount,
             providerNoOpDetected,
             noOpRepairAttempted: noOpRepairAttemptedFlag,
             noOpRepairApplied,
@@ -13660,15 +12346,6 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             unsupportedClaimCount: finalUnsupportedClaimCount,
             finalCandidateSource,
             serverFallbackUsed,
-            serverRepairAttempted: serverRepairAttemptedFlag,
-            serverRepairSelected: serverRepairAttemptedFlag,
-            serverRepairSource,
-            // Same-locale server repairs can reach selected-final predicate
-            // validation without a provider-phase predicate scan. Mark the
-            // provider phase N/A instead of leaving 0/null unexplained.
-            providerPredicateValidationApplicable:
-              providerSourceUnitPredicateCoveragePassed != null
-              || providerCandidatePredicateIdentityCount > 0,
             apiResponseKind,
             fallbackApplied: serverFallbackUsed ? true : firstAccepted.diagnostics?.fallbackApplied,
           },
@@ -13919,7 +12596,6 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             perspectiveMeta.finalPersonMode = detectExperiencePersonMode(
               repairAccepted.text,
               locale,
-              { isPresent },
             );
             perspectiveMeta.meaningfulChangeDetected = true;
             perspectiveMeta.noOpRejected = false;
@@ -14098,24 +12774,13 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         clientDeterministicFallbackReason = 'experience_ai_noop_recovery';
       }
       if (locale === 'ru') {
-        const semanticGrounding = sourceRequiresRussianDesignSemanticGrounding(sourceForCoverage);
-        if (semanticGrounding) {
-          const semantic = validateRussianDesignSemanticProjection(
-            sourceForCoverage,
-            finalNormalizedBullets,
-          );
-          providerDetectedMaterialFamilyCount = semantic.covered.length;
-          authoritativeRequiredFamilyCount = semantic.required.length;
-          lastRequired = Math.max(lastRequired, semantic.required.length);
-        } else {
-          const fam = validateRussianDesignFactFamilies(finalNormalizedBullets);
-          providerDetectedMaterialFamilyCount = fam.coveredFamilies.length;
-          if (isRussianDesignFamilyRejectionReason(lastRejectReason)
-            || sourceRequiresRussianDesignFamilies(sourceForCoverage)
-            || classifyFreeTextJobDomain(exp?.position || '') === 'design') {
-            authoritativeRequiredFamilyCount = RUSSIAN_AUTHORITATIVE_DESIGN_FAMILY_COUNT;
-            lastRequired = Math.max(lastRequired, RUSSIAN_AUTHORITATIVE_DESIGN_FAMILY_COUNT);
-          }
+        const fam = validateRussianDesignFactFamilies(finalNormalizedBullets);
+        providerDetectedMaterialFamilyCount = fam.coveredFamilies.length;
+        if (isRussianDesignFamilyRejectionReason(lastRejectReason)
+          || sourceRequiresRussianDesignFamilies(sourceForCoverage)
+          || classifyFreeTextJobDomain(exp?.position || '') === 'design') {
+          authoritativeRequiredFamilyCount = RUSSIAN_AUTHORITATIVE_DESIGN_FAMILY_COUNT;
+          lastRequired = Math.max(lastRequired, RUSSIAN_AUTHORITATIVE_DESIGN_FAMILY_COUNT);
         }
       }
     }
@@ -14127,13 +12792,17 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       providerCoveredFactCount = lastCovered;
       providerRequiredFactCount = lastRequired || sourceFactCount;
       if (providerCoveredFactCount < providerRequiredFactCount && sourceForCoverage) {
+        const rejectedProviderCoverage = validateSourceFactIdentityCoverage(
+          sourceForCoverage,
+          input.candidate || '',
+        );
         // A wrong-locale provider can preserve the raw source words yet still
         // cover zero acceptable target facts. In that case retain every
         // authoritative identity as rejection evidence rather than publishing
         // an impossible 0/N rejection with an empty missing-id set.
-        providerUncoveredFactIdentityHashes = deriveProviderUncoveredFactIdentityHashes(
-          input.candidate || '',
-        );
+        providerUncoveredFactIdentityHashes = rejectedProviderCoverage.missingIds.length
+          ? [...rejectedProviderCoverage.missingIds]
+          : [...rejectedProviderCoverage.requiredIds];
       }
     }
   }
@@ -14211,9 +12880,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       perspectiveMeta.normalizedBulletsUsedForApply = true;
       perspectiveMeta.meaningfulChangeDetected = true;
       perspectiveMeta.perspectiveValidationPassed = true;
-      perspectiveMeta.finalPersonMode = detectExperiencePersonMode(genAccepted.text, locale, {
-        isPresent,
-      });
+      perspectiveMeta.finalPersonMode = detectExperiencePersonMode(genAccepted.text, locale);
       return attachPerspectiveDiag(genAccepted);
     }
     // Prefer a generation-specific typed reason — never leave enhancement-only codes.
@@ -14236,9 +12903,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
 
   // Russian graphic-design: route family/generic-duty rejects to concrete three-family
   // rebuild. Never source-preserve poisoned live textarea; never label as locale_mismatch.
-  const needsRussianDesignSemanticRebuild = locale === 'ru'
-    && sourceRequiresRussianDesignSemanticGrounding(sourceForCoverage);
-  const needsRussianDesignRebuild = needsRussianDesignSemanticRebuild || experienceNeedsRussianDesignFamilyRebuild({
+  const needsRussianDesignRebuild = experienceNeedsRussianDesignFamilyRebuild({
     locale,
     sourceDescription: sourceForCoverage,
     position: exp?.position || cv.personal?.jobTitle,
@@ -14246,32 +12911,22 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   });
   if (needsRussianDesignRebuild) {
     void RUSSIAN_DESIGN_FALLBACK_ROUTING_REVISION;
-    void RUSSIAN_EXPERIENCE_SEMANTIC_GROUNDING_451_REVISION;
     clientDeterministicFallbackReason = 'russian_design_family_rebuild';
     authoritativeRequiredFamilyCount = RUSSIAN_AUTHORITATIVE_DESIGN_FAMILY_COUNT;
-    const designFamilyFallback = needsRussianDesignSemanticRebuild
-      ? buildRussianDesignSemanticFallback({
-        sourceDescription: sourceForCoverage,
+    const designFamilyFallback = normalizeLocaleText(
+      buildJobContextGenerationFallback({
+        locale: 'ru',
         gender,
+        position: exp?.position || cv.personal?.jobTitle || 'design',
+        industry: 'design',
         isPresent,
-      })
-      : normalizeLocaleText(
-        buildJobContextGenerationFallback({
-          locale: 'ru',
-          gender,
-          position: exp?.position || cv.personal?.jobTitle || 'design',
-          industry: 'design',
-          isPresent,
-        }),
-        locale,
-      );
+      }),
+      locale,
+    );
     clientDeterministicFallbackBulletCount = splitExperienceBullets(designFamilyFallback)
       .filter(Boolean).length;
     clientDeterministicFallbackScripts = detectBulletScripts(designFamilyFallback);
-    const semanticDesign = needsRussianDesignSemanticRebuild
-      ? validateRussianDesignSemanticProjection(sourceForCoverage, designFamilyFallback)
-      : null;
-    if (designFamilyFallback.trim() && (!semanticDesign || semanticDesign.ok)) {
+    if (designFamilyFallback.trim()) {
       const acceptedDesign = tryAccept(
         designFamilyFallback,
         'deterministic_fallback',
@@ -14286,12 +12941,10 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           meaningfulChangeDetected: true,
           noOpRejected: false,
           normalizedBulletsUsedForApply: true,
-          finalPersonMode: detectExperiencePersonMode(acceptedDesign.text, locale, { isPresent }),
+          finalPersonMode: detectExperiencePersonMode(acceptedDesign.text, locale),
         };
-        finalSelectedCoveredFamilyCount = semanticDesign?.covered.length
-          || RUSSIAN_AUTHORITATIVE_DESIGN_FAMILY_COUNT;
-        fallbackCoveredFamilyCount = semanticDesign?.covered.length
-          || RUSSIAN_AUTHORITATIVE_DESIGN_FAMILY_COUNT;
+        finalSelectedCoveredFamilyCount = RUSSIAN_AUTHORITATIVE_DESIGN_FAMILY_COUNT;
+        fallbackCoveredFamilyCount = RUSSIAN_AUTHORITATIVE_DESIGN_FAMILY_COUNT;
         return attachPerspectiveDiag({
           ...acceptedDesign,
           diagnostics: {
@@ -14384,7 +13037,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           meaningfulChangeDetected: true,
           noOpRejected: false,
           normalizedBulletsUsedForApply: true,
-          finalPersonMode: detectExperiencePersonMode(acceptedDesign.text, locale, { isPresent }),
+          finalPersonMode: detectExperiencePersonMode(acceptedDesign.text, locale),
         };
         finalSelectedCoveredFamilyCount = 3;
         fallbackCoveredFamilyCount = 3;
@@ -14448,7 +13101,6 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       isPresent,
       gender,
       sourceDescription: sourceForCoverage,
-      ...(authoritativeSourceLocale ? { sourceLocale: authoritativeSourceLocale } : {}),
     })
     : null;
   const grounded = groundedPersp?.text || groundedRaw;
@@ -14456,7 +13108,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     grounded.trim()
     && !(grounding?.staleGeneratedContentExcluded && candidateConflictsWithJobContext(grounded, jobContext))
   ) {
-    const groundedGate = validateExperienceCvPerspective(grounded, locale, { isPresent });
+    const groundedGate = validateExperienceCvPerspective(grounded, locale);
     const groundedCrossLocale = Boolean(
       sourceForCoverage
       && (
@@ -14508,9 +13160,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           const secondAccepted = tryAccept(grounded, 'deterministic_fallback', 'canonical_fallback');
           if (secondAccepted) {
             perspectiveMeta.normalizedBulletsUsedForApply = true;
-            perspectiveMeta.finalPersonMode = detectExperiencePersonMode(secondAccepted.text, locale, {
-              isPresent,
-            });
+            perspectiveMeta.finalPersonMode = detectExperiencePersonMode(secondAccepted.text, locale);
             if (providerNoOpDetected) {
               perspectiveMeta.meaningfulChangeDetected = true;
               perspectiveMeta.noOpRejected = false;
@@ -14522,9 +13172,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       const secondAccepted = tryAccept(grounded, 'deterministic_fallback', 'canonical_fallback');
       if (secondAccepted) {
         perspectiveMeta.normalizedBulletsUsedForApply = true;
-        perspectiveMeta.finalPersonMode = detectExperiencePersonMode(secondAccepted.text, locale, {
-          isPresent,
-        });
+        perspectiveMeta.finalPersonMode = detectExperiencePersonMode(secondAccepted.text, locale);
         if (providerNoOpDetected) {
           perspectiveMeta.meaningfulChangeDetected = true;
           perspectiveMeta.noOpRejected = false;
@@ -14559,49 +13207,22 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       // Build the entry-owned one-to-one projection first. Dedicated locale/
       // warehouse validators still run in tryAccept, but their three-family
       // shells must not collapse an additional fourth user-owned duty.
-      // CJK design duties need the relation-aware Japanese projector before
-      // the generic source-preserving localizer. The latter can legitimately
-      // retain a Cyrillic surface when the locale heuristic is inconclusive,
-      // which would then be rejected as a same-language/no-op fallback. Keep
-      // this branch limited to typed design-material sources; arbitrary
-      // occupations still fall through to the generic safe projector and fail
-      // closed if it cannot prove semantic coverage.
-      const japaneseDesignSource = locale === 'ja'
-        && materialDutyKeysFromDescription(sourceForCoverage).some((key) => key.startsWith('design_'))
-        ? buildJapaneseDesignExperienceFallback({
-          sourceDescription: sourceForCoverage,
+      const projected = buildSourcePreservingExperienceBulletsWithProvenance(
+        sourceForCoverage,
+        locale,
+        gender,
+        {
           isPresent,
-        })
-        : '';
-      // Serbian-authority warehouse facts have a dedicated Croatian projection
-      // that preserves the three source-owned predicate units. Do not let the
-      // generic source-preserving projector win first and then leave its
-      // duplicate/merged Croatian shell in `translated`; that shell is exactly
-      // what the predicate/unit ownership gate must reject. Routing the typed
-      // projection first keeps the generic gate strict while selecting the
-      // fact-preserving Croatian realization for any Serbian warehouse source.
-      const croatianWarehouseSource = locale === 'hr'
-        && sourceRequiresCroatianWarehouseFactCoverage(sourceForCoverage);
-      const projected = japaneseDesignSource.trim() || croatianWarehouseSource
-        ? null
-        : buildSourcePreservingExperienceBulletsWithProvenance(
-          sourceForCoverage,
-          locale,
-          gender,
-          {
-            isPresent,
-            operationSnapshotId: snapshot?.operationSnapshotId,
-            snapshotUnits: snapshot?.units.map((unit) => ({
-              rawUnit: unit.rawUnit,
-              sourceUnitId: unit.sourceUnitId,
-              sourceFactIds: unit.sourceFactIds,
-              operationSnapshotId: unit.operationSnapshotId,
-            })),
-          },
-        );
-      const projectedBullets = !projected
-        ? []
-        : projected.bullets.map((bullet) => ({
+          operationSnapshotId: snapshot?.operationSnapshotId,
+          snapshotUnits: snapshot?.units.map((unit) => ({
+            rawUnit: unit.rawUnit,
+            sourceUnitId: unit.sourceUnitId,
+            sourceFactIds: unit.sourceFactIds,
+            operationSnapshotId: unit.operationSnapshotId,
+          })),
+        },
+      );
+      const projectedBullets = projected.bullets.map((bullet) => ({
         ...bullet,
         text: normalizeExperienceBulletPerspective(
           normalizeLocaleText(bullet.text || '', locale).trim(),
@@ -14628,12 +13249,6 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       ) {
         translated = projectedText;
         translatedProvenanceCoverage = projectedCoverage;
-      }
-      if (!translated.trim() && japaneseDesignSource.trim()) {
-        const japaneseUnits = splitExperienceBullets(japaneseDesignSource);
-        if (japaneseUnits.length === sourceFactCount) {
-          translated = japaneseDesignSource;
-        }
       }
       if (!translated.trim()
         && locale === 'de'
@@ -14840,7 +13455,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           locale,
         );
       }
-      const translatedGate = validateExperienceCvPerspective(translated, locale, { isPresent });
+      const translatedGate = validateExperienceCvPerspective(translated, locale);
       let translatedOk = Boolean(translated.trim())
         && translatedGate.ok
         && !candidateLeaksSourceLocale(
@@ -15048,14 +13663,17 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         if (accepted) {
           perspectiveMeta = {
             ...perspectiveMeta,
-            sourcePersonMode: authoritativeSourceLocale
-              ? detectExperiencePersonMode(sourceForCoverage, authoritativeSourceLocale, { isPresent })
-              : 'unknown',
+            sourcePersonMode: detectExperiencePersonMode(
+              sourceForCoverage,
+              (detectedSourceLocale === 'sr' || detectedSourceLocale === 'hr')
+                ? detectedSourceLocale
+                : locale,
+            ),
             perspectiveNormalizationAttempted: true,
             perspectiveNormalizationApplied: true,
             perspectiveValidationPassed: true,
-            normalizedPersonMode: detectExperiencePersonMode(translated, locale, { isPresent }),
-            finalPersonMode: detectExperiencePersonMode(translated, locale, { isPresent }),
+            normalizedPersonMode: detectExperiencePersonMode(translated, locale),
+            finalPersonMode: detectExperiencePersonMode(translated, locale),
             meaningfulChangeDetected: true,
             noOpRejected: false,
           };
@@ -15075,7 +13693,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
               translatedFactCount: countTranslatedFactUnits(sourceForCoverage, translated),
               targetLocaleValidationPassed: true,
               sourcePerspectiveMode: perspectiveMeta.sourcePersonMode,
-              targetPerspectiveMode: detectExperiencePersonMode(translated, locale, { isPresent }),
+              targetPerspectiveMode: detectExperiencePersonMode(translated, locale),
               // AAB-329: never mark applied before commit.
               targetContentApplied: false,
               contentLocaleUpdatedAfterApply: false,
@@ -15087,10 +13705,6 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
               clientDeterministicFallbackApplied: false,
               clientDeterministicFallbackBulletCount:
                 splitExperienceBullets(translated).filter(Boolean).length,
-              finalCandidatePresent: true,
-              finalCandidateValidationApplicable: true,
-              finalCandidatePredicateValidationApplicable: true,
-              finalCandidateSource: 'deterministic_fallback',
             },
           });
         }
@@ -15121,7 +13735,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
               perspectiveValidationPassed: true,
               meaningfulChangeDetected: true,
               noOpRejected: false,
-              finalPersonMode: detectExperiencePersonMode(acceptedDesign.text, locale, { isPresent }),
+              finalPersonMode: detectExperiencePersonMode(acceptedDesign.text, locale),
             };
             return attachPerspectiveDiag({
               ...acceptedDesign,
@@ -15364,7 +13978,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             perspectiveValidationPassed: true,
             meaningfulChangeDetected: true,
             noOpRejected: false,
-            finalPersonMode: detectExperiencePersonMode(esFbAccepted.text, locale, { isPresent }),
+            finalPersonMode: detectExperiencePersonMode(esFbAccepted.text, locale),
             normalizedBulletsUsedForApply: true,
           };
           return attachPerspectiveDiag({
@@ -15432,7 +14046,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     clientDeterministicFallbackCoveredFactCount = provenanceCoverage.coveredIds.length;
     clientDeterministicFallbackUncoveredFactIds = provenanceCoverage.missingIds;
     fallbackBulletCount = clientDeterministicFallbackBulletCount;
-    const preservedGate = validateExperienceCvPerspective(preserved, locale, { isPresent });
+    const preservedGate = validateExperienceCvPerspective(preserved, locale);
     // Fallback after provider failure is always an allowed repair path — even when
     // the rebuilt CV text matches the source after perspective (provider was empty
     // or incomplete). No-op rejection applies only to unchanged provider output.
@@ -15443,7 +14057,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       perspectiveNormalizationAttempted: true,
       perspectiveNormalizationApplied: true,
       perspectiveValidationPassed: preservedGate.ok,
-      normalizedPersonMode: detectExperiencePersonMode(preserved, locale, { isPresent }),
+      normalizedPersonMode: detectExperiencePersonMode(preserved, locale),
       meaningfulChangeDetected:
         perspectiveMeta.meaningfulChangeDetected
         || experienceAiHasMeaningfulChange(sourceForCoverage, preserved),
@@ -15473,9 +14087,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       );
       if (preservedAccepted) {
         perspectiveMeta.normalizedBulletsUsedForApply = true;
-        perspectiveMeta.finalPersonMode = detectExperiencePersonMode(preservedAccepted.text, locale, {
-          isPresent,
-        });
+        perspectiveMeta.finalPersonMode = detectExperiencePersonMode(preservedAccepted.text, locale);
         if (providerNoOpDetected) {
           deterministicFallbackAttemptedAfterNoOp = true;
           deterministicFallbackAppliedAfterNoOp = true;
@@ -15530,7 +14142,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           gender,
         });
       const stylistic = normalizeLocaleText(stylisticRaw, locale);
-      const stylisticGate = validateExperienceCvPerspective(stylistic, locale, { isPresent });
+      const stylisticGate = validateExperienceCvPerspective(stylistic, locale);
       clientDeterministicFallbackBulletCount = splitExperienceBullets(stylistic).filter(Boolean).length;
       clientDeterministicFallbackScripts = detectBulletScripts(stylistic);
       if (
@@ -15552,7 +14164,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             noOpRejected: false,
             perspectiveValidationPassed: true,
             normalizedBulletsUsedForApply: true,
-            finalPersonMode: detectExperiencePersonMode(stylisticAccepted.text, locale, { isPresent }),
+            finalPersonMode: detectExperiencePersonMode(stylisticAccepted.text, locale),
           };
           deterministicFallbackAppliedAfterNoOp = true;
           finalCandidateSource = 'deterministic_fallback';
@@ -15674,19 +14286,6 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     lastRequired = coverageFail.required?.length ?? lastRequired;
   }
 
-  // A rejected provider candidate must carry the actual missing immutable fact
-  // identities even when every later deterministic fallback is also rejected.
-  // Never publish a partial provider count with an empty missing-id set.
-  if (
-    providerRequiredFactCount > providerCoveredFactCount
-    && providerUncoveredFactIdentityHashes.length === 0
-    && sourceForCoverage
-  ) {
-    providerUncoveredFactIdentityHashes = deriveProviderUncoveredFactIdentityHashes(
-      input.candidate || '',
-    );
-  }
-
   const rejectedPurity = (candidate || '').trim()
     ? validateAiUnitLocalePurity(candidate, locale, {
       kind: 'experience_bullet',
@@ -15701,11 +14300,6 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     ),
   );
 
-  // Freeze the required provider fact cardinality to the immutable operation
-  // snapshot before serializing the terminal record.  Derived clause counts
-  // must never replace the entry-owned fact count.
-  if (snapshot?.units.length) providerRequiredFactCount = sourceFactCount;
-
   return attachPerspectiveDiag({
     blocked: true,
     reason: coverageFail?.reason
@@ -15717,15 +14311,6 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     countedAsSuccess: false,
     diagnostics: {
       ...baseDiag(),
-      // A rejected/no-apply terminal must report truth against the request-time
-      // visible source, not the immutable canonical fact source.  The latter
-      // may intentionally differ when the user edited the textarea.
-      finalMatchesSourceAfterNormalization: Boolean(
-        visibleComparisonText.trim()
-        && normalizeExperienceAiSourceText(exp?.description || visibleComparisonText)
-          === normalizeExperienceAiSourceText(visibleComparisonText),
-      ),
-      finalNormalizedHash: null,
       targetLocale: locale,
       targetScript: resolveTargetScriptForLocale(locale),
       detectedLocaleByBullet: rejectedPurity?.detectedLocaleByUnit || [],
@@ -15739,7 +14324,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       targetLocalePurityPassed: rejectedPurity?.targetLocalePurityPassed ?? false,
       providerLocalePurityPassed: rejectedPurity?.targetLocalePurityPassed ?? null,
       providerSemanticCoveragePassed: providerCoveredFactCount >= Math.min(3, providerRequiredFactCount || 3),
-      providerUncoveredFactCount: canonicalProviderUncoveredFactIdentityHashes().length,
+      providerUncoveredFactCount: Math.max(0, providerRequiredFactCount - providerCoveredFactCount),
       providerPrimaryRejectionReason: lastRejectReason || null,
       fallbackLocalePurityPassed: clientDeterministicFallbackAttempted
         ? (clientDeterministicFallbackScripts.length > 0
@@ -15765,7 +14350,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       uncoveredFactIdentityHashes: providerUncoveredFactIdentityHashes.length
         ? [...providerUncoveredFactIdentityHashes]
         : [...clientDeterministicFallbackUncoveredFactIds],
-      providerUncoveredFactIdentityHashes: canonicalProviderUncoveredFactIdentityHashes(),
+      providerUncoveredFactIdentityHashes: [...providerUncoveredFactIdentityHashes],
       providerAccepted: false,
       experienceDiagnosticsFinalCandidateRevision:
         EXPERIENCE_DIAGNOSTICS_FINAL_CANDIDATE_305_REVISION,

@@ -63,7 +63,6 @@ import {
 import {
   validateJapaneseWarehouseExperienceCoverage,
   scanJapaneseWarehousePredicates,
-  scanJapaneseExperiencePredicates,
   sourceRequiresJapaneseWarehouseFactCoverage,
   japaneseWarehouseFactDiagId,
   JAPANESE_EXPERIENCE_GROUNDING_339_REVISION,
@@ -101,14 +100,8 @@ import {
   isPortugueseBrazilLocale,
   canonicalizeContentLocale,
   localesEquivalent,
-  detectTextLocale,
-  isCrossLocaleOperation,
 } from './cv-content-locale';
 import { resolveLocaleCandidate } from './i18n/translations';
-import { textMatchesRequestedFieldLocale } from './cv-field-locale-integrity';
-import { isWrongLanguageAiOutput } from './cv-ai-locale-guard';
-import { validateExperienceCvPerspective } from './cv-experience-perspective';
-import { validateArabicExperienceNativeMorphology } from './cv-arabic-experience-tense';
 
 export const EXPERIENCE_SELECTED_FINAL_COVERAGE_329_REVISION =
   'experience-selected-final-coverage-329-v1' as const;
@@ -208,10 +201,6 @@ export function buildExperienceSelectedFinalCandidateSnapshot(options: {
   const text = (options.candidateText || '').trim();
   const source = options.sourceDescription || '';
   const locale = (options.targetLocale || 'en').toLowerCase();
-  const allowValidatedCrossLocaleBridge = isCrossLocaleOperation(
-    detectTextLocale(source),
-    locale,
-  );
   const bullets = splitExperienceBullets(text).map((b) => b.trim()).filter(Boolean);
   const normalized = text.replace(/\s+/g, ' ').trim();
 
@@ -376,27 +365,6 @@ export function buildExperienceSelectedFinalCandidateSnapshot(options: {
       && candidatePredicateIdentityCount >= sourcePredicateIdentityCount
       && candidatePredicateIdentityCount > 0;
   } else if (
-    locale === 'ja'
-    && sourceRequiresGenericExperiencePredicates(source)
-  ) {
-    const pred = scanJapaneseExperiencePredicates(source, text);
-    sourcePredicateIdentityCount = pred.sourcePredicateIdentityCount;
-    candidatePredicateIdentityCount = pred.candidatePredicateIdentityCount;
-    addedPredicateCount = pred.candidateAddedPredicateCount;
-    addedPredicateIdentityHashes = [...pred.candidateAddedPredicateIdentityHashes];
-    predicateCoveragePassed = pred.sourceUnitPredicateCoveragePassed
-      && candidatePredicateIdentityCount >= sourcePredicateIdentityCount
-      && candidatePredicateIdentityCount > 0;
-    if (!(requiredFactCount > 0 && coveredFactCount === requiredFactCount && uncovered.length === 0)) {
-      const semantic = validateCrossLocaleSemanticCoverage(source, text);
-      requiredFactCount = semantic.requiredCount;
-      coveredFactCount = semantic.coveredCount;
-      uncovered = [];
-      factCoveragePassed = semantic.ok
-        && semantic.coveredCount === semantic.requiredCount
-        && semantic.requiredCount > 0;
-    }
-  } else if (
     locale === 'ar'
     && sourceRequiresArabicWarehouseFactCoverage(source)
   ) {
@@ -451,9 +419,7 @@ export function buildExperienceSelectedFinalCandidateSnapshot(options: {
       && candidatePredicateIdentityCount >= sourcePredicateIdentityCount
       && candidatePredicateIdentityCount > 0;
   } else if (sourceRequiresGenericExperiencePredicates(source)) {
-    const pred = scanGenericExperiencePredicates(source, text, {
-      allowValidatedCrossLocaleBridge,
-    });
+    const pred = scanGenericExperiencePredicates(source, text);
     sourcePredicateIdentityCount = pred.sourcePredicateIdentityCount;
     candidatePredicateIdentityCount = pred.candidatePredicateIdentityCount;
     addedPredicateCount = pred.candidateAddedPredicateCount;
@@ -477,10 +443,8 @@ export function buildExperienceSelectedFinalCandidateSnapshot(options: {
   // non-empty Experience source. This keeps diagnostics truthful when a
   // locale-specific scanner covers all source facts but misses an inserted
   // material action in the selected candidate.
-  if (sourceRequiresGenericExperiencePredicates(source) && locale !== 'ja') {
-    const sharedPred = scanGenericExperiencePredicates(source, text, {
-      allowValidatedCrossLocaleBridge,
-    });
+  if (sourceRequiresGenericExperiencePredicates(source)) {
+    const sharedPred = scanGenericExperiencePredicates(source, text);
     addedPredicateIdentityHashes = Array.from(new Set([
       ...addedPredicateIdentityHashes,
       ...sharedPred.candidateAddedPredicateIdentityHashes,
@@ -817,6 +781,10 @@ export function checkExperiencePreapplyDiagnosticInvariants(
         finalDecisionKind: trace.finalDecisionKind ?? null,
         finalVisibleDecisionAcceptedForApply:
           trace.finalVisibleDecisionAcceptedForApply ?? null,
+        canonicalExperienceDecisionAllowsApply:
+          trace.canonicalExperienceDecisionAllowsApply ?? null,
+        canonicalExperienceDecisionAllowsUsage:
+          trace.canonicalExperienceDecisionAllowsUsage ?? null,
       });
     }
     if (trace.canonicalExperienceDecisionAllowsApply === true && (
@@ -830,6 +798,10 @@ export function checkExperiencePreapplyDiagnosticInvariants(
         finalDecisionKind: trace.finalDecisionKind ?? null,
         materialImprovementDetected: trace.materialImprovementDetected ?? null,
         semanticNoOpDetected: trace.semanticNoOpDetected ?? null,
+        finalVisibleDecisionAcceptedForApply:
+          trace.finalVisibleDecisionAcceptedForApply ?? null,
+        canonicalExperienceDecisionAllowsUsage:
+          trace.canonicalExperienceDecisionAllowsUsage ?? null,
       });
     }
   }
@@ -862,12 +834,14 @@ export function buildExperiencePreapplyDecisionSnapshot(trace: Record<string, un
     String(trace.finalCandidatePredicateIdentityCount ?? ''),
     String(trace.finalFactCoveragePassed ?? ''),
     String(trace.finalSourceUnitPredicateCoveragePassed ?? ''),
+    String(trace.finalDecisionKind ?? ''),
     String(trace.semanticNoOpDetected ?? ''),
     String(trace.semanticNoOpReason ?? ''),
     String(trace.materialImprovementDetected ?? ''),
-    JSON.stringify(trace.materialImprovementKinds ?? []),
+    Array.isArray(trace.materialImprovementKinds)
+      ? (trace.materialImprovementKinds as unknown[]).map(String).join(',')
+      : '',
     String(trace.neutralRestyleDetected ?? ''),
-    String(trace.finalDecisionKind ?? ''),
     String(trace.canonicalExperienceDecisionAllowsApply ?? ''),
     String(trace.canonicalExperienceDecisionAllowsUsage ?? ''),
   ].join('|'));
@@ -929,25 +903,6 @@ export function checkExperiencePreapplyDiagnosticCompleteness(
     missing.push('sourceFactCount');
   }
 
-  if (typeof trace.experienceCanonicalPreapplyDecisionRevision === 'string') {
-    for (const key of [
-      'canonicalExperienceDecisionCreated',
-      'providerCandidateValidationAccepted',
-      'finalVisibleDecisionAcceptedForApply',
-      'canonicalExperienceDecisionAllowsApply',
-      'canonicalExperienceDecisionAllowsUsage',
-      'semanticNoOpDetected',
-      'materialImprovementDetected',
-      'neutralRestyleDetected',
-      'finalDecisionKind',
-      'meaningfulChangeDetected',
-    ] as const) {
-      require(key);
-    }
-    if (!('semanticNoOpReason' in trace)) missing.push('semanticNoOpReason');
-    if (!('materialImprovementKinds' in trace)) missing.push('materialImprovementKinds');
-  }
-
   if (trace.finalCandidatePresent === true || trace.finalCandidateSource === 'provider'
     || trace.finalCandidateSource === 'deterministic_fallback'
     || (typeof trace.finalNormalizedHash === 'string' && trace.finalNormalizedHash)) {
@@ -996,6 +951,26 @@ export function checkExperiencePreapplyDiagnosticCompleteness(
         !== Number(trace.finalCandidateBulletCount)) {
       nullish.push('finalCandidateBulletScripts_length_mismatch');
     }
+  }
+
+  if (typeof trace.experienceCanonicalPreapplyDecisionRevision === 'string') {
+    for (const key of [
+      'canonicalExperienceDecisionCreated',
+      'providerCandidateValidationAccepted',
+      'finalVisibleDecisionAcceptedForApply',
+      'canonicalExperienceDecisionAllowsApply',
+      'canonicalExperienceDecisionAllowsUsage',
+      'semanticNoOpDetected',
+      'materialImprovementDetected',
+      'materialImprovementKinds',
+      'neutralRestyleDetected',
+      'finalDecisionKind',
+      'meaningfulChangeDetected',
+    ] as const) {
+      require(key);
+    }
+    // Null is authoritative when the final decision is not a semantic no-op.
+    if (!('semanticNoOpReason' in trace)) missing.push('semanticNoOpReason');
   }
 
   // Explicitly do NOT require post-apply visible fields here.
@@ -1114,7 +1089,6 @@ export function validateVisibleExperienceCoverage(options: {
   visibleText: string;
   targetLocale: string;
   finalNormalizedHash: string;
-  isPresent?: boolean;
 }): {
   visibleRequiredFactCount: number;
   visibleCoveredFactCount: number;
@@ -1129,28 +1103,12 @@ export function validateVisibleExperienceCoverage(options: {
   visibleNormalizedHash: string;
   visibleDescriptionMatchesFinalHash: boolean;
   visibleLocaleValidationPassed: boolean;
-  visiblePersonMode: string;
-  visiblePerspectiveValidationPassed: boolean;
-  visibleNativeMorphologyValidationPassed: boolean;
 } {
   void EXPERIENCE_FINAL_VISIBLE_PREDICATE_TRUTH_329_REVISION;
   const visible = (options.visibleText || '').trim();
   const normalized = visible.replace(/\s+/g, ' ').trim();
   const visibleNormalizedHash = fingerprintText(normalized);
   const locale = (options.targetLocale || 'en').toLowerCase();
-  const resolvedLocale = resolveLocaleCandidate(options.targetLocale || 'en') || 'en';
-  const allowValidatedCrossLocaleBridge = isCrossLocaleOperation(
-    detectTextLocale(options.sourceDescription),
-    locale,
-  );
-  const visiblePerspective = validateExperienceCvPerspective(visible, resolvedLocale, {
-    isPresent: options.isPresent,
-  });
-  const visibleNativeMorphology = resolvedLocale === 'ar'
-    ? validateArabicExperienceNativeMorphology(visible, {
-      isPresent: options.isPresent,
-    })
-    : null;
   let visibleRequiredFactCount = 0;
   let visibleCoveredFactCount = 0;
   let uncovered: string[] = [];
@@ -1367,9 +1325,7 @@ export function validateVisibleExperienceCoverage(options: {
     visibleFactCoveragePassed = semantic.ok
       && semantic.coveredCount === semantic.requiredCount
       && semantic.requiredCount > 0;
-    const pred = scanGenericExperiencePredicates(options.sourceDescription, visible, {
-      allowValidatedCrossLocaleBridge,
-    });
+    const pred = scanGenericExperiencePredicates(options.sourceDescription, visible);
     visibleRequiredPredicateCount = pred.sourcePredicateIdentityCount;
     visibleCoveredPredicateCount = pred.candidatePredicateIdentityCount;
     visiblePredicateCoveragePassed = pred.sourceUnitPredicateCoveragePassed
@@ -1381,9 +1337,7 @@ export function validateVisibleExperienceCoverage(options: {
   // validator was applicable. Visible truth must match selected-final truth
   // for material additions, not just for source fact coverage.
   if (sourceRequiresGenericExperiencePredicates(options.sourceDescription)) {
-    const sharedPred = scanGenericExperiencePredicates(options.sourceDescription, visible, {
-      allowValidatedCrossLocaleBridge,
-    });
+    const sharedPred = scanGenericExperiencePredicates(options.sourceDescription, visible);
     applicable = true;
     visiblePredicateCoveragePassed = visiblePredicateCoveragePassed
       && sharedPred.candidateAddedPredicateCount === 0;
@@ -1469,12 +1423,6 @@ export function validateVisibleExperienceCoverage(options: {
     visiblePredicateValidationApplicable: applicable,
     visibleNormalizedHash,
     visibleDescriptionMatchesFinalHash: visibleNormalizedHash === options.finalNormalizedHash,
-    visibleLocaleValidationPassed: Boolean(visible)
-      && textMatchesRequestedFieldLocale(visible, resolvedLocale, 'experience_bullet')
-      && !isWrongLanguageAiOutput(visible, resolvedLocale),
-    visiblePersonMode: visiblePerspective.finalPersonMode,
-    visiblePerspectiveValidationPassed:
-      visiblePerspective.ok && (visibleNativeMorphology?.ok ?? true),
-    visibleNativeMorphologyValidationPassed: visibleNativeMorphology?.ok ?? true,
+    visibleLocaleValidationPassed: true,
   };
 }

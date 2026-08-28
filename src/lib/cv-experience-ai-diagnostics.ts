@@ -23,7 +23,6 @@ import {
   EXPERIENCE_PREFLIGHT_BUILD_METADATA_318_REVISION,
   EXPERIENCE_PROVIDER_NOT_ATTEMPTED_TRUTH_318_REVISION,
   EXPERIENCE_TERMINAL_DIAGNOSTIC_CONSISTENCY_318_REVISION,
-  EXPERIENCE_TRUE_TERMINAL_CLEAN_NOOP_448_REVISION,
   EXPERIENCE_CLEAN_NOOP_STAGE_PLAN,
   buildExperienceCleanNoOpTerminalFields,
 } from './cv-experience-terminal-outcome';
@@ -72,7 +71,6 @@ void EXPERIENCE_CLEAN_NOOP_TERMINAL_OUTCOME_318_REVISION;
 void EXPERIENCE_PREFLIGHT_BUILD_METADATA_318_REVISION;
 void EXPERIENCE_PROVIDER_NOT_ATTEMPTED_TRUTH_318_REVISION;
 void EXPERIENCE_TERMINAL_DIAGNOSTIC_CONSISTENCY_318_REVISION;
-void EXPERIENCE_TRUE_TERMINAL_CLEAN_NOOP_448_REVISION;
 void EXPERIENCE_FACT_AUTHORITY_TRUTH_327_REVISION;
 void EXPERIENCE_PHASE_LOCALE_TRUTH_328_REVISION;
 void EXPERIENCE_REJECTION_LINEAGE_TRUTH_328_REVISION;
@@ -113,14 +111,6 @@ void EXPERIENCE_AI_DIAG_MARKER;
 
 export const EXPERIENCE_AI_TRACE_SCHEMA_VERSION = 1 as const;
 export const EXPERIENCE_AI_DIAG_STORAGE_KEY = EXPERIENCE_AI_DIAG_STORAGE_KEY_CANON;
-/**
- * The terminal apply/usage outcome is emitted only after the visible apply path
- * has decided whether the Pro usage ledger is incremented.  Keep this separate
- * from finalize-time eligibility: a successful final candidate is not billable
- * until its visible write is committed.
- */
-export const EXPERIENCE_TERMINAL_USAGE_TRUTH_433_REVISION =
-  'experience-terminal-usage-truth-433-v1';
 
 /**
  * Marker / UI strings for Experience AI diagnostics live only in
@@ -163,7 +153,6 @@ export type ExperienceAiDiagStageName =
   | 'visible_predicate_validation'
   | 'visible_locale_validation'
   | 'visible_tense_validation'
-  | 'visible_perspective_validation'
   | 'visible_hash_validation'
   | 'postapply_invariant_gate'
   | 'postapply_completeness_gate'
@@ -270,9 +259,6 @@ export type ExperienceAiDiagnosticTrace = {
   entryGeneratedLocaleBeforeApply?: string | null;
   visibleLocaleMetadataMismatchRecorded?: boolean | null;
   detectedVisibleTextLocale?: string | null;
-  visibleLocaleAuthorityKind?: string | null;
-  rawDetectorDisagreesWithTrustedLocale?: boolean | null;
-  cleanNoOpTerminalized?: boolean;
   persistedGeneratedLocaleForVisibleMismatch?: string | null;
   contentLocaleDocument?: string | null;
   appliedVisibleContentLocale?: string | null;
@@ -337,11 +323,7 @@ export type ExperienceAiDiagnosticTrace = {
   apiHostClass: ExperienceApiHostClass;
   providerHttpStatus: number | null;
   providerResponseKind: 'provider' | 'repair' | 'fallback' | 'error' | 'empty' | 'unknown' | 'not_attempted';
-  /** API returned a server-validated repair, distinct from client no-op repair. */
-  serverRepairAttempted: boolean;
-  serverRepairSelected: boolean;
-  serverRepairSource: 'api_server_repair' | null;
-  providerBulletCount: number | null;
+  providerBulletCount: number;
   providerBulletScripts: ExperienceScriptClass[];
   providerLocaleValidationReason: string | null;
   requiredFactCount: number;
@@ -350,25 +332,14 @@ export type ExperienceAiDiagnosticTrace = {
   /** Provider-candidate coverage (retained after fallback; never overwritten by final). */
   providerRequiredFactCount?: number | null;
   providerCoveredFactCount?: number | null;
-  providerUncoveredFactCount?: number | null;
   providerUncoveredFactIdentityHashes?: string[];
   providerAccepted?: boolean | null;
   providerRejectionStage?: string | null;
   providerRejectionReasons?: string[];
-  /** False when no provider candidate existed; provider coverage is N/A. */
-  providerValidationApplicable?: boolean | null;
   providerUnsupportedClaimCount?: number | null;
   providerUnsupportedClaimKinds?: string[];
   /** Final-selected candidate hash after successful apply. */
   finalNormalizedHash?: string | null;
-  russianSourceOwnedProjectionAttempted?: boolean;
-  russianSourceOwnedSemanticFactCount?: number | null;
-  russianSourceOwnedProjectionHash?: string | null;
-  russianSourceOwnedProjectionValidationPassed?: boolean | null;
-  russianSourceOwnedProjectionSelected?: boolean | null;
-  russianFallbackHashEnteringFinalizer?: string | null;
-  russianPostNormalizationHash?: string | null;
-  russianFinalSelectedHash?: string | null;
   experienceDiagnosticsFinalCandidateRevision?: string | null;
   /** Candidate lineage: provider / fallback / final_selected (hashes only). */
   candidateLineage?: Array<{
@@ -382,7 +353,7 @@ export type ExperienceAiDiagnosticTrace = {
     coverageRequiredCount?: number | null;
     coverageCoveredCount?: number | null;
     uncoveredFactIdentityHashes?: string[];
-    unsupportedClaimCount?: number | null;
+    unsupportedClaimCount?: number;
     unsupportedClaimKinds?: string[];
     rejectionStage?: string | null;
     rejectionReasons?: string[];
@@ -402,13 +373,6 @@ export type ExperienceAiDiagnosticTrace = {
   perspectiveNormalizationAttempted: boolean;
   perspectiveNormalizationApplied: boolean;
   perspectiveValidationPassed: boolean | null;
-  targetPersonMode: string | null;
-  targetGender: string | null;
-  arabicMorphologyTransformationAttempted: boolean;
-  arabicMorphologyTransformationApplied: boolean;
-  arabicMorphologyTransformationClasses: string[];
-  arabicNativeMorphologyValidationPassed: boolean | null;
-  arabicNativeMorphologyRejectionReason: string | null;
   normalizedBulletsUsedForApply: boolean;
   finalMatchesProviderOutput: boolean;
   finalMatchesSourceAfterNormalization: boolean;
@@ -459,11 +423,6 @@ export type ExperienceAiDiagnosticTrace = {
   providerCandidateAddedPredicateIdentityHashes: string[];
   providerCoordinatedPredicateExpansionDetected: boolean;
   providerSourceUnitPredicateCoveragePassed: boolean | null;
-  /** False means provider-phase predicate evidence is intentionally N/A. */
-  providerPredicateValidationApplicable: boolean | null;
-  /** Provider-phase locale/semantic evidence is N/A when the server rejected before validation. */
-  providerLocalePurityPassed: boolean | null;
-  providerSemanticCoveragePassed: boolean | null;
   repairCandidatePredicateIdentityCount: number;
   repairCoordinatedPredicateExpansionDetected: boolean;
   repairSourceUnitPredicateCoveragePassed: boolean | null;
@@ -486,17 +445,6 @@ export type ExperienceAiDiagnosticTrace = {
   earlyNoOpPreflightEvaluated?: boolean | null;
   uneditedRerunDetected?: boolean | null;
   providerAttempted?: boolean | null;
-  /** AAB-441 bounded recovery after a rejected provider/validation response. */
-  recoveryAttempted?: boolean | null;
-  recoveryHttpStatus?: number | null;
-  recoveryCandidatePresent?: boolean | null;
-  recoveryAccepted?: boolean | null;
-  recoveryRejectionReasons?: string[] | null;
-  recoverySelected?: boolean | null;
-  /** Hash-only recovery candidate metadata; never raw server/provider prose. */
-  recoveryCandidateHash?: string | null;
-  recoveryCandidateUnitCount?: number | null;
-  recoveryCandidateUnitHashes?: string[];
   finalOutcomeReason?: string | null;
   finalCandidatePresent?: boolean | null;
   finalCandidatePredicateValidationApplicable?: boolean | null;
@@ -524,20 +472,6 @@ export type ExperienceAiDiagnosticTrace = {
   rollbackAttempted?: boolean | null;
   rollbackSucceeded?: boolean | null;
   applyCommitted?: boolean | null;
-  /** AAB-414 transaction-owned Experience write/readback lifecycle. */
-  experienceApplyOperationSourceHash?: string | null;
-  experienceApplySelectedFinalHash?: string | null;
-  experienceApplyCvRefHashBeforeWrite?: string | null;
-  experienceApplyFormHashBeforeWrite?: string | null;
-  experienceApplyTransactionWrittenHash?: string | null;
-  experienceApplyCvRefHashImmediatelyAfterWrite?: string | null;
-  experienceApplyTransactionEntryIdHash?: string | null;
-  experienceApplyOperationIdHash?: string | null;
-  experienceApplyOwnershipPassed?: boolean | null;
-  experienceApplyActualRaceDetected?: boolean | null;
-  experienceApplyActualRaceReason?: string | null;
-  experienceApplyPostWriteReadSource?: string | null;
-  experienceApplyFailureKind?: string | null;
   attemptedApplyExperienceEntryIdHash?: string | null;
   attemptedApplyEmploymentState?: string | null;
   attemptedApplyCandidateHash?: string | null;
@@ -580,7 +514,6 @@ export type ExperienceAiDiagnosticTrace = {
   visibleNormalizedHash?: string | null;
   visibleLocaleValidationPassed?: boolean | null;
   visibleTenseValidationPassed?: boolean | null;
-  visiblePersonMode?: string | null;
   visiblePerspectiveValidationPassed?: boolean | null;
   visibleAppliedEntryIdHash?: string | null;
   experienceSelectedFinalCoverageRevision?: string | null;
@@ -591,7 +524,6 @@ export type ExperienceAiDiagnosticTrace = {
   raceGuardApplicable?: boolean | null;
   shouldIncrementUsage?: boolean | null;
   usageIncrementAttempted?: boolean | null;
-  experienceTerminalUsageTruthRevision?: string | null;
   sourceTenseMismatchCount?: number | null;
   sourceTenseValidationPassed?: boolean | null;
   expectedEmploymentTense?: string | null;
@@ -615,12 +547,8 @@ export type ExperienceAiDiagnosticTrace = {
   neutralRestyleDetected: boolean;
   finalDecisionKind: string | null;
   experienceCanonicalPreapplyDecisionRevision: string | null;
-  canonicalExperienceDecisionCreated: boolean | null;
-  /** Primary-provider phase acceptance; distinct from final selected-candidate acceptance. */
-  providerPrimaryCandidateValidationAccepted?: boolean | null;
+  canonicalExperienceDecisionCreated: boolean;
   providerCandidateValidationAccepted: boolean | null;
-  /** Selected-final validation, including deterministic or repair recovery. */
-  finalCandidateValidationAccepted?: boolean | null;
   finalVisibleDecisionAcceptedForApply: boolean | null;
   canonicalExperienceDecisionAllowsApply: boolean | null;
   canonicalExperienceDecisionAllowsUsage: boolean | null;
@@ -1083,9 +1011,6 @@ export type ExperienceAiDiagSessionInput = {
 export class ExperienceAiDiagnosticSession {
   private stages: ExperienceAiDiagStage[] = [];
   private committedTrace: ExperienceAiDiagnosticTrace | null = null;
-  private requestTimeCleanNoOpSnapshot: Readonly<Record<string, unknown>> | null = null;
-  private requestTimeCleanNoOpStages: ReadonlyArray<ExperienceAiDiagStage> | null = null;
-  private requestTimeCleanNoOpLocked = false;
   private draft: Partial<ExperienceAiDiagnosticTrace> & {
     schemaVersion: typeof EXPERIENCE_AI_TRACE_SCHEMA_VERSION;
     capturedAt: string;
@@ -1187,15 +1112,6 @@ export class ExperienceAiDiagnosticSession {
       apiHostClass: classifyApiHostForDiagnostics(),
       providerHttpStatus: null,
       providerResponseKind: 'unknown',
-      recoveryAttempted: false,
-      recoveryHttpStatus: null,
-      recoveryCandidatePresent: false,
-      recoveryAccepted: null,
-      recoveryRejectionReasons: [],
-      recoverySelected: false,
-      serverRepairAttempted: false,
-      serverRepairSelected: false,
-      serverRepairSource: null,
       providerBulletCount: 0,
       providerBulletScripts: [],
       providerLocaleValidationReason: null,
@@ -1213,13 +1129,6 @@ export class ExperienceAiDiagnosticSession {
       perspectiveNormalizationAttempted: false,
       perspectiveNormalizationApplied: false,
       perspectiveValidationPassed: false,
-      targetPersonMode: null,
-      targetGender: null,
-      arabicMorphologyTransformationAttempted: false,
-      arabicMorphologyTransformationApplied: false,
-      arabicMorphologyTransformationClasses: [],
-      arabicNativeMorphologyValidationPassed: null,
-      arabicNativeMorphologyRejectionReason: null,
       normalizedBulletsUsedForApply: false,
       finalMatchesProviderOutput: false,
       finalMatchesSourceAfterNormalization: false,
@@ -1270,9 +1179,6 @@ export class ExperienceAiDiagnosticSession {
       providerCandidateAddedPredicateIdentityHashes: [],
       providerCoordinatedPredicateExpansionDetected: false,
       providerSourceUnitPredicateCoveragePassed: null,
-      providerPredicateValidationApplicable: null,
-      providerLocalePurityPassed: null,
-      providerSemanticCoveragePassed: null,
       repairCandidatePredicateIdentityCount: 0,
       repairCoordinatedPredicateExpansionDetected: false,
       repairSourceUnitPredicateCoveragePassed: null,
@@ -1310,18 +1216,8 @@ export class ExperienceAiDiagnosticSession {
       neutralRestyleDetected: false,
       finalDecisionKind: null,
       experienceCanonicalPreapplyDecisionRevision: null,
-      canonicalExperienceDecisionCreated: null,
-      providerPrimaryCandidateValidationAccepted: null,
+      canonicalExperienceDecisionCreated: false,
       providerCandidateValidationAccepted: null,
-      finalCandidateValidationAccepted: null,
-      russianSourceOwnedProjectionAttempted: false,
-      russianSourceOwnedSemanticFactCount: null,
-      russianSourceOwnedProjectionHash: null,
-      russianSourceOwnedProjectionValidationPassed: null,
-      russianSourceOwnedProjectionSelected: null,
-      russianFallbackHashEnteringFinalizer: null,
-      russianPostNormalizationHash: null,
-      russianFinalSelectedHash: null,
       finalVisibleDecisionAcceptedForApply: null,
       canonicalExperienceDecisionAllowsApply: null,
       canonicalExperienceDecisionAllowsUsage: null,
@@ -1423,9 +1319,6 @@ export class ExperienceAiDiagnosticSession {
     typedReason?: string,
     hashes?: { requestIdHash?: string; currentJobContextHash?: string },
   ): void {
-    if (this.requestTimeCleanNoOpLocked) {
-      throw new Error(`experience_clean_noop_post_terminal_stage_write:${name}`);
-    }
     this.stages.push({
       stage: name,
       result,
@@ -1446,15 +1339,6 @@ export class ExperienceAiDiagnosticSession {
   }
 
   patch(partial: Partial<ExperienceAiDiagnosticTrace>): void {
-    if (this.requestTimeCleanNoOpLocked) {
-      const forbidden = Object.keys(partial).filter((key) =>
-        /^(?:provider|recovery|serverRepair|translation|fallback|clientDeterministic|deterministicFallback|noOpRepair|unsupportedClaimRepair|candidateLineage|finalCandidate|finalBullet|finalRequired|finalCovered|finalUncovered|apply|visibleApply|visibleValidation|targetContentApplied|countedAsSuccess|shouldIncrementUsage|usageIncrement|usageCountAfter|semanticNoOp|finalDecisionKind|finalOutcomeReason)/.test(key));
-      if (forbidden.length > 0) {
-        throw new Error(
-          `experience_clean_noop_post_terminal_field_write:${forbidden.join(',')}`,
-        );
-      }
-    }
     const { marker: _ignoredMarker, ...safe } = partial;
     Object.assign(this.draft, safe);
     const markerPatch = sanitizeCvAiDiagnosticMarkerPatch('experience', partial);
@@ -1672,9 +1556,6 @@ export class ExperienceAiDiagnosticSession {
       providerAttempted: opts.httpStatus != null,
       providerResponseKind: kind,
       apiResponseKind: kind,
-      serverRepairAttempted: kind === 'repair',
-      serverRepairSelected: false,
-      serverRepairSource: kind === 'repair' ? 'api_server_repair' : null,
       serverFallbackUsed: kind === 'fallback',
       providerBulletCount: splitExperienceBullets(text).filter(Boolean).length,
       providerBulletScripts: scriptsFromBullets(text),
@@ -1706,57 +1587,6 @@ export class ExperienceAiDiagnosticSession {
   }
 
   /**
-   * Commit the already-proven request-time clean no-op as a locked terminal
-   * phase snapshot. This path intentionally never accepts a generic finalizer
-   * result: the exact locale authority and visible validation objects that
-   * made the preflight decision are serialized once and then frozen.
-   */
-  recordRequestTimeCleanNoOpTerminal(
-    snapshot: Readonly<Record<string, unknown>>,
-  ): void {
-    if (this.requestTimeCleanNoOpLocked || this.committedTrace) {
-      throw new Error('experience_clean_noop_terminal_already_locked');
-    }
-    if (
-      snapshot.experienceTrueTerminalCleanNoopRevision
-        !== EXPERIENCE_TRUE_TERMINAL_CLEAN_NOOP_448_REVISION
-      || snapshot.cleanNoOpTerminalSnapshotFrozen !== true
-      || snapshot.earlyNoOpPreflightPassed !== true
-      || snapshot.providerAttempted !== false
-      || snapshot.finalCandidateSource !== 'none'
-    ) {
-      throw new Error('experience_clean_noop_terminal_snapshot_invalid');
-    }
-
-    const terminalSnapshot = Object.freeze({
-      ...snapshot,
-      usageCountAfter: this.draft.usageCountBefore,
-    });
-    const preflightStageNames = new Set<ExperienceAiDiagStageName>([
-      'button_pressed',
-      'live_experience_read',
-      'source_description_selected',
-      'source_units_split',
-      'source_fact_identity_created',
-    ]);
-    this.stages = this.stages.filter((stage) => preflightStageNames.has(stage.stage));
-    this.patch(terminalSnapshot as Partial<ExperienceAiDiagnosticTrace>);
-    for (const step of EXPERIENCE_CLEAN_NOOP_STAGE_PLAN) {
-      this.stage(
-        step.stage as ExperienceAiDiagStageName,
-        step.result,
-        step.typedReason,
-      );
-    }
-
-    this.requestTimeCleanNoOpSnapshot = terminalSnapshot;
-    this.requestTimeCleanNoOpStages = Object.freeze(
-      this.stages.map((stage) => Object.freeze({ ...stage })),
-    );
-    this.requestTimeCleanNoOpLocked = true;
-  }
-
-  /**
    * Dedicated clean no-op terminalizer for early unedited-rerun preflight.
    * Must not reuse rejected-apply / failure stage semantics.
    */
@@ -1777,21 +1607,6 @@ export class ExperienceAiDiagnosticSession {
         (diag.visibleComparisonNormalizedHash as string | null | undefined) ?? null,
       visibleComparisonUnitCount: Number(diag.visibleComparisonUnitCount ?? 0),
     });
-    // A clean no-op is an authoritative terminal outcome.  If an earlier
-    // provider/fallback branch touched the draft before the terminal decision,
-    // discard those downstream stages instead of appending a second trace that
-    // can retain failed/provider evidence.
-    const preflightStageNames = new Set<ExperienceAiDiagStageName>([
-      'button_pressed',
-      'live_experience_read',
-      'source_description_selected',
-      'source_units_split',
-      'source_fact_identity_created',
-      'job_context_built',
-      'request_payload_built',
-      'request_started',
-    ]);
-    this.stages = this.stages.filter((stage) => preflightStageNames.has(stage.stage));
     // Preserve dual-source / preflight truth from finalize, then force clean terminal fields.
     this.patch({
       ...diag,
@@ -1806,33 +1621,8 @@ export class ExperienceAiDiagnosticSession {
       apiResponseKind: 'not_attempted',
       providerCoveredFactCount: null,
       providerRequiredFactCount: null,
-      providerUncoveredFactCount: null,
       providerRejectionReasons: [],
       providerRejectionStage: null,
-      recoveryAttempted: false,
-      recoveryHttpStatus: null,
-      recoveryCandidatePresent: false,
-      recoveryAccepted: false,
-      recoverySelected: false,
-      recoveryRejectionReasons: [],
-      serverRepairAttempted: false,
-      serverRepairSelected: false,
-      serverRepairSource: null,
-      translationProviderAttempted: false,
-      translationRepairAttempted: false,
-      translationFallbackAttempted: false,
-      translationFallbackApplied: false,
-      translationFallbackSelected: false,
-      fallbackSelected: false,
-      fallbackReason: null,
-      fallbackBulletCount: 0,
-      fallbackBulletScripts: [],
-      clientDeterministicFallbackAttempted: false,
-      clientDeterministicFallbackSelected: false,
-      clientDeterministicFallbackApplied: false,
-      clientDeterministicFallbackUsedForFinalCandidate: false,
-      deterministicFallbackAttemptedAfterNoOp: false,
-      deterministicFallbackAppliedAfterNoOp: false,
       providerAccepted: false,
       providerBulletCount: 0,
       providerBulletScripts: [],
@@ -1846,34 +1636,17 @@ export class ExperienceAiDiagnosticSession {
       appliedFinalBulletScripts: [],
       countedAsSuccess: false,
       visibleApplySucceeded: false,
-      applyAuthorized: false,
-      applyWriteSucceeded: false,
-      applyCommitted: false,
-      targetContentApplied: false,
-      visibleValidationAttempted: false,
-      visibleValidationPassed: false,
-      finalCandidatePredicateValidationApplicable: false,
-      finalCandidatePredicateIdentityCount: null,
-      finalSourceUnitPredicateCoveragePassed: null,
-      finalRequiredFactCount: 0,
-      finalCoveredFactCount: 0,
       shouldIncrementUsage: false,
       usageIncrementAttempted: false,
       applyAttempted: false,
       raceGuardApplicable: false,
       raceGuardResult: 'not_required',
       usageCountAfter: this.draft.usageCountBefore,
+      relevanceValidationPassed: null,
+      perspectiveValidationPassed: null,
       // Visible-source preflight proved tense/locale validity.
       tenseValidationPassed: true,
       localeValidationPassed: true,
-      targetLocaleValidationPassed: true,
-      targetLocalePurityPassed: true,
-      relevanceValidationPassed: typeof diag.relevanceValidationPassed === 'boolean'
-        ? diag.relevanceValidationPassed
-        : true,
-      perspectiveValidationPassed: typeof diag.perspectiveValidationPassed === 'boolean'
-        ? diag.perspectiveValidationPassed
-        : true,
       candidateLineage: clean.candidateLineage as ExperienceAiDiagnosticTrace['candidateLineage'],
       experienceCleanNoopTerminalOutcomeRevision:
         EXPERIENCE_CLEAN_NOOP_TERMINAL_OUTCOME_318_REVISION,
@@ -1895,50 +1668,6 @@ export class ExperienceAiDiagnosticSession {
   }
 
   /**
-   * API/provider failure recovered by independently validating the unchanged
-   * visible textarea. Provider failure remains truthful; the terminal decision
-   * is still a local semantic no-op with no apply or usage increment.
-   */
-  recordProviderFailureRecoveredNoOp(
-    finalized: FinalizeCvAiFieldResult,
-    opts: { httpStatus: number | null; attempted?: boolean; errorCode?: string | null },
-  ): void {
-    this.recordFinalizeResult(finalized);
-    this.recordApiResponse({
-      httpStatus: opts.httpStatus,
-      errorCode: opts.errorCode || 'provider_http_failure',
-    });
-    this.patch({
-      providerAttempted: opts.attempted ?? opts.httpStatus != null,
-      providerHttpStatus: opts.httpStatus,
-      providerResponseKind: 'error',
-      apiResponseKind: 'error',
-      providerAccepted: false,
-      providerValidationApplicable: false,
-      providerRequiredFactCount: null,
-      providerCoveredFactCount: null,
-      providerUncoveredFactCount: null,
-      providerUncoveredFactIdentityHashes: [],
-      providerRejectionStage: 'api_response_received',
-      providerRejectionReasons: [opts.errorCode || 'provider_http_failure'],
-      finalTypedFailureReason: null,
-      rejectionStage: null,
-      semanticNoOpDetected: true,
-      materialImprovementDetected: false,
-      finalDecisionKind: 'semantic_noop',
-      canonicalExperienceDecisionAllowsApply: false,
-      canonicalExperienceDecisionAllowsUsage: false,
-      shouldIncrementUsage: false,
-      countedAsSuccess: false,
-      applyAuthorized: false,
-      applyAttempted: false,
-      applyWriteSucceeded: false,
-      applyCommitted: false,
-      usageCountAfter: this.draft.usageCountBefore,
-    });
-  }
-
-  /**
    * Map finalize result into validation / fallback / apply stages without
    * re-running validators (uses finalize diagnostics + reason only).
    */
@@ -1946,7 +1675,6 @@ export class ExperienceAiDiagnosticSession {
     const diag = finalized.diagnostics || {};
     const diagRec = diag as Record<string, unknown>;
     const earlyCleanNoOp = diagRec.earlyNoOpPreflightPassed === true
-      || diagRec.cleanNoOpTerminalized === true
       || (
         finalized.reason === 'experience_ai_noop'
         && finalized.blocked !== true
@@ -1958,49 +1686,22 @@ export class ExperienceAiDiagnosticSession {
       return;
     }
     const text = (finalized.text || '').trim();
-    const canonicalFinalText = text.replace(/\s+/g, ' ').trim();
-    const canonicalFinalHash = canonicalFinalText ? fingerprintText(canonicalFinalText) : null;
     const bullets = splitExperienceBullets(text).filter(Boolean);
-    // Final provenance is the authority for terminal fallback fields.  Older
-    // callers could leave client-fallback flags populated after a server
-    // fallback had been selected, which made the terminal record describe two
-    // different candidates.  Preserve phase-attempt telemetry, but derive
-    // selected/applied state only from the actual final source.
-    const serializedFinalSource = typeof diag.finalCandidateSource === 'string'
-      ? diag.finalCandidateSource
-      : null;
-    const serverFallbackSelected = Boolean(
-      finalized.countedAsSuccess
-      && (
-        serializedFinalSource === 'server_fallback'
-        || (serializedFinalSource == null && diag.serverFallbackUsed === true)
-      ),
-    );
-    const clientFallbackAttempted = Boolean(
-      diag.clientDeterministicFallbackAttempted
-      || diag.fallbackApplied
-      || finalized.origin === 'deterministic_fallback'
-      || diag.clientDeterministicFallbackSelected
-      || (diag as Record<string, unknown>).clientDeterministicFallbackUsedForFinalCandidate,
-    );
     const clientFallbackSelected = Boolean(
-      !serverFallbackSelected
-      && finalized.countedAsSuccess
-      && (
-        serializedFinalSource === 'deterministic_fallback'
-        || (serializedFinalSource == null && finalized.origin === 'deterministic_fallback')
-      ),
+      diag.clientDeterministicFallbackSelected
+      || (diag as Record<string, unknown>).clientDeterministicFallbackUsedForFinalCandidate
+      || diag.clientDeterministicFallbackApplied
+      || (finalized.origin === 'deterministic_fallback' && Boolean(text)),
     );
     // Backward-compatible alias used for coverage lineage below.
     const clientFallbackApplied = clientFallbackSelected;
+    const clientFallbackAttempted = Boolean(
+      diag.clientDeterministicFallbackAttempted
+      || clientFallbackSelected
+      || diag.fallbackApplied,
+    );
     // Clean no-op already returned — do not treat !countedAsSuccess as blocked failure.
     const blocked = Boolean(finalized.blocked || !finalized.countedAsSuccess);
-    const selectedFinalPresent = Boolean(
-      finalized.countedAsSuccess
-      && !finalized.blocked
-      && text
-      && diagRec.finalCandidatePresent !== false,
-    );
     const reason = finalized.reason || diag.typedFailureReason || null;
     const apiResponseKind = diag.apiResponseKind || this.draft.providerResponseKind || 'unknown';
     const serverFallbackUsed = Boolean(
@@ -2013,63 +1714,40 @@ export class ExperienceAiDiagnosticSession {
         ? (diag.clientDeterministicFallbackScripts as ExperienceScriptClass[])
         : (clientFallbackApplied ? scriptsFromBullets(text) : [])
     );
-    const clientBulletCount = clientFallbackSelected
-      ? bullets.length
-      : (clientFallbackAttempted && !serverFallbackSelected
-        ? (diag.clientDeterministicFallbackBulletCount ?? diag.fallbackBulletCount ?? 0)
-        : 0);
-    const clientCovered = clientFallbackSelected
-      ? (diag.finalCoveredFactCount ?? diag.coveredFactCount ?? diag.clientDeterministicFallbackCoveredFactCount ?? 0)
-      : (clientFallbackAttempted && !serverFallbackSelected
-        ? (diag.clientDeterministicFallbackCoveredFactCount ?? 0)
-        : 0);
-    const clientRequired = clientFallbackSelected
-      ? (diag.finalRequiredFactCount ?? diag.requiredFactCount
-        ?? diag.clientDeterministicFallbackRequiredFactCount
+    const clientBulletCount = clientFallbackAttempted
+      ? (diag.clientDeterministicFallbackBulletCount ?? diag.fallbackBulletCount ?? 0)
+      : 0;
+    const clientCovered = clientFallbackAttempted
+      ? (diag.clientDeterministicFallbackCoveredFactCount ?? 0)
+      : 0;
+    const clientRequired = clientFallbackAttempted
+      ? (diag.clientDeterministicFallbackRequiredFactCount
+        ?? diag.requiredFactCount
         ?? this.draft.requiredFactCount
         ?? 0)
-      : (clientFallbackAttempted && !serverFallbackSelected
-        ? (diag.clientDeterministicFallbackRequiredFactCount
-          ?? diag.requiredFactCount
-          ?? this.draft.requiredFactCount
-          ?? 0)
-        : 0);
-    const clientUncovered = clientFallbackSelected
-      ? (Array.isArray(diag.finalUncoveredFactIdentityHashes)
-        ? diag.finalUncoveredFactIdentityHashes.map(String)
-        : [])
-      : (clientFallbackAttempted && !serverFallbackSelected
-        ? (diag.clientDeterministicFallbackUncoveredFactIds || [])
-        : []);
-
-    const providerUncovered = [...new Set(
-      (Array.isArray(diag.providerUncoveredFactIdentityHashes)
-        ? diag.providerUncoveredFactIdentityHashes.map(String)
-        : (this.draft.providerUncoveredFactIdentityHashes || []))
-        .map((id) => id.trim())
-        .filter(Boolean),
-    )];
-    const finalRequired = selectedFinalPresent
-      ? (clientFallbackApplied
-        ? (clientRequired || diag.requiredFactCount || this.draft.requiredFactCount || 0)
-        : (diag.requiredFactCount ?? this.draft.requiredFactCount ?? 0))
       : 0;
-    const finalCovered = selectedFinalPresent
-      ? (clientFallbackApplied
-        ? (clientCovered || diag.coveredFactCount || 0)
-        : (diag.coveredFactCount ?? 0))
-      : 0;
-    const finalUncovered = selectedFinalPresent
-      ? (clientFallbackApplied
-        ? (clientUncovered.length ? clientUncovered : [])
-        : (
-          Array.isArray(diag.uncoveredFactIdentityHashes)
-            ? diag.uncoveredFactIdentityHashes.map(String)
-            : (providerUncovered.length && finalCovered < finalRequired
-              ? [...providerUncovered]
-              : (this.draft.uncoveredFactIdentityHashes || []))
-        ))
+    const clientUncovered = clientFallbackAttempted
+      ? (diag.clientDeterministicFallbackUncoveredFactIds || [])
       : [];
+
+    const providerUncovered = Array.isArray(diag.providerUncoveredFactIdentityHashes)
+      ? diag.providerUncoveredFactIdentityHashes.map(String)
+      : (this.draft.providerUncoveredFactIdentityHashes || []);
+    const finalRequired = clientFallbackApplied
+      ? (clientRequired || diag.requiredFactCount || this.draft.requiredFactCount || 0)
+      : (diag.requiredFactCount ?? this.draft.requiredFactCount ?? 0);
+    const finalCovered = clientFallbackApplied
+      ? (clientCovered || diag.coveredFactCount || 0)
+      : (diag.coveredFactCount ?? 0);
+    const finalUncovered = clientFallbackApplied
+      ? (clientUncovered.length ? clientUncovered : [])
+      : (
+        Array.isArray(diag.uncoveredFactIdentityHashes)
+          ? diag.uncoveredFactIdentityHashes.map(String)
+          : (providerUncovered.length && finalCovered < finalRequired
+            ? [...providerUncovered]
+            : (this.draft.uncoveredFactIdentityHashes || []))
+      );
     const appliedSuccess = Boolean(finalized.countedAsSuccess && !finalized.blocked);
     const appliedScripts = appliedSuccess ? scriptsFromBullets(text) : [];
     const appliedCount = appliedSuccess ? bullets.length : 0;
@@ -2089,59 +1767,6 @@ export class ExperienceAiDiagnosticSession {
           ? (diag.finalBulletScripts as ExperienceScriptClass[])
           : []
       );
-    const provenanceKind = this.draft.currentTextareaProvenance
-      ?? (typeof diagRec.currentTextareaProvenance === 'string'
-        ? String(diagRec.currentTextareaProvenance)
-        : null);
-    const provenanceMatched = this.draft.lastAiOutputHashMatched
-      ?? (typeof diagRec.lastAiOutputHashMatched === 'boolean'
-        ? diagRec.lastAiOutputHashMatched as boolean
-        : null);
-    const provenanceEdited = this.draft.materialUserEditDetected
-      ?? (typeof diagRec.materialUserEditDetected === 'boolean'
-        ? diagRec.materialUserEditDetected as boolean
-        : null);
-    const provenanceTruthComplete = provenanceKind != null
-      && provenanceMatched != null
-      && provenanceEdited != null;
-    const uneditedRerunDetected = provenanceTruthComplete
-      ? (
-        provenanceKind === 'ai_generated_unedited'
-        && provenanceMatched === true
-        && provenanceEdited === false
-      )
-      : diagRec.uneditedRerunDetected === true;
-    const providerPhaseRejectionStage = (
-      typeof diag.providerRejectionStage === 'string'
-      && diag.providerRejectionStage
-    )
-      ? diag.providerRejectionStage
-      : (
-        this.draft.providerRejectionStage
-        ?? (
-          diag.providerAccepted === false && !clientFallbackAttempted
-            ? (diag.rejectionStage || null)
-            : null
-        )
-      );
-    const providerPhaseRejectionReasons = (() => {
-      if (
-        typeof diag.providerRejectionReason === 'string'
-        && diag.providerRejectionReason
-      ) {
-        return [diag.providerRejectionReason];
-      }
-      if (
-        Array.isArray(this.draft.providerRejectionReasons)
-        && this.draft.providerRejectionReasons.length > 0
-      ) {
-        return [...this.draft.providerRejectionReasons];
-      }
-      if (diag.providerAccepted === false && !clientFallbackAttempted && reason) {
-        return [reason];
-      }
-      return [];
-    })();
     // Top-level coverage always describes the FINAL selected candidate.
     // Provider evidence stays in provider* fields (never overwrite with final).
     this.patch({
@@ -2155,29 +1780,35 @@ export class ExperienceAiDiagnosticSession {
         ?? this.draft.providerCoveredFactCount
         ?? null,
       providerUncoveredFactIdentityHashes: providerUncovered,
-      // Counts and hash-only identities describe the same provider phase.
-      // In cross-locale validation, the lexical count can exceed the typed
-      // bridge's unmatched entries; the latter is the authoritative lineage.
-      providerUncoveredFactCount:
-        typeof (diag.providerRequiredFactCount ?? this.draft.providerRequiredFactCount) === 'number'
-        && typeof (diag.providerCoveredFactCount ?? this.draft.providerCoveredFactCount) === 'number'
-          ? providerUncovered.length
-          : null,
       providerAccepted: diag.providerAccepted
         ?? (finalized.countedAsSuccess && !clientFallbackApplied && !diag.noOpRepairApplied),
-      providerRejectionStage: providerPhaseRejectionStage,
-      providerRejectionReasons: providerPhaseRejectionReasons,
+      providerRejectionStage: (typeof diag.providerRejectionStage === 'string'
+        && diag.providerRejectionStage)
+        || (!diag.providerAccepted && (diag.rejectionStage || providerUncovered.length)
+          ? (diag.rejectionStage || this.draft.providerRejectionStage || null)
+          : (this.draft.providerRejectionStage ?? null)),
+      providerRejectionReasons: !diag.providerAccepted && (
+        reason
+        || providerUncovered.length
+        || (typeof diag.providerRejectionReason === 'string' && diag.providerRejectionReason)
+        || (Array.isArray(diag.providerUnsupportedClaimKinds)
+          && diag.providerUnsupportedClaimKinds.length > 0)
+      )
+        ? ([
+          reason
+          || diag.providerRejectionReason
+          || diag.clientDeterministicFallbackReason
+          || 'provider_rejected',
+        ].filter(Boolean) as string[])
+        : (this.draft.providerRejectionReasons || []),
       providerUnsupportedClaimCount: typeof diag.providerUnsupportedClaimCount === 'number'
         ? diag.providerUnsupportedClaimCount
         : (this.draft.providerUnsupportedClaimCount ?? null),
       providerUnsupportedClaimKinds: Array.isArray(diag.providerUnsupportedClaimKinds)
         ? diag.providerUnsupportedClaimKinds.map(String)
         : (this.draft.providerUnsupportedClaimKinds || []),
-      finalNormalizedHash: selectedFinalPresent
-        ? (canonicalFinalHash
-          || (diag.finalNormalizedHash as string | undefined)
-          || fingerprintText(text))
-        : null,
+      finalNormalizedHash: (diag.finalNormalizedHash as string | undefined)
+        ?? (finalized.countedAsSuccess ? fingerprintText(text) : null),
       visibleTextareaMatchesFinalNormalizedHash:
         typeof diag.visibleTextareaMatchesFinalNormalizedHash === 'boolean'
           ? diag.visibleTextareaMatchesFinalNormalizedHash
@@ -2188,18 +1819,6 @@ export class ExperienceAiDiagnosticSession {
         || null,
       apiResponseKind: apiResponseKind as ExperienceAiDiagnosticTrace['apiResponseKind'],
       serverFallbackUsed,
-      serverRepairAttempted: Boolean(
-        diag.serverRepairAttempted
-        ?? (apiResponseKind === 'repair' && diag.noOpRepairAttempted !== true),
-      ),
-      serverRepairSelected: Boolean(
-        selectedFinalPresent
-        && (diag.serverRepairSelected === true || diag.finalCandidateSource === 'server_repair'),
-      ),
-      serverRepairSource: diag.serverRepairAttempted === true
-        || diag.finalCandidateSource === 'server_repair'
-        ? 'api_server_repair'
-        : null,
       // Legacy fields derived from the same client-fallback result (no contradictions).
       fallbackSelected: clientFallbackApplied,
       fallbackReason: clientFallbackAttempted
@@ -2247,8 +1866,7 @@ export class ExperienceAiDiagnosticSession {
         diag.unsupportedClaimCount ?? 0,
         reason === 'unsupported_claim' || reason === 'unsupported_generated_duty' ? 1 : 0,
       ),
-      visibleApplySucceeded: false,
-      shouldIncrementUsage: false,
+      visibleApplySucceeded: Boolean(finalized.countedAsSuccess && !blocked),
       finalBulletCount: legacyFinalCount,
       finalBulletScripts: legacyFinalScripts,
       tenseMode: diag.tenseMode || this.draft.tenseMode || 'unknown',
@@ -2256,34 +1874,15 @@ export class ExperienceAiDiagnosticSession {
       sourcePersonMode: (diag.sourcePersonMode as string | undefined) || null,
       providerPersonMode: (diag.providerPersonMode as string | undefined) || null,
       normalizedPersonMode: (diag.normalizedPersonMode as string | undefined) || null,
-      finalPersonMode: selectedFinalPresent
-        ? ((diag.finalPersonMode as string | undefined) || null)
-        : null,
+      finalPersonMode: (diag.finalPersonMode as string | undefined) || null,
       perspectiveNormalizationAttempted: Boolean(diag.perspectiveNormalizationAttempted),
       perspectiveNormalizationApplied: Boolean(diag.perspectiveNormalizationApplied),
       perspectiveValidationPassed: typeof diag.perspectiveValidationPassed === 'boolean'
         ? diag.perspectiveValidationPassed
         : (appliedSuccess ? true : Boolean(diag.perspectiveValidationPassed)),
-      targetPersonMode: (diag.targetPersonMode as string | undefined) || null,
-      targetGender: (diag.targetGender as string | undefined) || null,
-      arabicMorphologyTransformationAttempted:
-        Boolean(diag.arabicMorphologyTransformationAttempted),
-      arabicMorphologyTransformationApplied:
-        Boolean(diag.arabicMorphologyTransformationApplied),
-      arabicMorphologyTransformationClasses: Array.isArray(
-        diag.arabicMorphologyTransformationClasses,
-      ) ? diag.arabicMorphologyTransformationClasses.map(String) : [],
-      arabicNativeMorphologyValidationPassed:
-        typeof diag.arabicNativeMorphologyValidationPassed === 'boolean'
-          ? diag.arabicNativeMorphologyValidationPassed
-          : null,
-      arabicNativeMorphologyRejectionReason:
-        (diag.arabicNativeMorphologyRejectionReason as string | undefined) || null,
       normalizedBulletsUsedForApply: Boolean(diag.normalizedBulletsUsedForApply),
-      finalMatchesProviderOutput: selectedFinalPresent
-        && Boolean(diag.finalMatchesProviderOutput),
-      finalMatchesSourceAfterNormalization: selectedFinalPresent
-        && Boolean(diag.finalMatchesSourceAfterNormalization),
+      finalMatchesProviderOutput: Boolean(diag.finalMatchesProviderOutput),
+      finalMatchesSourceAfterNormalization: Boolean(diag.finalMatchesSourceAfterNormalization),
       meaningfulChangeDetected: Boolean(diag.meaningfulChangeDetected),
       noOpRejected: Boolean(diag.noOpRejected),
       providerNoOpDetected: Boolean(
@@ -2405,10 +2004,6 @@ export class ExperienceAiDiagnosticSession {
         diag.providerSourceUnitPredicateCoveragePassed
         ?? diag.sourceUnitPredicateCoveragePassed
         ?? null,
-      providerPredicateValidationApplicable:
-        typeof diag.providerPredicateValidationApplicable === 'boolean'
-          ? diag.providerPredicateValidationApplicable
-          : null,
       repairCandidatePredicateIdentityCount: Number(
         diag.repairCandidatePredicateIdentityCount ?? 0,
       ),
@@ -2417,73 +2012,58 @@ export class ExperienceAiDiagnosticSession {
       ),
       repairSourceUnitPredicateCoveragePassed:
         diag.repairSourceUnitPredicateCoveragePassed ?? null,
-      finalCandidatePredicateIdentityCount: selectedFinalPresent
-        ? Number(
-          diag.finalCandidatePredicateIdentityCount
-          ?? diag.candidatePredicateIdentityCount
-          ?? 0,
-        )
-        : 0,
-      finalAddedPredicateCount: selectedFinalPresent
-        ? Number(diag.finalAddedPredicateCount ?? diag.candidateAddedPredicateCount ?? 0)
-        : 0,
-      finalAddedPredicateIdentityHashes: selectedFinalPresent
-        ? (Array.isArray(diag.finalAddedPredicateIdentityHashes)
-          ? diag.finalAddedPredicateIdentityHashes.map(String)
-          : (Array.isArray(diag.candidateAddedPredicateIdentityHashes)
-            ? diag.candidateAddedPredicateIdentityHashes.map(String)
-            : []))
-        : [],
-      finalCoordinatedPredicateExpansionDetected: selectedFinalPresent
-        && Boolean(diag.finalCoordinatedPredicateExpansionDetected),
-      finalSourceUnitPredicateCoveragePassed: selectedFinalPresent
-        ? (
-          diag.finalSourceUnitPredicateCoveragePassed
-          ?? diag.sourceUnitPredicateCoveragePassed
-          ?? null
-        )
-        : null,
-      finalRequiredFactCount: selectedFinalPresent
-        ? Number(
-          (diagRec.finalRequiredFactCount as number | undefined)
-          ?? diag.requiredFactCount
-          ?? finalRequired
-          ?? 0,
-        )
-        : null,
-      finalCoveredFactCount: selectedFinalPresent
-        ? Number(
-          (diagRec.finalCoveredFactCount as number | undefined)
-          ?? diag.coveredFactCount
-          ?? finalCovered
-          ?? 0,
-        )
-        : null,
-      finalUncoveredFactIdentityHashes: selectedFinalPresent
-        ? (Array.isArray(diagRec.finalUncoveredFactIdentityHashes)
-          ? (diagRec.finalUncoveredFactIdentityHashes as unknown[]).map(String)
-          : (Array.isArray(finalUncovered) ? finalUncovered.map(String) : []))
-        : [],
-      finalRequiredFactSetHash: selectedFinalPresent
-        ? ((diagRec.finalRequiredFactSetHash as string | undefined) ?? null)
-        : null,
-      finalFactCoveragePassed: selectedFinalPresent
-        ? (typeof diagRec.finalFactCoveragePassed === 'boolean'
-          ? diagRec.finalFactCoveragePassed
-          : (
-            Number(
-              (diagRec.finalCoveredFactCount as number | undefined)
-              ?? diag.coveredFactCount
-              ?? finalCovered
-              ?? 0,
-            ) === Number(
-              (diagRec.finalRequiredFactCount as number | undefined)
-              ?? diag.requiredFactCount
-              ?? finalRequired
-              ?? 0,
-            )
-          ))
-        : null,
+      finalCandidatePredicateIdentityCount: Number(
+        diag.finalCandidatePredicateIdentityCount
+        ?? diag.candidatePredicateIdentityCount
+        ?? 0,
+      ),
+      finalAddedPredicateCount: Number(
+        diag.finalAddedPredicateCount ?? diag.candidateAddedPredicateCount ?? 0,
+      ),
+      finalAddedPredicateIdentityHashes: Array.isArray(diag.finalAddedPredicateIdentityHashes)
+        ? diag.finalAddedPredicateIdentityHashes.map(String)
+        : (Array.isArray(diag.candidateAddedPredicateIdentityHashes)
+          ? diag.candidateAddedPredicateIdentityHashes.map(String)
+          : []),
+      finalCoordinatedPredicateExpansionDetected: Boolean(
+        diag.finalCoordinatedPredicateExpansionDetected,
+      ),
+      finalSourceUnitPredicateCoveragePassed:
+        diag.finalSourceUnitPredicateCoveragePassed
+        ?? diag.sourceUnitPredicateCoveragePassed
+        ?? null,
+      finalRequiredFactCount: Number(
+        (diagRec.finalRequiredFactCount as number | undefined)
+        ?? diag.requiredFactCount
+        ?? finalRequired
+        ?? 0,
+      ),
+      finalCoveredFactCount: Number(
+        (diagRec.finalCoveredFactCount as number | undefined)
+        ?? diag.coveredFactCount
+        ?? finalCovered
+        ?? 0,
+      ),
+      finalUncoveredFactIdentityHashes: Array.isArray(diagRec.finalUncoveredFactIdentityHashes)
+        ? (diagRec.finalUncoveredFactIdentityHashes as unknown[]).map(String)
+        : (Array.isArray(finalUncovered) ? finalUncovered.map(String) : []),
+      finalRequiredFactSetHash:
+        (diagRec.finalRequiredFactSetHash as string | undefined) ?? null,
+      finalFactCoveragePassed: typeof diagRec.finalFactCoveragePassed === 'boolean'
+        ? diagRec.finalFactCoveragePassed
+        : (
+          Number(
+            (diagRec.finalCoveredFactCount as number | undefined)
+            ?? diag.coveredFactCount
+            ?? finalCovered
+            ?? 0,
+          ) === Number(
+            (diagRec.finalRequiredFactCount as number | undefined)
+            ?? diag.requiredFactCount
+            ?? finalRequired
+            ?? 0,
+          )
+        ),
       experienceSelectedFinalCoverageRevision:
         (diagRec.experienceSelectedFinalCoverageRevision as string | undefined)
         ?? EXPERIENCE_SELECTED_FINAL_COVERAGE_329_REVISION,
@@ -2498,8 +2078,9 @@ export class ExperienceAiDiagnosticSession {
       repairResidualComplianceScopeExpansionDetected: Boolean(
         diag.repairResidualComplianceScopeExpansionDetected,
       ),
-      finalComplianceScopeExpansionDetected: selectedFinalPresent
-        && Boolean(diag.finalComplianceScopeExpansionDetected),
+      finalComplianceScopeExpansionDetected: Boolean(
+        diag.finalComplianceScopeExpansionDetected,
+      ),
       factAuthorityKind: (() => {
         void EXPERIENCE_FACT_AUTHORITY_TRUTH_327_REVISION;
         const fromDiag = (diag.factAuthorityKind as string | null | undefined) ?? null;
@@ -2613,7 +2194,9 @@ export class ExperienceAiDiagnosticSession {
           earlyNoOpPreflightEvaluated: Boolean(
             (diag as Record<string, unknown>).earlyNoOpPreflightEvaluated,
           ),
-          uneditedRerunDetected,
+          uneditedRerunDetected: Boolean(
+            (diag as Record<string, unknown>).uneditedRerunDetected,
+          ),
           providerAttempted: false,
           finalOutcomeReason:
             ((diag as Record<string, unknown>).finalOutcomeReason as string | null | undefined)
@@ -2739,6 +2322,8 @@ export class ExperienceAiDiagnosticSession {
               ? ((diag as Record<string, unknown>).appliedFinalBulletScripts as unknown[])
                 .map(String)
               : appliedScripts,
+            // Finalizer acceptance is not an apply attempt. The page sets this
+            // only after the immutable preapply decision authorizes the write.
             applyAttempted: false,
             visibleApplyApplicable: true,
             sourceAlreadyValidForTarget:
@@ -2763,7 +2348,9 @@ export class ExperienceAiDiagnosticSession {
             earlyNoOpPreflightEvaluated: Boolean(
               (diag as Record<string, unknown>).earlyNoOpPreflightEvaluated,
             ),
-            uneditedRerunDetected,
+            uneditedRerunDetected: Boolean(
+              (diag as Record<string, unknown>).uneditedRerunDetected,
+            ),
             // Do not force providerAttempted false — provider evidence may exist
             // without an explicit client httpStatus stamp in unit tests.
             ...(
@@ -2859,53 +2446,12 @@ export class ExperienceAiDiagnosticSession {
       finalDecisionKind: (diag.finalDecisionKind as string | null | undefined) ?? null,
       experienceCanonicalPreapplyDecisionRevision:
         (diag.experienceCanonicalPreapplyDecisionRevision as string | null | undefined) ?? null,
-      canonicalExperienceDecisionCreated:
-        typeof diag.canonicalExperienceDecisionCreated === 'boolean'
-          ? diag.canonicalExperienceDecisionCreated
-          : null,
-      providerPrimaryCandidateValidationAccepted:
-        typeof diag.providerPrimaryCandidateValidationAccepted === 'boolean'
-          ? diag.providerPrimaryCandidateValidationAccepted
-          : null,
+      canonicalExperienceDecisionCreated: Boolean(
+        diag.canonicalExperienceDecisionCreated,
+      ),
       providerCandidateValidationAccepted:
         typeof diag.providerCandidateValidationAccepted === 'boolean'
           ? diag.providerCandidateValidationAccepted
-          : null,
-      finalCandidateValidationAccepted:
-        typeof diag.finalCandidateValidationAccepted === 'boolean'
-          ? diag.finalCandidateValidationAccepted
-          : null,
-      russianSourceOwnedProjectionAttempted:
-        typeof diag.russianSourceOwnedProjectionAttempted === 'boolean'
-          ? diag.russianSourceOwnedProjectionAttempted
-          : false,
-      russianSourceOwnedSemanticFactCount:
-        typeof diag.russianSourceOwnedSemanticFactCount === 'number'
-          ? diag.russianSourceOwnedSemanticFactCount
-          : null,
-      russianSourceOwnedProjectionHash:
-        typeof diag.russianSourceOwnedProjectionHash === 'string'
-          ? diag.russianSourceOwnedProjectionHash
-          : null,
-      russianSourceOwnedProjectionValidationPassed:
-        typeof diag.russianSourceOwnedProjectionValidationPassed === 'boolean'
-          ? diag.russianSourceOwnedProjectionValidationPassed
-          : null,
-      russianSourceOwnedProjectionSelected:
-        typeof diag.russianSourceOwnedProjectionSelected === 'boolean'
-          ? diag.russianSourceOwnedProjectionSelected
-          : null,
-      russianFallbackHashEnteringFinalizer:
-        typeof diag.russianFallbackHashEnteringFinalizer === 'string'
-          ? diag.russianFallbackHashEnteringFinalizer
-          : null,
-      russianPostNormalizationHash:
-        typeof diag.russianPostNormalizationHash === 'string'
-          ? diag.russianPostNormalizationHash
-          : null,
-      russianFinalSelectedHash:
-        typeof diag.russianFinalSelectedHash === 'string'
-          ? diag.russianFinalSelectedHash
           : null,
       finalVisibleDecisionAcceptedForApply:
         typeof diag.finalVisibleDecisionAcceptedForApply === 'boolean'
@@ -2945,32 +2491,27 @@ export class ExperienceAiDiagnosticSession {
           && clientFallbackApplied
         ),
       ),
-      finalCandidateSource: selectedFinalPresent
-        ? (() => {
-          const serializedSource = diag.finalCandidateSource as string | undefined;
-          // `none` is the pre-selection sentinel, not a valid source for a
-          // successful client fallback.  Do not let it mask the phase truth.
-          if (serializedSource && serializedSource !== 'none') return serializedSource;
-          if (clientFallbackApplied) return 'deterministic_fallback';
-          if (diag.unsupportedClaimRepairApplied) return 'unsupported_claim_repair';
-          if (diag.noOpRepairApplied) return 'noop_repair';
-          return 'provider';
-        })()
-        : 'none',
-      finalUnsupportedClaimCount: selectedFinalPresent
-        ? Math.max(
-          Number(diag.finalUnsupportedClaimCount ?? 0),
-          Array.isArray(diag.finalUnsupportedClaimKinds)
-            ? diag.finalUnsupportedClaimKinds.length
-            : 0,
-          reason === 'unsupported_claim' || reason === 'unsupported_generated_duty' ? 1 : 0,
-        )
-        : 0,
-      finalUnsupportedClaimKinds: selectedFinalPresent
-        && Array.isArray(diag.finalUnsupportedClaimKinds)
+      finalCandidateSource: (diag.finalCandidateSource as string | undefined)
+        ?? (finalized.countedAsSuccess
+          ? (clientFallbackApplied
+            ? 'deterministic_fallback'
+            : (diag.unsupportedClaimRepairApplied
+              ? 'unsupported_claim_repair'
+              : (diag.noOpRepairApplied ? 'noop_repair' : 'provider')))
+          : 'none'),
+      finalUnsupportedClaimCount: Math.max(
+        Number(diag.finalUnsupportedClaimCount ?? 0),
+        Array.isArray(diag.finalUnsupportedClaimKinds)
+          ? diag.finalUnsupportedClaimKinds.length
+          : 0,
+        reason === 'unsupported_claim' || reason === 'unsupported_generated_duty' ? 1 : 0,
+      ),
+      finalUnsupportedClaimKinds: Array.isArray(diag.finalUnsupportedClaimKinds)
         ? diag.finalUnsupportedClaimKinds.map(String)
         : [],
       countedAsSuccess: Boolean(finalized.countedAsSuccess),
+      // Finalization is preapply. Every transactional flag remains explicitly
+      // false until the canonical decision and preapply gates authorize a write.
       applyAuthorized: false,
       applyAttempted: false,
       applyWriteSucceeded: false,
@@ -3090,12 +2631,6 @@ export class ExperienceAiDiagnosticSession {
         ((diag as Record<string, unknown>).visibleTextareaLocaleBeforeApply as string | undefined)
         ?? ((diag as Record<string, unknown>).visibleTextareaLocale as string | undefined)
         ?? null,
-      visibleLocaleAuthorityKind:
-        ((diag as Record<string, unknown>).visibleLocaleAuthorityKind as string | undefined)
-        ?? null,
-      rawDetectorDisagreesWithTrustedLocale:
-        ((diag as Record<string, unknown>).rawDetectorDisagreesWithTrustedLocale as boolean | undefined)
-        ?? false,
       entryGeneratedLocaleBeforeApply:
         ((diag as Record<string, unknown>).entryGeneratedLocaleBeforeApply as string | undefined)
         ?? null,
@@ -3352,83 +2887,7 @@ export class ExperienceAiDiagnosticSession {
       || providerEvidencePresent
     );
     const providerPresent = providerWasAttempted && providerEvidencePresent;
-    const recoveryAttempted = this.draft.recoveryAttempted === true;
-    const recoveryCandidatePresent = this.draft.recoveryCandidatePresent === true;
-    const serverRepairAttempted = this.draft.serverRepairAttempted === true || recoveryAttempted;
-    const serverRepairSelected = (
-      this.draft.serverRepairSelected === true
-      && (this.draft.recoverySelected !== false || !recoveryAttempted)
-    );
-    // AAB434-era server-repair callers predate the explicit recoveryCandidatePresent
-    // field. Preserve their selected repair lineage while keeping new recovery
-    // attempts truthful when no candidate was returned.
-    const lineageRecoveryCandidatePresent = recoveryCandidatePresent
-      || (serverRepairSelected && !recoveryAttempted);
-    if (serverRepairAttempted) {
-      // The primary provider response is never serialized.  Only an actually
-      // returned recovery candidate gets a hash-only lineage record; an HTTP
-      // error/empty recovery is represented as absent rather than as a
-      // misleading "server_repair_selected" raw candidate.
-      if (lineageRecoveryCandidatePresent) {
-        lineage.push({
-          candidateKind: 'server_provider_raw',
-          present: true,
-          accepted: false,
-          rejectionStage: 'server_validation_repair',
-          rejectionReasons: ['server_repair_candidate_rejected'],
-        });
-      }
-      const recoveryHash = this.draft.recoveryCandidateHash
-        ?? (serverRepairSelected && text ? fingerprintText(text) : null);
-      const recoveryUnitCount = this.draft.recoveryCandidateUnitCount
-        ?? (serverRepairSelected ? bullets.length : 0);
-      const recoveryUnitHashes = this.draft.recoveryCandidateUnitHashes
-        ?? (serverRepairSelected
-          ? bullets.map((bullet) => fingerprintText(bullet.replace(/\s+/g, ' ').trim()))
-          : []);
-      lineage.push({
-        candidateKind: 'server_repair',
-        present: lineageRecoveryCandidatePresent,
-        accepted: serverRepairSelected && Boolean(finalized.countedAsSuccess),
-        normalizedHash: recoveryHash,
-        unitCount: recoveryUnitCount,
-        unitHashes: recoveryUnitHashes,
-        coverageRequiredCount: lineageRecoveryCandidatePresent
-          ? (serverRepairSelected ? finalRequired : null)
-          : null,
-        coverageCoveredCount: lineageRecoveryCandidatePresent
-          ? (serverRepairSelected ? finalCovered : null)
-          : null,
-        uncoveredFactIdentityHashes: lineageRecoveryCandidatePresent && serverRepairSelected
-          ? [...finalUncovered]
-          : [],
-        unsupportedClaimCount: lineageRecoveryCandidatePresent && serverRepairSelected
-          ? Number(diag.finalUnsupportedClaimCount ?? 0)
-          : null,
-        unsupportedClaimKinds: lineageRecoveryCandidatePresent && serverRepairSelected
-          ? (Array.isArray(diag.finalUnsupportedClaimKinds)
-            ? diag.finalUnsupportedClaimKinds.map(String)
-            : [])
-          : [],
-        rejectionStage: serverRepairSelected ? null : (reason || 'server_repair_candidate_rejected'),
-        rejectionReasons: serverRepairSelected
-          ? []
-          : ([reason || 'server_repair_candidate_rejected'].filter(Boolean) as string[]),
-        localeValidationPassed: lineageRecoveryCandidatePresent ? !localeFail : null,
-        tenseValidationPassed: lineageRecoveryCandidatePresent
-          ? Boolean(diag.tenseValidationPassed ?? diag.tenseMode)
-          : null,
-        perspectiveValidationPassed: lineageRecoveryCandidatePresent
-          ? Boolean(diag.perspectiveValidationPassed)
-          : null,
-        meaningfulChangeDetected: lineageRecoveryCandidatePresent
-          ? Boolean(diag.meaningfulChangeDetected)
-          : null,
-      });
-    }
-    if (!serverRepairAttempted
-      && providerWasAttempted
-      && (providerPresent || providerUncovered.length > 0 || diag.providerCoveredFactCount != null)) {
+    if (providerWasAttempted && (providerPresent || providerUncovered.length > 0 || diag.providerCoveredFactCount != null)) {
       if (this.draft.providerAttempted !== true) {
         this.patch({ providerAttempted: true });
       }
@@ -3459,7 +2918,7 @@ export class ExperienceAiDiagnosticSession {
           ? null
           : (diag.providerRejectionStage
             || diag.rejectionStage
-            || providerPhaseRejectionStage
+            || this.draft.providerRejectionStage
             || reason
             || null),
         rejectionReasons: diag.providerAccepted
@@ -3467,7 +2926,10 @@ export class ExperienceAiDiagnosticSession {
           : ([
             // Prefer phase-local provider rejection over terminal reason so a
             // later fallback locale field cannot rewrite coverage lineage.
-            providerPhaseRejectionReasons[0]
+            diag.providerRejectionReason
+            || (Array.isArray(this.draft.providerRejectionReasons)
+              ? this.draft.providerRejectionReasons[0]
+              : null)
             || reason
             || diag.clientDeterministicFallbackReason,
           ].filter(Boolean) as string[]),
@@ -3536,7 +2998,7 @@ export class ExperienceAiDiagnosticSession {
         candidateKind: 'deterministic_fallback',
         present: clientBulletCount > 0 || clientFallbackApplied,
         accepted: clientFallbackApplied && Boolean(finalized.countedAsSuccess),
-        normalizedHash: clientFallbackApplied ? canonicalFinalHash : null,
+        normalizedHash: clientFallbackApplied && text ? fingerprintText(text) : null,
         unitCount: clientBulletCount || (clientFallbackApplied ? bullets.length : 0),
         coverageRequiredCount: clientRequired,
         coverageCoveredCount: clientCovered,
@@ -3562,9 +3024,8 @@ export class ExperienceAiDiagnosticSession {
       });
     }
     if (finalized.countedAsSuccess && text) {
-      const finalHash = canonicalFinalHash
-        || (diag.finalNormalizedHash as string | undefined)
-        || fingerprintText(text);
+      const finalHash = (diag.finalNormalizedHash as string | undefined)
+        || fingerprintText(text.replace(/\s+/g, ' ').trim());
       lineage.push({
         candidateKind: 'final_selected',
         present: true,
@@ -3673,15 +3134,9 @@ export class ExperienceAiDiagnosticSession {
       );
       const tenseNormOk = diag.finalCandidateSource === 'deterministic_tense_normalizer'
         && Boolean(finalized.countedAsSuccess);
-      // For a selected fallback, the serialized terminal candidate—not the
-      // phase-local attempt counters—is authoritative.  A rejected/empty
-      // attempt may have left zero in the legacy fields even though the
-      // accepted final fallback has visible bullets.
-      const fbCount = clientFallbackSelected
-        ? clientBulletCount
-        : (diag.clientDeterministicFallbackBulletCount
-          ?? diag.fallbackBulletCount
-          ?? (clientFallbackApplied || tenseNormOk ? bullets.length : 0));
+      const fbCount = diag.clientDeterministicFallbackBulletCount
+        ?? diag.fallbackBulletCount
+        ?? (clientFallbackApplied || tenseNormOk ? bullets.length : 0);
       this.stage(
         'fallback_output_built',
         fbCount > 0 || tenseNormOk ? 'ok' : 'fail',
@@ -3712,11 +3167,6 @@ export class ExperienceAiDiagnosticSession {
       this.stage('fallback_material_coverage', 'skipped');
     } else if (diag.noOpRepairApplied || diag.finalCandidateSource === 'noop_repair') {
       this.stage('deterministic_fallback_started', 'skipped', 'noop_repair_accepted');
-      this.stage('fallback_output_built', 'skipped');
-      this.stage('fallback_locale_validation', 'skipped');
-      this.stage('fallback_material_coverage', 'skipped');
-    } else if (diag.serverRepairSelected || diag.finalCandidateSource === 'server_repair') {
-      this.stage('deterministic_fallback_started', 'skipped', 'server_repair_accepted');
       this.stage('fallback_output_built', 'skipped');
       this.stage('fallback_locale_validation', 'skipped');
       this.stage('fallback_material_coverage', 'skipped');
@@ -3797,16 +3247,13 @@ export class ExperienceAiDiagnosticSession {
         === EXPERIENCE_CANONICAL_PREAPPLY_DECISION_421_REVISION;
     const canonicalDecisionPassed = !canonicalDecisionRequired || Boolean(
       this.draft.canonicalExperienceDecisionCreated === true
-      // Provider phase and selected-final phase are deliberately distinct.
-      // A rejected provider may safely yield an accepted deterministic/repair
-      // candidate; that final candidate is the only phase that authorizes apply.
-      && this.draft.finalCandidateValidationAccepted === true
+      && this.draft.providerCandidateValidationAccepted === true
       && this.draft.finalVisibleDecisionAcceptedForApply === true
       && this.draft.canonicalExperienceDecisionAllowsApply === true
       && this.draft.canonicalExperienceDecisionAllowsUsage === true
       && this.draft.finalDecisionKind === 'material_improvement'
-      && this.draft.materialImprovementDetected === true
-      && this.draft.semanticNoOpDetected !== true,
+      && this.draft.semanticNoOpDetected !== true
+      && this.draft.materialImprovementDetected === true,
     );
     const canonicalDecisionFailures = canonicalDecisionPassed
       ? []
@@ -3817,14 +3264,14 @@ export class ExperienceAiDiagnosticSession {
             this.draft.canonicalExperienceDecisionCreated === true,
           providerCandidateValidationAccepted:
             this.draft.providerCandidateValidationAccepted === true,
-          finalCandidateValidationAccepted:
-            this.draft.finalCandidateValidationAccepted === true,
           finalVisibleDecisionAcceptedForApply:
             this.draft.finalVisibleDecisionAcceptedForApply === true,
           canonicalExperienceDecisionAllowsApply:
             this.draft.canonicalExperienceDecisionAllowsApply === true,
           canonicalExperienceDecisionAllowsUsage:
             this.draft.canonicalExperienceDecisionAllowsUsage === true,
+          semanticNoOpDetected: this.draft.semanticNoOpDetected === true,
+          materialImprovementDetected: this.draft.materialImprovementDetected === true,
           finalDecisionKind: this.draft.finalDecisionKind ?? null,
         },
       }];
@@ -3842,7 +3289,7 @@ export class ExperienceAiDiagnosticSession {
       diagnosticInvariantFailureCount: invariantFailures.length,
       diagnosticInvariantFailures: invariantFailures,
       preapplyDiagnosticInvariantCheckPassed:
-        invariantsPassed,
+        preapplyInvariants.passed && canonicalDecisionPassed,
       preapplyDiagnosticInvariantFailures: [
         ...preapplyInvariants.failures,
         ...canonicalDecisionFailures,
@@ -3861,7 +3308,7 @@ export class ExperienceAiDiagnosticSession {
       diagnosticInvariantFailureCount: invariantFailures.length,
       diagnosticInvariantFailures: invariantFailures,
       preapplyDiagnosticInvariantCheckPassed:
-        invariantsPassed,
+        preapplyInvariants.passed && canonicalDecisionPassed,
       preapplyDiagnosticInvariantFailures: [
         ...preapplyInvariants.failures,
         ...canonicalDecisionFailures,
@@ -3886,7 +3333,7 @@ export class ExperienceAiDiagnosticSession {
     });
     this.stage(
       'preapply_invariant_gate',
-      invariantsPassed ? 'ok' : 'fail',
+      preapplyInvariants.passed && canonicalDecisionPassed ? 'ok' : 'fail',
     );
     this.stage('preapply_completeness_gate', completeness.passed ? 'ok' : 'fail');
     this.stage('diagnostic_preapply_gate', passed ? 'ok' : 'fail');
@@ -3949,7 +3396,7 @@ export class ExperienceAiDiagnosticSession {
         === EXPERIENCE_CANONICAL_PREAPPLY_DECISION_421_REVISION;
     const canonicalDecisionAllowsCommit = !canonicalDecisionRequired || (
       this.draft.canonicalExperienceDecisionCreated === true
-      && this.draft.finalCandidateValidationAccepted === true
+      && this.draft.providerCandidateValidationAccepted === true
       && this.draft.finalVisibleDecisionAcceptedForApply === true
       && this.draft.canonicalExperienceDecisionAllowsApply === true
       && this.draft.canonicalExperienceDecisionAllowsUsage === true
@@ -3958,6 +3405,8 @@ export class ExperienceAiDiagnosticSession {
       && this.draft.semanticNoOpDetected !== true
       && this.draft.applyAuthorized === true
     );
+    // Defense in depth: a caller cannot turn provider acceptance into a visible
+    // commit after the canonical pre-apply decision rejected the candidate.
     const committed = applied && canonicalDecisionAllowsCommit;
     const committedUsageAfter = committed
       ? usageAfter
@@ -3983,18 +3432,7 @@ export class ExperienceAiDiagnosticSession {
       // Terminal failure: null is allowed when no visible apply was attempted.
       visibleMatch = null;
     }
-    // This is the sole terminal writer for Experience usage diagnostics.  It
-    // runs on the same success/failure branch that surrounds recordProAiSuccess
-    // in the UI, so eligibility from finalize cannot survive as a stale billing
-    // decision after a write, rollback, race rejection, or no-op terminal path.
-    const terminalUsage = {
-      shouldIncrementUsage: committed,
-      usageIncrementAttempted: committed,
-      experienceTerminalUsageTruthRevision:
-        EXPERIENCE_TERMINAL_USAGE_TRUTH_433_REVISION,
-    };
     this.patch({
-      ...terminalUsage,
       countedAsSuccess: committed,
       usageCountAfter: committedUsageAfter,
       visibleApplySucceeded: committed,
@@ -4118,104 +3556,9 @@ export class ExperienceAiDiagnosticSession {
       apiHostClass: classifyApiHostClass(apiBase),
       internalBuildContractUsed: INTERNAL_AI_RESET_ENABLED ? true : false,
     });
-    const terminalDraftRaw = this.requestTimeCleanNoOpSnapshot
-      ? { ...this.draft, ...this.requestTimeCleanNoOpSnapshot }
-      : this.draft;
-    const terminalSuccess = terminalDraftRaw.countedAsSuccess === true
-      && terminalDraftRaw.visibleApplySucceeded === true
-      && terminalDraftRaw.applyCommitted === true;
-    const terminalSource = (
-      terminalDraftRaw.finalCandidateSource
-      && terminalDraftRaw.finalCandidateSource !== 'none'
-    )
-      ? terminalDraftRaw.finalCandidateSource
-      : (
-        terminalDraftRaw.clientDeterministicFallbackSelected === true
-        || terminalDraftRaw.clientDeterministicFallbackUsedForFinalCandidate === true
-        || terminalDraftRaw.clientDeterministicFallbackApplied === true
-          ? 'deterministic_fallback'
-          : null
-      );
-    const terminalDraft = terminalSuccess
-      ? (() => {
-        const finalBulletCount = Number(
-          terminalDraftRaw.finalCandidateBulletCount
-          ?? terminalDraftRaw.finalBulletCount
-          ?? terminalDraftRaw.appliedFinalBulletCount
-          ?? 0,
-        );
-        const finalRequired = Number(
-          terminalDraftRaw.finalRequiredFactCount
-          ?? terminalDraftRaw.requiredFactCount
-          ?? 0,
-        );
-        const finalCovered = Number(
-          terminalDraftRaw.finalCoveredFactCount
-          ?? terminalDraftRaw.coveredFactCount
-          ?? 0,
-        );
-        const finalUncovered = Array.isArray(terminalDraftRaw.finalUncoveredFactIdentityHashes)
-          ? [...terminalDraftRaw.finalUncoveredFactIdentityHashes]
-          : [];
-        const deterministicSelected = terminalSource === 'deterministic_fallback';
-        const serverSelected = terminalSource === 'server_fallback';
-        const selectedScripts = terminalDraftRaw.finalCandidateBulletScripts?.length
-          ? [...terminalDraftRaw.finalCandidateBulletScripts]
-          : [...(terminalDraftRaw.finalBulletScripts || [])];
-        return {
-          ...terminalDraftRaw,
-          finalCandidateSource: terminalSource,
-          // A committed success has no terminal failure. Phase-local provider
-          // or fallback rejection remains available in candidateLineage.
-          finalTypedFailureReason: null,
-          rejectionStage: null,
-          fallbackSelected: deterministicSelected,
-          fallbackBulletCount: deterministicSelected ? finalBulletCount : 0,
-          fallbackCoveredFactCount: deterministicSelected ? finalCovered : 0,
-          fallbackRequiredFactCount: deterministicSelected ? finalRequired : 0,
-          fallbackBulletScripts: deterministicSelected ? selectedScripts : [],
-          clientDeterministicFallbackSelected: deterministicSelected,
-          clientDeterministicFallbackUsedForFinalCandidate: deterministicSelected,
-          clientDeterministicFallbackApplied: deterministicSelected,
-          clientDeterministicFallbackBulletCount: deterministicSelected ? finalBulletCount : 0,
-          clientDeterministicFallbackCoveredFactCount: deterministicSelected ? finalCovered : 0,
-          clientDeterministicFallbackRequiredFactCount: deterministicSelected ? finalRequired : 0,
-          clientDeterministicFallbackScripts: deterministicSelected ? selectedScripts : [],
-          clientDeterministicFallbackUncoveredFactIds: deterministicSelected
-            ? finalUncovered
-            : [],
-          // `serverFallbackUsed` is phase telemetry (a server fallback may
-          // have fed a later client deterministic candidate).  Selection is
-          // represented exclusively by finalCandidateSource and the mutually
-          // exclusive client/server selected flags.
-          serverFallbackUsed: serverSelected || terminalDraftRaw.serverFallbackUsed === true,
-          // A selected final candidate is the only candidate allowed to carry
-          // final bullet/coverage fields into the terminal record.
-          finalBulletCount: finalBulletCount || terminalDraftRaw.finalBulletCount,
-          finalBulletScripts: selectedScripts,
-          appliedFinalBulletCount: finalBulletCount || terminalDraftRaw.appliedFinalBulletCount,
-          appliedFinalBulletScripts: selectedScripts,
-        };
-      })()
-      : (
-        terminalDraftRaw.clientDeterministicFallbackApplied === true
-        && (!terminalDraftRaw.finalCandidateSource || terminalDraftRaw.finalCandidateSource === 'none')
-          ? { ...terminalDraftRaw, finalCandidateSource: 'deterministic_fallback' as const }
-          : terminalDraftRaw
-      );
-    const terminalStagesRaw = this.requestTimeCleanNoOpStages || this.stages;
-    // A successful commit may follow a rejected provider/fallback phase.  The
-    // rejection remains available in provider fields and candidateLineage,
-    // while terminal stages describe the selected outcome only; they must not
-    // retain a stale `fail` result after the accepted candidate is committed.
-    const terminalStages = terminalSuccess
-      ? terminalStagesRaw.map((stage) => stage.result === 'fail'
-        ? { ...stage, result: 'skipped' as const }
-        : stage)
-      : terminalStagesRaw;
     const base = {
-      ...terminalDraft,
-      stages: [...terminalStages],
+      ...this.draft,
+      stages: [...this.stages],
       ...identity,
       diagnosticContractRevision: CV_AI_DIAGNOSTIC_CONTRACT_REVISION,
       cvAiDiagnosticsV2299Revision: CV_AI_DIAGNOSTICS_V2_299_REVISION,
@@ -4223,8 +3566,8 @@ export class ExperienceAiDiagnosticSession {
       // Local-owned stable marker — never leave empty after metadata merges.
       marker: EXPERIENCE_AI_DIAG_MARKER,
       visibleDescriptionMatchesFinalHash:
-        terminalDraft.visibleDescriptionMatchesFinalHash
-        ?? terminalDraft.visibleTextareaMatchesFinalNormalizedHash
+        this.draft.visibleDescriptionMatchesFinalHash
+        ?? this.draft.visibleTextareaMatchesFinalNormalizedHash
         ?? null,
     };
 
@@ -4240,9 +3583,7 @@ export class ExperienceAiDiagnosticSession {
 
     const aab329PreapplyEvaluated = typeof preapplyCompletenessLocked === 'boolean';
 
-    const postapplyAttempted = this.draft.applyAttempted === true
-      && this.draft.visibleValidationAttempted === true;
-    if (postapplyAttempted && preapplyCompletenessLocked === true) {
+    if (this.draft.applyCommitted === true && preapplyCompletenessLocked === true) {
       const post = checkExperiencePostapplyDiagnosticCompleteness(
         base as Record<string, unknown>,
       );
@@ -4253,23 +3594,18 @@ export class ExperienceAiDiagnosticSession {
       postapplyCompletenessPassed = null;
     }
 
-    const invariantCompleteness = preapplyCompletenessLocked === false
-      ? false
-      : (aab329PreapplyEvaluated && postapplyAttempted
-        ? combineExperienceDiagnosticCompleteness({
-          preapplyPassed: true,
-          postapplyPassed: postapplyCompletenessPassed,
-          postapplyApplicable: true,
-        })
-        : base.diagnosticCompletenessPassed);
-    const invariantBase = {
-      ...base,
-      diagnosticCompletenessPassed: invariantCompleteness,
-      postapplyDiagnosticCompletenessPassed: postapplyCompletenessPassed,
-      postapplyMissingRequiredDiagnosticFields: postapplyMissing,
-      postapplyNullRequiredDiagnosticFields: postapplyNullish,
-    };
-    const invariants = checkExperienceDiagnosticInvariants(invariantBase);
+    // The pre-apply snapshot intentionally carries overall completeness=false
+    // until post-apply validation exists. Once committed, invariants must see
+    // the freshly evaluated combined truth rather than that stale sentinel.
+    const invariantInput = (
+      aab329PreapplyEvaluated && this.draft.applyCommitted === true
+    )
+      ? {
+        ...base,
+        diagnosticCompletenessPassed: postapplyCompletenessPassed === true,
+      }
+      : base;
+    const invariants = checkExperienceDiagnosticInvariants(invariantInput);
     // Only enforce AAB-329 preapply invariants when that phase actually ran.
     const preapplyInv = typeof preapplyInvariantLocked === 'boolean'
       ? {
@@ -4283,7 +3619,7 @@ export class ExperienceAiDiagnosticSession {
     const combinedInvariantPassed = preapplyInv.passed && invariants.passed
       && (this.draft.postapplyDiagnosticInvariantCheckPassed !== false);
     const withInvariants = {
-      ...invariantBase,
+      ...base,
       diagnosticInvariantCheckPassed: combinedInvariantPassed,
       diagnosticInvariantFailureCount:
         (preapplyInv.failures?.length || 0) + invariants.failures.length,
@@ -4306,7 +3642,7 @@ export class ExperienceAiDiagnosticSession {
       nullFields = (this.draft.preapplyNullRequiredDiagnosticFields as string[] | undefined)
         || (this.draft.nullRequiredDiagnosticFields as string[] | undefined)
         || [];
-    } else if (aab329PreapplyEvaluated && postapplyAttempted) {
+    } else if (aab329PreapplyEvaluated && this.draft.applyCommitted === true) {
       completenessPassed = combineExperienceDiagnosticCompleteness({
         preapplyPassed: true,
         postapplyPassed: postapplyCompletenessPassed,

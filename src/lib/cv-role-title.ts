@@ -3,14 +3,8 @@
  * Display localization must never mutate the canonical stored title.
  * Conflict handling is category-based (not Kuvar/logistics-hardcoded).
  */
-import { languages, resolveLocaleCandidate, type Locale } from './i18n/translations';
+import type { Locale } from './i18n/translations';
 import { normalizeCoverLetterGender } from './cover-letter-gender';
-import {
-  localizeGraphicDesigner,
-  localizeWarehouseEmployee,
-} from './cv-known-role-title-mappings';
-
-export { localizeGraphicDesigner, localizeWarehouseEmployee };
 
 const PLACEHOLDER_TITLE = /^(n\/a|na|tbd|test|xxx|position|role|job|title|none|unknown)$/i;
 
@@ -118,6 +112,53 @@ export function localizeBaker(locale: Locale, gender?: string): string {
   if (locale === 'ar') return 'خباز';
   if (locale === 'ja') return 'ベイカー';
   return 'Baker';
+}
+
+/** Warehouse / logistics occupation — never collapse to generic "पेशेवर". */
+export function localizeWarehouseEmployee(locale: Locale, gender?: string): string {
+  const g = normalizeCoverLetterGender(gender);
+  if (locale === 'hi') return 'वेयरहाउस कर्मचारी';
+  if (locale === 'hr') {
+    if (g === 'female') return 'Radnica u skladištu';
+    if (g === 'male') return 'Radnik u skladištu';
+    return 'Radnik u skladištu';
+  }
+  if (locale === 'sr') {
+    return g === 'female' ? 'Radnica u magacinu' : 'Radnik u magacinu';
+  }
+  if (locale === 'de') return g === 'female' ? 'Lagermitarbeiterin' : 'Lagermitarbeiter';
+  if (locale === 'fr') return g === 'female' ? 'Employée d’entrepôt' : 'Employé d’entrepôt';
+  if (locale === 'es') return g === 'female' ? 'Empleada de almacén' : 'Empleado de almacén';
+  if (locale === 'it') return g === 'female' ? 'Addetta al magazzino' : 'Addetto al magazzino';
+  if (locale === 'pt-BR') return g === 'female' ? 'Funcionária de armazém' : 'Funcionário de armazém';
+  if (locale === 'ru') return g === 'female' ? 'Кладовщица' : 'Кладовщик';
+  if (locale === 'ar') return g === 'female' ? 'موظفة مستودع' : 'موظف مستودع';
+  if (locale === 'ja') return '倉庫作業員';
+  return 'Warehouse Employee';
+}
+
+/** Graphic / visual designer — gendered Arabic forms. */
+export function localizeGraphicDesigner(locale: Locale, gender?: string): string {
+  const g = normalizeCoverLetterGender(gender);
+  if (locale === 'hi') return 'ग्राफिक डिज़ाइनर';
+  if (locale === 'en') return 'Graphic Designer';
+  if (locale === 'hr') {
+    if (g === 'female') return 'grafička dizajnerica';
+    if (g === 'male') return 'grafički dizajner';
+    return 'grafički dizajner';
+  }
+  if (locale === 'sr') {
+    return g === 'female' ? 'Grafička dizajnerka' : 'Grafički dizajner';
+  }
+  if (locale === 'de') return g === 'female' ? 'Grafikdesignerin' : 'Grafikdesigner';
+  if (locale === 'fr') return g === 'female' ? 'Graphiste' : 'Graphiste';
+  if (locale === 'es') return g === 'female' ? 'Diseñadora gráfica' : 'Diseñador gráfico';
+  if (locale === 'it') return g === 'female' ? 'Designer grafica' : 'Designer grafico';
+  if (locale === 'pt-BR') return g === 'female' ? 'Designer gráfica' : 'Designer gráfico';
+  if (locale === 'ru') return g === 'female' ? 'Графический дизайнер' : 'Графический дизайнер';
+  if (locale === 'ar') return g === 'female' ? 'مصممة جرافيك' : 'مصمم جرافيك';
+  if (locale === 'ja') return 'グラフィックデザイナー';
+  return 'Graphic Designer';
 }
 
 /** Fold Latin diacritics so skladištu / skladistu match the same occupation rules. */
@@ -482,48 +523,6 @@ export function matchesGraphicDesignerOccupationalTitle(text: string): boolean {
   return false;
 }
 
-function sameExperienceTitleSurface(left: string, right: string): boolean {
-  return left.normalize('NFKC').trim().localeCompare(
-    right.normalize('NFKC').trim(),
-    undefined,
-    { sensitivity: 'accent' },
-  ) === 0;
-}
-
-/**
- * Old app-owned localized titles could be persisted as manual while retaining
- * a foreign source-locale declaration. Reclaim only a known title that
- * contradicts its declared source locale; free text and a genuine manual
- * title remain exact user authority.
- */
-function hasStaleAppOwnedGraphicDesignerProvenance(
-  exp: {
-    positionSourceLocale?: string;
-    descriptionOrigin?: string;
-  },
-  raw: string,
-): boolean {
-  const sourceLocale = resolveLocaleCandidate(exp.positionSourceLocale);
-  const appOwnedDescription = exp.descriptionOrigin === 'ai_generated'
-    || exp.descriptionOrigin === 'ai_repaired'
-    || exp.descriptionOrigin === 'deterministic_fallback';
-  if (!sourceLocale || !appOwnedDescription || !matchesGraphicDesignerOccupationalTitle(raw)) {
-    return false;
-  }
-  const matchesKnownSurface = (candidateLocale: Locale) =>
-    ['female', 'male', undefined].some((gender) =>
-      sameExperienceTitleSurface(raw, localizeGraphicDesigner(candidateLocale, gender)),
-    );
-
-  // A manual title that agrees with its declared source locale is genuine
-  // user authority. A known title that instead matches another locale is the
-  // stale app-owned localization contradiction and may be reprojected.
-  return !matchesKnownSurface(sourceLocale)
-    && languages.some((language) => (
-      language.code !== sourceLocale && matchesKnownSurface(language.code)
-    ));
-}
-
 /**
  * Authoritative Experience title for preview / PDF / DOCX.
  * Preserves explicit manual free-text; re-projects app-localized known occupations.
@@ -535,7 +534,6 @@ export function resolveExperienceTitleForDisplay(
     positionProvenance?: string;
     positionUserEdited?: boolean;
     positionSourceLocale?: string;
-    descriptionOrigin?: string;
   },
   locale: Locale,
   gender?: string,
@@ -548,10 +546,7 @@ export function resolveExperienceTitleForDisplay(
   const userEdited = Boolean(exp.positionUserEdited);
 
   // Explicit user text wins — including intentional foreign-script titles.
-  // A known Graphic Designer surface contradicting its declared source locale
-  // is the legacy stale app-owned contradiction.
-  if ((userEdited || provenance === 'manual')
-    && !hasStaleAppOwnedGraphicDesignerProvenance(exp, raw)) {
+  if (userEdited || provenance === 'manual') {
     return raw;
   }
 

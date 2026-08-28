@@ -33,10 +33,7 @@ import {
   type FreeTextJobDomain,
   foldAiTextToken,
 } from './cv-ai-operation-contract';
-import {
-  realizeArabicBuiltExperiencePersonEvidence,
-  validateArabicExperienceEmploymentTense,
-} from './cv-arabic-experience-tense';
+import { validateArabicExperienceEmploymentTense } from './cv-arabic-experience-tense';
 import {
   detectExperienceGenerationUnsupportedClaims,
   EXPERIENCE_GENERATION_CLAIM_SAFETY_366_REVISION,
@@ -227,42 +224,19 @@ export function validateExperienceGenerationOutput(
       unsupportedClaimCount: 0,
     };
   }
-  const perspective = validateExperienceCvPerspective(text, options.locale, {
-    isPresent: options.isPresent !== false,
-  });
+  const perspective = validateExperienceCvPerspective(text, options.locale);
   if (!perspective.ok) {
-    const arabicEmployment = options.locale === 'ar'
-      ? validateArabicExperienceEmploymentTense(text, {
-        isPresent: options.isPresent !== false,
-        gender: options.gender,
-      })
-      : null;
-    const phaseTensePassed = arabicEmployment
-      ? arabicEmployment.finalTensePassed && arabicEmployment.finalGenderAgreementPassed
-      : true;
     return {
       ok: false,
       reason: 'experience_generation_failed',
       generatedBulletCount,
       relevanceValidationPassed: true,
       perspectiveValidationPassed: false,
-      tenseValidationPassed: phaseTensePassed,
+      tenseValidationPassed: true,
       unsupportedClaimCount: 0,
-      ...(arabicEmployment
-        ? {
-          providerTensePassed: arabicEmployment.providerTensePassed,
-          normalizedTensePassed: arabicEmployment.normalizedTensePassed,
-          finalTensePassed: arabicEmployment.finalTensePassed,
-          finalEmploymentState: arabicEmployment.finalEmploymentState,
-          finalGenderAgreementPassed: arabicEmployment.finalGenderAgreementPassed,
-          finalArabicVerbForms: arabicEmployment.finalArabicVerbForms,
-        }
-        : {}),
     };
   }
-  const person = detectExperiencePersonMode(text, options.locale, {
-    isPresent: options.isPresent !== false,
-  });
+  const person = detectExperiencePersonMode(text, options.locale);
   let tenseValidationPassed = person !== 'first_singular';
   if (options.locale === 'ar') {
     const employmentTense = validateArabicExperienceEmploymentTense(text, {
@@ -1557,13 +1531,7 @@ export function buildJobContextGenerationFallback(options: {
 
   const specialized = domainShells(domain, locale, present, female, options.position || '');
   if (specialized) {
-    const specializedText = formatExperienceBullets([...specialized]);
-    return locale === 'ar'
-      ? realizeArabicBuiltExperiencePersonEvidence(specializedText, {
-        isPresent: present,
-        gender: options.gender,
-      })
-      : specializedText;
+    return formatExperienceBullets([...specialized]);
   }
 
   // English general domain: morphology-grounded duties (never tautological role shells).
@@ -1673,7 +1641,7 @@ export function buildJobContextGenerationFallback(options: {
           'ينسّق أنشطة العمل مع الزملاء حسب متطلبات الدور.',
         ]);
     }
-    const completedArabic = formatExperienceBullets(female
+    return formatExperienceBullets(female
       ? [
         `نفّذت المهام اليومية المرتبطة بدور ${groundedWork} وفق ما أُسند إليها.`,
         'أكملت مهام العمل وفق احتياجات الدور.',
@@ -1684,10 +1652,6 @@ export function buildJobContextGenerationFallback(options: {
         'أكمل مهام العمل وفق احتياجات الدور.',
         'نسّق أنشطة العمل مع الزملاء حسب متطلبات الدور.',
       ]);
-    return realizeArabicBuiltExperiencePersonEvidence(completedArabic, {
-      isPresent: false,
-      gender: options.gender,
-    });
   }
 
   if (locale === 'ja') {

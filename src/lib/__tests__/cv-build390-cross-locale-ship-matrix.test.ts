@@ -140,17 +140,9 @@ describe('AAB-390 cross-locale ship matrices', () => {
             ? seed
             : await finalize({ source, target, gender: gender.value, action, summary: existing });
           const label = `${source}->${target}/${gender.key}/${action}`;
-          if (target === 'sr' && (action === 'stronger' || action === 'shorter') && fin.blocked) {
-            expect(fin.countedAsSuccess, label).toBe(false);
-            expect(fin.reason, label).toBe('style_no_safe_material_change');
-            expect(aab389Hash(fin.text || ''), label).toBe(aab389Hash(existing || ''));
-            executed += 1;
-            continue;
-          }
           const text = aab389AssertSummarySuccess(fin, target, label);
           expect(fin.diagnostics?.crossLocaleLocalizationRequired, label).toBe(true);
-          expect(fin.diagnostics?.localizationSource, label)
-            .toMatch(/provider|validated_cache|mixed_authoritative/);
+          expect(fin.diagnostics?.localizationSource, label).toMatch(/provider|validated_cache/);
           expect(fin.diagnostics?.entryIdParityPassed, label).toBe(true);
           expect(fin.diagnostics?.factIdParityPassed, label).toBe(true);
           expect(fin.diagnostics?.factOwnershipParityPassed, label).toBe(true);
@@ -191,15 +183,6 @@ describe('AAB-390 cross-locale ship matrices', () => {
               ? seed
               : await finalize({ source, target, gender: gender.value, action, summary: existing });
             const label = `${source}->${target}/${gender.key}/${action}`;
-            if (target === 'sr' && (action === 'stronger' || action === 'shorter') && fin.blocked) {
-              expect(fin.countedAsSuccess, label).toBe(false);
-            expect(fin.reason, label).toBe('style_no_safe_material_change');
-            expect(aab389Hash(fin.text || ''), label).toBe(aab389Hash(existing || ''));
-            if (source === target) sameLocale += 1;
-            else crossLocale += 1;
-            executed += 1;
-              continue;
-            }
             const text = aab389AssertSummarySuccess(fin, target, label);
             expect(fin.diagnostics?.entryIdParityPassed, label).toBe(true);
             expect(fin.diagnostics?.factIdParityPassed, label).toBe(true);

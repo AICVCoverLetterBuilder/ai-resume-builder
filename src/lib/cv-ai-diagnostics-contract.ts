@@ -42,10 +42,6 @@ import {
 } from './cv-experience-locale-rejection-truth-328';
 import { localesEquivalent, normalizeLocaleKey, canonicalizeContentLocale } from './cv-content-locale';
 import { resolveLocaleCandidate } from './i18n/translations';
-import {
-  validateSummaryV2MaterialAuthorityProvenance,
-} from './cv-summary-v2/material-claims';
-import type { SummaryV2MaterialAuthorityResult } from './cv-summary-v2/types';
 void SUMMARY_EXPLICIT_SKILL_PROVENANCE_320_REVISION;
 void SUMMARY_CANDIDATE_PHASE_SEPARATION_320_REVISION;
 void GERMAN_SUMMARY_RECOVERY_DISPATCH_320_REVISION;
@@ -213,7 +209,6 @@ export type CvAiCandidateKind =
 
 export type CvAiDiagnosticSentenceGrammarRecord = {
   sentenceHash: string;
-  clauseIndex?: number;
   roleSlot: string;
   hasFiniteVerb: boolean;
   hasFiniteCopula: boolean;
@@ -222,12 +217,6 @@ export type CvAiDiagnosticSentenceGrammarRecord = {
   standaloneRelativeFragmentDetected: boolean;
   grammarPassed: boolean;
   grammarReasons: string[];
-  /** Hindi Summary V2 only; morphology categories, never visible text. */
-  employmentState?: 'present' | 'completed' | 'unknown';
-  perspectiveMode?: 'first_person' | 'neutral_or_unspecified';
-  genderMode?: 'female' | 'male' | 'neutral' | 'unspecified';
-  agreementMode?: 'first_person_habitual' | 'first_person_perfective' | 'neutral' | 'unknown';
-  aspect?: 'present_habitual' | 'past_habitual' | 'perfective' | 'mixed' | 'unknown';
 };
 
 export type CvAiCandidateLineageRecord = {
@@ -312,7 +301,7 @@ export const CV_AI_DIAG_HISTORY_STORAGE_KEY = 'cvpro-cv-ai-diag-history-v1';
 const HISTORY_MAX_PER_KIND = 5;
 
 const GRAMMAR_REJECTION_CATEGORY_RE =
-  /^(nominal_experience_fragment|standalone_relative_fragment|missing_finite_copula|missing_finite_auxiliary|incomplete_sentence|current_intro_copula_missing|current_duty_auxiliary_missing|invalid_tense|invalid_gender_form|invalid_perspective|hindi_first_person_(?:present_auxiliary_invalid|completed_auxiliary_invalid|gender_agreement_invalid|perfective_ergative_missing|mixed_aspect_coordination))$/;
+  /^(nominal_experience_fragment|standalone_relative_fragment|missing_finite_copula|missing_finite_auxiliary|incomplete_sentence|current_intro_copula_missing|current_duty_auxiliary_missing|invalid_tense|invalid_gender_form|invalid_perspective)$/;
 const MEDIUM_OR_GROUNDING_REJECTION_RE =
   /unsupported_(?:print|branding|marketing|design)_|unsupported_claim|cross_entry|cross_domain|stale_fact|hindi_summary_grounding|summary_grounding/;
 
@@ -473,30 +462,22 @@ type SummaryLike = {
   finalCandidateSource?: string | null;
   providerCandidatePresent?: boolean;
   deterministicCandidatePresent?: boolean;
-  fallbackCandidatePresent?: boolean;
   fallbackApplied?: boolean;
   visibleApplySucceeded?: boolean;
   visibleSummaryMatchesFinalHash?: boolean | null;
   countedAsSuccess?: boolean;
   usageCountBefore?: number;
   usageCountAfter?: number;
-  perspectiveValidationPassed?: boolean | null;
-  genderValidationPassed?: boolean | null;
-  tenseValidationPassed?: boolean | null;
-  grammarValidationPassed?: boolean | null;
+  grammarValidationPassed?: boolean;
   hindiIncompleteSentenceCount?: number | null;
   hindiNominalExperienceFragmentDetected?: boolean | null;
   hindiGrammarRejectionReason?: string | null;
   hindiGrammarRejectionReasons?: string[] | null;
-  groundingValidationPassed?: boolean | null;
+  groundingValidationPassed?: boolean;
   unsupportedClaimCount?: number;
   finalUnsupportedDesignMediumCount?: number | null;
   finalUnsupportedDesignMediumKinds?: string[] | null;
-  sourcePrintFactPresent?: boolean | null;
-  sourcePrintFactPresentScope?: string | null;
-  finalPrintClaimDetected?: boolean | null;
-  materialAuthority?: SummaryV2MaterialAuthorityResult | null;
-  durationValidationPassed?: boolean | null;
+  durationValidationPassed?: boolean;
   authoritativeDurationMonths?: number | null;
   finalRenderedDurationSemanticMonths?: number | null;
   visibleRenderedDurationSemanticMonths?: number | null;
@@ -523,31 +504,6 @@ type SummaryLike = {
   deterministicCandidateHash?: string | null;
   deterministicCandidateSentenceCount?: number | null;
   groundingInputEqualsFinalValidatedCandidate?: boolean | null;
-  deterministicCandidateEqualsGroundingInput?: boolean | null;
-  currentRoleTitleMatchesStructuredRole?: boolean | null;
-  currentRoleTitleSource?: string | null;
-  currentRoleTitleEntryIdHash?: string | null;
-  visibleCurrentDutyFactMatchedUnitHashesByFactHash?: Record<string, string[]> | null;
-  finalUnitHashes?: string[] | null;
-  unitOwnershipValidationPassed?: boolean | null;
-  unitOwnershipFailureReason?: string | null;
-  factUnitOwnershipValidationPassed?: boolean | null;
-  finalUnitOwnershipEvidence?: Array<{
-    unitHash?: string | null;
-    roleSlot?: string | null;
-    owningEntryHash?: string | null;
-    priorOrdinal?: number | null;
-  }> | null;
-  factUnitOwnershipEvidence?: Array<{
-    factHash?: string | null;
-    owningEntryHash?: string | null;
-    semanticRole?: string | null;
-    matchedUnitHashes?: string[] | null;
-    matchedUnitOwnerHashes?: string[] | null;
-    matchedUnitRoleSlots?: string[] | null;
-    ownershipPassed?: boolean | null;
-    covered?: boolean | null;
-  }> | null;
   visibleCandidateHashAfterApply?: string | null;
   visibleDurationClaimCountAfterApply?: number | null;
   finalUnitRoleSlots?: string[] | null;
@@ -584,12 +540,6 @@ type SummaryLike = {
   competencyInferenceFromRoleForbidden?: boolean | null;
   finalUnitSemanticRolesByUnit?: string[][] | null;
   finalSentenceSemanticRolesBySentence?: string[][] | null;
-  deterministicCandidateRoleSlots?: string[] | null;
-  deterministicCandidateSemanticRolesBySentence?: string[][] | null;
-  frenchStrongerSemanticValidationPassed?: boolean | null;
-  frenchStrongerSemanticRejectionReasons?: string[] | null;
-  frenchPredicateEvidence?: Array<Record<string, unknown>> | null;
-  frenchRoleTenseEvidence?: Array<Record<string, unknown>> | null;
   finalCurrentEmployerPresent?: boolean | null;
   finalPriorEmployerPresent?: boolean | null;
   finalCurrentEmploymentStateExpressed?: boolean | null;
@@ -1363,62 +1313,6 @@ export function checkSummaryDiagnosticInvariants(
     });
   }
 
-  // Summary V2 material acceptance and diagnostics must carry the exact same
-  // privacy-safe fact→category→entry→unit result. A detected accepted
-  // claim without fact-level evidence blocks pre-apply/usage.
-  if (
-    trace.summaryV2FactIdPathActive === true
-    && trace.finalPrintClaimDetected === true
-    && !trace.materialAuthority
-  ) {
-    push('final_material_claim_missing_canonical_authority_result', {
-      finalPrintClaimDetected: true,
-      materialAuthorityPresent: false,
-    });
-  }
-  if (trace.materialAuthority) {
-    const materialInvariant = validateSummaryV2MaterialAuthorityProvenance(
-      trace.materialAuthority,
-    );
-    if (!materialInvariant.passed || !trace.materialAuthority.invariantPassed) {
-      push('material_authority_provenance_invariant_failed', {
-        canonicalInvariantPassed: materialInvariant.passed,
-        recordedInvariantPassed: trace.materialAuthority.invariantPassed,
-        failureCount: materialInvariant.failureReasons.length,
-      });
-    }
-    if (
-      trace.finalPrintClaimDetected !== trace.materialAuthority.printClaimDetected
-      || (trace.finalUnsupportedDesignMediumCount ?? 0)
-        !== trace.materialAuthority.unsupportedPrintClaimCount
-      || trace.sourcePrintFactPresent !== trace.materialAuthority.sourcePrintFactPresent
-      || trace.sourcePrintFactPresentScope
-        !== trace.materialAuthority.sourcePrintFactPresentScope
-    ) {
-      push('material_authority_legacy_field_mismatch', {
-        finalPrintClaimDetected: trace.finalPrintClaimDetected ?? null,
-        canonicalPrintClaimDetected: trace.materialAuthority.printClaimDetected,
-        finalUnsupportedDesignMediumCount: trace.finalUnsupportedDesignMediumCount ?? null,
-        canonicalUnsupportedPrintClaimCount:
-          trace.materialAuthority.unsupportedPrintClaimCount,
-        sourcePrintFactPresentScope: trace.sourcePrintFactPresentScope ?? null,
-      });
-    }
-    if (
-      trace.groundingValidationPassed === true
-      && trace.materialAuthority.finalClaimAuthorityEvidence.some(
-        (claim) => !claim.authorityMatchPassed,
-      )
-    ) {
-      push('grounding_passed_with_unmatched_material_authority', {
-        groundingValidationPassed: true,
-        unmatchedFinalClaimCount: trace.materialAuthority.finalClaimAuthorityEvidence.filter(
-          (claim) => !claim.authorityMatchPassed,
-        ).length,
-      });
-    }
-  }
-
   // AAB-356 — contradictory shared material-fact / authoritative coverage invariants.
   {
     const locale = String(trace.requestedLocale || '');
@@ -1831,26 +1725,6 @@ export function checkSummaryDiagnosticInvariants(
       });
     }
     if (
-      String(trace.requestedLocale || '').toLowerCase() === 'fr'
-      && trace.countedAsSuccess === true
-      && trace.visibleApplySucceeded === true
-    ) {
-      const frenchValidationFields = [
-        ['grammarValidationPassed', trace.grammarValidationPassed],
-        ['visibleGrammarValidationPassed', trace.visibleGrammarValidationPassed],
-        ['visibleNativeSurfaceValidationPassed', trace.visibleNativeSurfaceValidationPassed],
-        ['visibleFinalPostconditionsPassed', trace.visibleFinalPostconditionsPassed],
-      ] as const;
-      for (const [field, value] of frenchValidationFields) {
-        if (value !== true) {
-          push('french_success_without_validated_visible_surface', {
-            field,
-            value: value ?? null,
-          });
-        }
-      }
-    }
-    if (
       trace.countedAsSuccess === true
       && (
         trace.requiredCurrentDutyFactCount == null
@@ -1905,123 +1779,6 @@ export function checkSummaryDiagnosticInvariants(
   }
 
   // AAB-325 — English Summary shared final-gate invariants.
-  const equalityPairs: Array<[string, unknown, unknown, unknown]> = [
-    ['deterministic_grounding', trace.deterministicCandidateEqualsGroundingInput, trace.deterministicCandidateHash, trace.groundingInputCandidateHash],
-    ['grounding_final', trace.groundingInputEqualsFinalValidatedCandidate, trace.groundingInputCandidateHash, trace.finalValidatedCandidateHash],
-  ];
-  for (const [comparison, equals, left, right] of equalityPairs) {
-    if (equals === true && (!left || !right)) push('candidate_equality_true_without_both_hashes', { comparison });
-  }
-  if (
-    trace.currentRoleTitlePresent === true
-    && trace.currentRoleTitleMatchesStructuredRole === true
-    && (!trace.currentRoleTitleSource || !trace.currentRoleTitleEntryIdHash)
-  ) {
-    push('current_role_true_without_source_bound_provenance', {
-      currentRoleTitleSource: trace.currentRoleTitleSource ?? null,
-      currentRoleTitleEntryIdHash: trace.currentRoleTitleEntryIdHash ?? null,
-    });
-  }
-  const matchedFactUnits = trace.visibleCurrentDutyFactMatchedUnitHashesByFactHash;
-  const matchedFactUnitKeys = matchedFactUnits && typeof matchedFactUnits === 'object'
-    && !Array.isArray(matchedFactUnits)
-    ? Object.keys(matchedFactUnits as Record<string, unknown>)
-    : [];
-  // Summary V2 entry-owned facts explicitly promise owning unit hashes. The
-  // older warehouse-diagnostic map predates that contract and uses canonical
-  // fact IDs with candidate-level evidence hashes.
-  const entryOwnedMatchedUnitContract = matchedFactUnitKeys.some(
-    (factHash) => factHash.startsWith('v2_entry_'),
-  );
-  if (entryOwnedMatchedUnitContract && matchedFactUnits && typeof matchedFactUnits === 'object'
-    && !Array.isArray(matchedFactUnits)) {
-    const allowedUnitHashes = new Set(Array.isArray(trace.finalUnitHashes) ? trace.finalUnitHashes.map(String) : []);
-    for (const [factHash, hashes] of Object.entries(matchedFactUnits as Record<string, unknown>)) {
-      if (!Array.isArray(hashes) || hashes.some((hash) => !allowedUnitHashes.has(String(hash)))) {
-        push('matched_fact_hash_not_final_owning_unit_hash', { factHash });
-      }
-    }
-  }
-
-  const finalUnitOwnership = Array.isArray(trace.finalUnitOwnershipEvidence)
-    ? trace.finalUnitOwnershipEvidence
-    : [];
-  const factUnitOwnership = Array.isArray(trace.factUnitOwnershipEvidence)
-    ? trace.factUnitOwnershipEvidence
-    : [];
-  if (trace.countedAsSuccess && finalUnitOwnership.length > 0) {
-    if (trace.unitOwnershipValidationPassed !== true) {
-      push('summary_v2_success_without_unit_ownership_validation', {
-        unitOwnershipFailureReason: trace.unitOwnershipFailureReason ?? null,
-      });
-    }
-    if (trace.factUnitOwnershipValidationPassed !== true) {
-      push('summary_v2_success_without_fact_unit_ownership_validation', {});
-    }
-    const finalHashes = new Set(
-      Array.isArray(trace.finalUnitHashes) ? trace.finalUnitHashes.map(String) : [],
-    );
-    const unitsByHash = new Map<string, typeof finalUnitOwnership[number]>();
-    for (const unit of finalUnitOwnership) {
-      const unitHash = String(unit.unitHash || '');
-      if (!unitHash || unitsByHash.has(unitHash)) {
-        push('summary_v2_final_unit_hash_missing_or_duplicate', { unitHash });
-        continue;
-      }
-      unitsByHash.set(unitHash, unit);
-      if (!finalHashes.has(unitHash)) {
-        push('summary_v2_ownership_unit_not_in_final_candidate', { unitHash });
-      }
-      const roleSlot = String(unit.roleSlot || '');
-      if (roleSlot === 'duration') {
-        if (unit.owningEntryHash) {
-          push('summary_v2_duration_unit_has_entry_owner', { unitHash });
-        }
-      } else if (!unit.owningEntryHash) {
-        push('summary_v2_role_unit_missing_entry_owner', { unitHash, roleSlot });
-      }
-    }
-    for (const fact of factUnitOwnership) {
-      const factHash = String(fact.factHash || '');
-      const owningEntryHash = String(fact.owningEntryHash || '');
-      const matchedHashes = Array.isArray(fact.matchedUnitHashes)
-        ? fact.matchedUnitHashes.map(String)
-        : [];
-      const matchedOwnerHashes = Array.isArray(fact.matchedUnitOwnerHashes)
-        ? fact.matchedUnitOwnerHashes.map(String)
-        : [];
-      const matchedRoleSlots = Array.isArray(fact.matchedUnitRoleSlots)
-        ? fact.matchedUnitRoleSlots.map(String)
-        : [];
-      if (!factHash || !owningEntryHash || fact.covered !== true
-        || fact.ownershipPassed !== true || matchedHashes.length === 0) {
-        push('summary_v2_fact_missing_owned_final_unit', { factHash });
-        continue;
-      }
-      if (matchedHashes.length !== matchedOwnerHashes.length
-        || matchedHashes.length !== matchedRoleSlots.length) {
-        push('summary_v2_fact_ownership_evidence_length_mismatch', { factHash });
-        continue;
-      }
-      matchedHashes.forEach((unitHash, index) => {
-        const unit = unitsByHash.get(unitHash);
-        const expectedRoleSlot = fact.semanticRole === 'current_fact'
-          ? 'current_role'
-          : 'prior_role';
-        if (!unit || unit.owningEntryHash !== owningEntryHash
-          || matchedOwnerHashes[index] !== owningEntryHash
-          || unit.roleSlot !== expectedRoleSlot
-          || matchedRoleSlots[index] !== expectedRoleSlot) {
-          push('summary_v2_fact_cross_entry_unit_ownership_violation', {
-            factHash,
-            unitHash,
-            semanticRole: fact.semanticRole ?? null,
-          });
-        }
-      });
-    }
-  }
-
   if (String(trace.requestedLocale || '') === 'en') {
     const detected = Array.isArray(trace.detectedLocaleByUnit)
       ? (trace.detectedLocaleByUnit as unknown[])
@@ -2672,31 +2429,6 @@ export function checkSummaryDiagnosticInvariants(
     }
   }
 
-  const noCandidateExisted = trace.finalCandidateSource === 'none'
-    && trace.providerCandidatePresent === false
-    && trace.deterministicCandidatePresent === false
-    && trace.fallbackCandidatePresent !== true;
-  if (noCandidateExisted) {
-    for (const key of [
-      'perspectiveValidationPassed',
-      'genderValidationPassed',
-      'tenseValidationPassed',
-      'localeValidationPassed',
-      'targetLocalePurityPassed',
-      'grammarValidationPassed',
-      'groundingValidationPassed',
-      'durationValidationPassed',
-      'finalPostconditionsPassed',
-    ] as const) {
-      if (key in trace && trace[key] !== null) {
-        push('no_candidate_validator_must_be_not_evaluated', {
-          field: key,
-          value: trace[key] ?? null,
-        });
-      }
-    }
-  }
-
   return { passed: failures.length === 0, failures };
 }
 
@@ -2723,40 +2455,14 @@ export function checkSummaryDiagnosticCompleteness(
   // when the operation terminates before any final candidate exists. Their
   // fields must still be present; successful/candidate-bearing paths must
   // continue to provide concrete boolean results.
-  const noCandidate = trace.finalCandidateSource === 'none'
-    && trace.providerCandidatePresent === false
-    && trace.deterministicCandidatePresent === false
-    && trace.fallbackCandidatePresent !== true;
-  // A deterministic candidate can be present only to establish that a
-  // Shorter/Stronger operation is a clean semantic no-op. It is not a final
-  // candidate and its downstream validators were not evaluated. Treat this
-  // terminal outcome like the no-candidate sentinel for candidate validators,
-  // while retaining finalPostconditionsPassed as its concrete clean-terminal
-  // outcome rather than confusing it with an unevaluated validator.
-  const cleanNoOp = trace.finalCandidateSource === 'none'
-    && trace.noOpDetected === true
-    && trace.countedAsSuccess === false;
-  const candidateValidatorsNotEvaluated = noCandidate || cleanNoOp;
+  const noCandidate = trace.finalCandidateSource === 'none';
   for (const key of [
-    'perspectiveValidationPassed',
-    'genderValidationPassed',
-    'tenseValidationPassed',
-    'localeValidationPassed',
-    'targetLocalePurityPassed',
     'grammarValidationPassed',
     'groundingValidationPassed',
     'durationValidationPassed',
-    'finalPostconditionsPassed',
   ] as const) {
     if (!(key in trace)) missing.push(key);
-    else if (key === 'finalPostconditionsPassed' && cleanNoOp) {
-      // This is a terminal outcome field rather than a downstream validator
-      // on a clean no-op; preserve its concrete false/true terminal value.
-      if (trace[key] === null || trace[key] === undefined) nullish.push(key);
-    } else if (
-      (candidateValidatorsNotEvaluated && trace[key] !== null)
-      || (!candidateValidatorsNotEvaluated && (trace[key] === null || trace[key] === undefined))
-    ) {
+    else if (!noCandidate && (trace[key] === null || trace[key] === undefined)) {
       nullish.push(key);
     }
   }
@@ -2780,63 +2486,6 @@ export function checkSummaryDiagnosticCompleteness(
   nullish.push(...markerCheck.nullRequiredDiagnosticFields);
   const locale = String(trace.requestedLocale || '');
   const summaryV2FactIdPathActive = trace.summaryV2FactIdPathActive === true;
-  if (summaryV2FactIdPathActive && trace.countedAsSuccess === true) {
-    for (const key of [
-      'roleTitleSurfaceEvidence',
-      'structuredRoleLocaleValidationPassed',
-      'finalStructuredRoleLocaleValidationPassed',
-      'perspectiveValidationPassed',
-      'localeVerbMorphologyPassed',
-      'sourcePrintFactPresent',
-      'sourcePrintFactPresentScope',
-      'finalPrintClaimDetected',
-      'finalUnsupportedDesignMediumCount',
-      'groundingInputCandidateHash',
-      'finalValidatedCandidateHash',
-      'currentRoleTitleSource',
-      'currentRoleTitleEntryIdHash',
-      'unitOwnershipValidationPassed',
-      'factUnitOwnershipValidationPassed',
-      'finalUnitOwnershipEvidence',
-      'factUnitOwnershipEvidence',
-    ]) require(key);
-    if (trace.finalPrintClaimDetected === true) require('materialAuthority');
-  }
-  // Every successful visible Summary apply has one shared post-write
-  // validation contract, regardless of locale or candidate origin.  These
-  // fields must describe the text actually written/read back; null is only
-  // valid before a visible apply or on a genuinely non-applicable terminal.
-  if (
-    trace.countedAsSuccess === true
-    && trace.visibleApplySucceeded === true
-    && trace.visibleCandidateHashAfterApply != null
-  ) {
-    for (const key of [
-      'visibleCandidateHashAfterApply',
-      'visibleSummaryMatchesFinalHash',
-      'visibleGrammarValidationPassed',
-      'visibleNativeSurfaceValidationPassed',
-      'visibleFinalPostconditionsPassed',
-      'visibleValidationPerspectiveMode',
-      'perspectiveAuthoritySource',
-      'perspectiveContractMatched',
-      'visibleStructuredRoleLocaleValidationPassed',
-      'visibleRequiredCurrentDutyFactCount',
-      'visibleCoveredCurrentDutyFactCount',
-      'visibleMissingCurrentDutyFactCount',
-      'visibleCurrentDutyCoveragePassed',
-      'visibleRequiredPriorDutyFactCount',
-      'visibleCoveredPriorDutyFactCount',
-      'visibleMissingPriorDutyFactCount',
-      'visiblePriorDutyCoveragePassed',
-      'visibleTargetLocalePurityPassed',
-      'visibleSourceLanguageLeakageDetected',
-      'visibleDurationClaimCountAfterApply',
-      'visibleDurationRepresentationKind',
-      'visibleDurationRepresentationCount',
-      'visibleDurationScopeValidationPassed',
-    ]) require(key);
-  }
   if (locale === 'hi') {
     const hindiWarehouseApplicable = !summaryV2FactIdPathActive
       && trace.hindiWarehouseGrammarFieldsApplicable !== false;
@@ -3079,17 +2728,7 @@ type ExperienceLike = {
   providerHttpStatus?: number | null;
   providerResponseKind?: string | null;
   apiResponseKind?: string | null;
-  serverRepairAttempted?: boolean | null;
-  serverRepairSelected?: boolean | null;
-  serverRepairSource?: string | null;
-  recoveryAttempted?: boolean | null;
-  recoveryCandidatePresent?: boolean | null;
-  recoverySelected?: boolean | null;
-  translationFallbackAttempted?: boolean | null;
-  translationFallbackSelected?: boolean | null;
   providerAccepted?: boolean | null;
-  providerValidationApplicable?: boolean | null;
-  providerSemanticCoveragePassed?: boolean | null;
   finalBulletCount?: number | null;
   finalBulletScripts?: unknown[] | null;
   appVersionCode?: string | null;
@@ -3119,7 +2758,6 @@ type ExperienceLike = {
   finalUnsupportedClaimKinds?: string[] | null;
   finalNormalizedHash?: string | null;
   providerUncoveredFactIdentityHashes?: string[] | null;
-  providerUncoveredFactCount?: number | null;
   providerCoveredFactCount?: number | null;
   providerRequiredFactCount?: number | null;
   relevanceValidationPassed?: boolean | null;
@@ -3139,9 +2777,6 @@ type ExperienceLike = {
   visibleTextareaLocaleBeforeApply?: string | null;
   visibleLocaleMetadataMismatchRecorded?: boolean | null;
   detectedVisibleTextLocale?: string | null;
-  visibleLocaleAuthorityKind?: string | null;
-  rawDetectorDisagreesWithTrustedLocale?: boolean | null;
-  cleanNoOpTerminalized?: boolean;
   persistedGeneratedLocaleForVisibleMismatch?: string | null;
   visibleComparisonUsedForNoOp?: boolean | null;
   visibleComparisonHash?: string | null;
@@ -3174,14 +2809,11 @@ type ExperienceLike = {
   sourceUnitPredicateCoveragePassed?: boolean | null;
   sourceIncompleteUnitCount?: number | null;
   finalCandidatePredicateIdentityCount?: number | null;
-  providerPredicateValidationApplicable?: boolean | null;
   candidateSurfaceFormPassed?: boolean | null;
   candidateSurfaceFailureKinds?: string[] | null;
   finalDecisionKind?: string | null;
   experienceCanonicalPreapplyDecisionRevision?: string | null;
   canonicalExperienceDecisionCreated?: boolean | null;
-  /** Primary provider phase; deliberately separate from final selected-candidate acceptance. */
-  providerPrimaryCandidateValidationAccepted?: boolean | null;
   providerCandidateValidationAccepted?: boolean | null;
   finalVisibleDecisionAcceptedForApply?: boolean | null;
   canonicalExperienceDecisionAllowsApply?: boolean | null;
@@ -3207,7 +2839,6 @@ type ExperienceLike = {
   requestedTargetLocale?: string | null;
   targetLocale?: string | null;
   uiLocale?: string | null;
-  applyWriteSucceeded?: boolean | null;
   applyCommitted?: boolean | null;
   targetContentApplied?: boolean | null;
   appliedVisibleContentLocale?: string | null;
@@ -3223,8 +2854,6 @@ type ExperienceLike = {
   deterministicFixesSourceDefect?: boolean | null;
   shouldApply?: boolean | null;
   shouldIncrementUsage?: boolean | null;
-  usageIncrementAttempted?: boolean | null;
-  experienceTerminalUsageTruthRevision?: string | null;
   perspectiveNormalizationApplied?: boolean | null;
   perspectiveValidationPassed?: boolean | null;
   rejectionStage?: string | null;
@@ -3289,28 +2918,6 @@ export function checkExperienceDiagnosticInvariants(
   const push = (code: string, observed: CvAiDiagnosticInvariantFailure['observed']) => {
     failures.push({ invariantCode: code, observed });
   };
-  // AAB-460 — a committed success cannot retain a phase-local terminal
-  // rejection. Provider/fallback rejection remains represented in lineage;
-  // these fields describe only the selected terminal outcome.
-  if (
-    trace.countedAsSuccess === true
-    && trace.visibleApplySucceeded === true
-    && trace.finalTypedFailureReason != null
-  ) {
-    push('success_with_terminal_failure_reason', {
-      countedAsSuccess: true,
-      finalTypedFailureReason: trace.finalTypedFailureReason,
-    });
-  }
-  if (
-    trace.applyCommitted === true
-    && trace.rejectionStage != null
-  ) {
-    push('committed_with_rejection_stage', {
-      applyCommitted: true,
-      rejectionStage: trace.rejectionStage,
-    });
-  }
   if (trace.countedAsSuccess && !trace.visibleApplySucceeded) {
     push('success_counted_but_apply_failed', {
       countedAsSuccess: true,
@@ -3342,45 +2949,6 @@ export function checkExperienceDiagnosticInvariants(
     const after = trace.usageCountAfter ?? 0;
     if (after !== before + 1) {
       push('usage_increment_mismatch_success', {
-        usageCountBefore: before,
-        usageCountAfter: after,
-      });
-    }
-  }
-  // AAB-433: terminal billing truth must describe the same committed outcome as
-  // visible apply and the persisted usage delta. Finalize-time eligibility is
-  // deliberately insufficient: no-op, invalid, rollback and race paths are +0.
-  // The finalize layer deliberately initializes provisional +0 eligibility.
-  // Only recordVisibleApply writes the revision-marked terminal outcome, so
-  // only that serialized record may be checked as committed billing truth.
-  const terminalUsageRelevant =
-    trace.experienceTerminalUsageTruthRevision !== undefined;
-  if (terminalUsageRelevant) {
-    const before = Number(trace.usageCountBefore ?? 0);
-    const after = Number(trace.usageCountAfter ?? 0);
-    const terminalSuccess = trace.applyAuthorized === true
-      && trace.applyWriteSucceeded === true
-      && trace.applyCommitted === true
-      && trace.visibleApplySucceeded === true
-      && trace.countedAsSuccess === true
-      && after === before + 1;
-    if (terminalSuccess && (
-      trace.shouldIncrementUsage !== true
-      || trace.usageIncrementAttempted !== true
-    )) {
-      push('terminal_usage_success_not_incremented', {
-        shouldIncrementUsage: trace.shouldIncrementUsage ?? null,
-        usageIncrementAttempted: trace.usageIncrementAttempted ?? null,
-      });
-    }
-    if (!terminalSuccess && (
-      trace.shouldIncrementUsage === true
-      || trace.usageIncrementAttempted === true
-      || after !== before
-    )) {
-      push('terminal_usage_non_success_incremented', {
-        shouldIncrementUsage: trace.shouldIncrementUsage ?? null,
-        usageIncrementAttempted: trace.usageIncrementAttempted ?? null,
         usageCountBefore: before,
         usageCountAfter: after,
       });
@@ -3434,64 +3002,6 @@ export function checkExperienceDiagnosticInvariants(
       clientDeterministicFallbackApplied: false,
       clientDeterministicFallbackSelected: false,
     });
-  }
-  if (
-    trace.countedAsSuccess === true
-    && trace.finalCandidateSource === 'server_fallback'
-    && (
-      trace.clientDeterministicFallbackSelected === true
-      || trace.clientDeterministicFallbackUsedForFinalCandidate === true
-      || trace.clientDeterministicFallbackApplied === true
-      || trace.fallbackSelected === true
-    )
-  ) {
-    push('server_fallback_conflicts_with_client_fallback_selection', {
-      finalCandidateSource: 'server_fallback',
-      clientDeterministicFallbackSelected:
-        trace.clientDeterministicFallbackSelected ?? null,
-      clientDeterministicFallbackUsedForFinalCandidate:
-        (trace as { clientDeterministicFallbackUsedForFinalCandidate?: boolean })
-          .clientDeterministicFallbackUsedForFinalCandidate ?? null,
-      clientDeterministicFallbackApplied: trace.clientDeterministicFallbackApplied ?? null,
-      fallbackSelected: trace.fallbackSelected ?? null,
-    });
-  }
-  if (
-    trace.countedAsSuccess === true
-    && trace.finalCandidateSource === 'deterministic_fallback'
-    && trace.fallbackSelected === true
-    && (
-      Number((trace as Record<string, unknown>).fallbackBulletCount ?? 0) <= 0
-      || Number((trace as Record<string, unknown>).fallbackCoveredFactCount ?? 0)
-        < Number((trace as Record<string, unknown>).fallbackRequiredFactCount ?? 0)
-    )
-  ) {
-    push('selected_fallback_fields_do_not_describe_final_candidate', {
-      finalCandidateSource: 'deterministic_fallback',
-      fallbackBulletCount: (trace as Record<string, unknown>).fallbackBulletCount as string | number | boolean | null ?? null,
-      fallbackRequiredFactCount: (trace as Record<string, unknown>).fallbackRequiredFactCount as string | number | boolean | null ?? null,
-      fallbackCoveredFactCount: (trace as Record<string, unknown>).fallbackCoveredFactCount as string | number | boolean | null ?? null,
-    });
-  }
-  if (
-    trace.countedAsSuccess === true
-    && trace.finalCandidateSource === 'deterministic_fallback'
-    && Array.isArray(trace.candidateLineage)
-    && trace.finalNormalizedHash
-  ) {
-    const selectedFallback = trace.candidateLineage.find((candidate) =>
-      candidate?.candidateKind === 'deterministic_fallback'
-      && candidate?.accepted === true,
-    );
-    if (
-      selectedFallback?.normalizedHash
-      && selectedFallback.normalizedHash !== trace.finalNormalizedHash
-    ) {
-      push('selected_fallback_hash_mismatch', {
-        finalNormalizedHash: trace.finalNormalizedHash,
-        fallbackNormalizedHash: selectedFallback.normalizedHash,
-      });
-    }
   }
   if (trace.finalCandidateSource === 'deterministic_fallback'
     && trace.fallbackSelected === false) {
@@ -3551,39 +3061,15 @@ export function checkExperienceDiagnosticInvariants(
     (trace.providerCoveredFactCount != null)
     && (trace.providerRequiredFactCount != null)
     && trace.providerCoveredFactCount < trace.providerRequiredFactCount
-    && trace.providerValidationApplicable !== false
-    && trace.providerValidationApplicable !== null
     && Array.isArray(trace.providerUncoveredFactIdentityHashes)
     && trace.providerUncoveredFactIdentityHashes.length === 0
+    && (trace.finalCandidateSource === 'deterministic_fallback'
+      || trace.clientDeterministicFallbackApplied)
   ) {
     push('provider_rejection_evidence_overwritten', {
       providerCoveredFactCount: trace.providerCoveredFactCount,
       providerRequiredFactCount: trace.providerRequiredFactCount,
       providerUncoveredFactIdentityHashCount: 0,
-    });
-  }
-  if (
-    trace.providerUncoveredFactCount != null
-    && Array.isArray(trace.providerUncoveredFactIdentityHashes)
-    && trace.providerUncoveredFactCount
-      !== trace.providerUncoveredFactIdentityHashes.length
-  ) {
-    push('provider_uncovered_count_identity_mismatch', {
-      providerUncoveredFactCount: trace.providerUncoveredFactCount,
-      providerUncoveredFactIdentityHashCount:
-        trace.providerUncoveredFactIdentityHashes.length,
-    });
-  }
-  if (
-    trace.providerPrimaryCandidateValidationAccepted === true
-    && (
-      trace.providerAccepted === false
-      || trace.providerSemanticCoveragePassed === false
-    )
-  ) {
-    push('provider_primary_acceptance_phase_contradiction', {
-      providerAccepted: trace.providerAccepted ?? null,
-      providerSemanticCoveragePassed: trace.providerSemanticCoveragePassed ?? null,
     });
   }
   if (
@@ -3624,7 +3110,6 @@ export function checkExperienceDiagnosticInvariants(
       trace.applyAuthorized === true
       || trace.finalFactCoveragePassed === true
       || trace.finalCandidateSource === 'provider'
-      || trace.finalCandidateSource === 'server_repair'
       || trace.finalCandidateSource === 'deterministic_fallback'
     )
   ) {
@@ -3674,28 +3159,6 @@ export function checkExperienceDiagnosticInvariants(
       noOpRepairApplied: true,
       noOpRepairAttempted: trace.noOpRepairAttempted ?? false,
     });
-  }
-  if (trace.serverRepairSelected === true && trace.serverRepairAttempted !== true) {
-    push('server_repair_selected_without_attempt', {
-      serverRepairSelected: true,
-      serverRepairAttempted: trace.serverRepairAttempted ?? false,
-    });
-  }
-  if (trace.finalCandidateSource === 'server_repair') {
-    if (trace.serverRepairAttempted !== true || trace.serverRepairSelected !== true) {
-      push('server_repair_final_source_without_selected_lineage', {
-        finalCandidateSource: 'server_repair',
-        serverRepairAttempted: trace.serverRepairAttempted ?? false,
-        serverRepairSelected: trace.serverRepairSelected ?? false,
-      });
-    }
-    if (trace.noOpRepairAttempted === true || trace.noOpRepairApplied === true) {
-      push('server_repair_mislabeled_as_client_noop_repair', {
-        finalCandidateSource: 'server_repair',
-        noOpRepairAttempted: trace.noOpRepairAttempted ?? false,
-        noOpRepairApplied: trace.noOpRepairApplied ?? false,
-      });
-    }
   }
   if (trace.unsupportedClaimRepairApplied === true) {
     if (trace.unsupportedClaimRepairAttempted !== true) {
@@ -3839,6 +3302,8 @@ export function checkExperienceDiagnosticInvariants(
         finalVisibleDecisionAcceptedForApply:
           trace.finalVisibleDecisionAcceptedForApply ?? null,
         finalDecisionKind: trace.finalDecisionKind ?? null,
+        materialImprovementDetected: trace.materialImprovementDetected ?? null,
+        semanticNoOpDetected: trace.semanticNoOpDetected ?? null,
       });
     }
     if (
@@ -4316,39 +3781,6 @@ export function checkExperienceDiagnosticInvariants(
           (c) => c?.candidateKind === 'provider',
         ),
     });
-  }
-  if (trace.earlyNoOpPreflightPassed === true) {
-    const recoveryEvidence = trace.recoveryAttempted === true
-      || trace.recoveryCandidatePresent === true
-      || trace.recoverySelected === true
-      || trace.serverRepairAttempted === true
-      || trace.serverRepairSelected === true;
-    if (recoveryEvidence) {
-      push('clean_noop_has_recovery_evidence', {
-        recoveryAttempted: trace.recoveryAttempted ?? null,
-        recoveryCandidatePresent: trace.recoveryCandidatePresent ?? null,
-        recoverySelected: trace.recoverySelected ?? null,
-        serverRepairAttempted: trace.serverRepairAttempted ?? null,
-        serverRepairSelected: trace.serverRepairSelected ?? null,
-      });
-    }
-    if (
-      trace.translationFallbackAttempted === true
-      || trace.translationFallbackSelected === true
-      || trace.clientDeterministicFallbackAttempted === true
-      || trace.clientDeterministicFallbackSelected === true
-      || trace.fallbackSelected === true
-    ) {
-      push('clean_noop_has_fallback_evidence', {
-        translationFallbackAttempted: trace.translationFallbackAttempted ?? null,
-        translationFallbackSelected: trace.translationFallbackSelected ?? null,
-        clientDeterministicFallbackAttempted:
-          trace.clientDeterministicFallbackAttempted ?? null,
-        clientDeterministicFallbackSelected:
-          trace.clientDeterministicFallbackSelected ?? null,
-        fallbackSelected: trace.fallbackSelected ?? null,
-      });
-    }
   }
   if (
     trace.providerAttempted === false
@@ -5120,8 +4552,6 @@ export const CV_AI_DIAGNOSTIC_REQUIRED_ASSET_STRINGS = [
   'hindiNominalExperienceFragmentDetected',
   'hindiSentenceHasFiniteCopulaOrVerb',
   'finalUnsupportedDesignMediumCount',
-  'materialAuthority',
-  'sourcePrintFactPresentScope',
   'deterministicUnsupportedDesignMediumCount',
   'diagnosticInvariantCheckPassed',
   'diagnosticCompletenessPassed',

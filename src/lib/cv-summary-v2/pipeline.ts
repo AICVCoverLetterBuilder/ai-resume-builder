@@ -22,7 +22,6 @@ import {
   transformSummaryV2ForRewriteStyle,
   buildSummaryV2StyledDeterministicText,
   buildSummaryV2BalancedEnhanceText,
-  buildFrenchStructuredStrongerWithEvidence,
   SUMMARY_V2_REWRITE_STYLE_384_REVISION,
   type SummaryV2RewriteStyle,
   type SummaryV2StyleFulfillment,
@@ -56,12 +55,6 @@ export type SummaryV2PipelineDiagnostics = {
   candidateTransformationAfterHash: string | null;
   styleFulfillment: SummaryV2StyleFulfillment | null;
   styleNoSafeMaterialChange: boolean;
-  /** A persisted Summary still rendered a deterministic, non-manual role in
-   * the wrong app-owned presentation surface. Such content is never a no-op. */
-  appOwnedKnownRolePresentationViolation: boolean;
-  /** The selected deterministic candidate repaired that presentation before
-   * style/no-op classification could terminate the operation. */
-  appOwnedKnownRolePresentationRepairApplied: boolean;
   crossLocaleLocalizationRequired: boolean;
   localizationAttempted: boolean;
   localizationRepairAttempted: boolean;
@@ -86,12 +79,6 @@ export type SummaryV2PipelineDiagnostics = {
   localizationTypedFailureReason: string | null;
   localizedManifestHash: string | null;
   localizedManifestRevision: string | null;
-  /** Structured ownership carried with the deterministic candidate even when
-   * that candidate is rejected later in the pipeline. */
-  deterministicCandidateRoleSlots?: string[];
-  deterministicCandidateSemanticRolesBySentence?: string[][];
-  frenchStrongerSemanticValidationPassed?: boolean | null;
-  frenchStrongerSemanticRejectionReasons?: string[];
 };
 
 function prepareCandidate(raw: string): string {
@@ -108,52 +95,6 @@ function hashNorm(text: string): string {
   return fingerprintText(
     (text || '').replace(/\s+/g, ' ').trim().toLowerCase() || 'empty',
   );
-}
-
-function deterministicManifestRoleMetadata(manifest: SummaryV2SelectionManifest): {
-  roleSlots: string[];
-  semanticRolesBySentence: string[][];
-} {
-  const roleSlots: string[] = [];
-  const semanticRolesBySentence: string[][] = [];
-  if (manifest.durationPhrase) {
-    roleSlots.push('duration');
-    semanticRolesBySentence.push(['total_duration']);
-  }
-  if (manifest.current) {
-    roleSlots.push('current_role');
-    semanticRolesBySentence.push(['current_role_intro', 'current_role_duties']);
-  }
-  for (const prior of manifest.priors) {
-    void prior;
-    roleSlots.push('prior_role');
-    semanticRolesBySentence.push(['prior_role_intro', 'prior_role_duties']);
-  }
-  return { roleSlots, semanticRolesBySentence };
-}
-
-/**
- * A rewrite may be a true style no-op only after app-owned role presentation is
- * already correct.  This deliberately ignores manual role surfaces and does
- * not inspect duties, employers, or user-authored free text.
- */
-function hasAppOwnedKnownRolePresentationViolation(
-  sourceSummary: string,
-  manifest: SummaryV2SelectionManifest,
-): boolean {
-  const source = (sourceSummary || '').replace(/\s+/g, ' ').trim();
-  if (!source) return false;
-  const entries = [...(manifest.current ? [manifest.current] : []), ...manifest.priors];
-  return entries.some((entry) => {
-    if (entry.rolePresentationIsUserAuthoritative) return false;
-    const sourceRole = (entry.sourceRoleTitle || entry.role || '').trim();
-    const expectedRole = (entry.role || '').trim();
-    if (!sourceRole || !expectedRole || sourceRole.localeCompare(expectedRole, undefined, {
-      sensitivity: 'accent',
-    }) === 0) return false;
-    return new RegExp(`(?:^|[^\\p{L}])${escapeRegExp(sourceRole)}(?=$|[^\\p{L}])`, 'iu')
-      .test(source);
-  });
 }
 
 /**
@@ -209,8 +150,6 @@ function emptyPipelineDiag(
     candidateTransformationAfterHash: null,
     styleFulfillment: null,
     styleNoSafeMaterialChange: false,
-    appOwnedKnownRolePresentationViolation: false,
-    appOwnedKnownRolePresentationRepairApplied: false,
     crossLocaleLocalizationRequired: false,
     localizationAttempted: false,
     localizationRepairAttempted: false,
@@ -235,10 +174,6 @@ function emptyPipelineDiag(
     localizationTypedFailureReason: null,
     localizedManifestHash: null,
     localizedManifestRevision: null,
-    deterministicCandidateRoleSlots: [],
-    deterministicCandidateSemanticRolesBySentence: [],
-    frenchStrongerSemanticValidationPassed: null,
-    frenchStrongerSemanticRejectionReasons: [],
   };
 }
 
@@ -292,9 +227,7 @@ export function runSummaryV2(options: RunSummaryV2Options): SummaryV2PipelineRes
     : null;
   if (!manifest) {
     const rawProvider = prepareCandidate(options.candidate || '');
-    const validation = validateSummaryV2AgainstManifest(rawProvider, sourceManifest, {
-      candidateSource: 'provider',
-    });
+    const validation = validateSummaryV2AgainstManifest(rawProvider, sourceManifest);
     diag.localizationTypedFailureReason = validation.reason === 'locale_impurity'
       ? 'locale_impurity'
       : (suppliedLocalization
@@ -312,47 +245,25 @@ export function runSummaryV2(options: RunSummaryV2Options): SummaryV2PipelineRes
       pipelineDiagnostics: diag,
     };
   }
-  const appOwnedKnownRolePresentationViolation = hasAppOwnedKnownRolePresentationViolation(
-    sourceSummary,
-    manifest,
-  );
-  diag.appOwnedKnownRolePresentationViolation = appOwnedKnownRolePresentationViolation;
   void SUMMARY_V2_LOCALIZED_MANIFEST_REVISION;
-  const deterministicRoleMetadata = deterministicManifestRoleMetadata(manifest);
-  diag.deterministicCandidateRoleSlots = deterministicRoleMetadata.roleSlots;
-  diag.deterministicCandidateSemanticRolesBySentence =
-    deterministicRoleMetadata.semanticRolesBySentence;
-
-  // French Stronger is serialized from the owned manifest, never from a
-  // provider's prose.  Keep one canonical expected surface so unsafe tense,
-  // action, object, or responsibility rewrites cannot be accepted merely
-  // because generic lexical coverage happens to pass.
-  const frenchStructuredStronger = style === 'stronger' && options.locale === 'fr'
-    ? buildFrenchStructuredStrongerWithEvidence(manifest)
-    : null;
 
   const provider = prepareCandidate(options.candidate || '');
   let text = '';
   let origin: SummaryV2PipelineResult['origin'] = 'deterministic_fallback';
-  let deterministicConstructionOrder = false;
 
   const styleOk = (candidate: string): boolean => {
     if (!style) return true;
-    const fulfilled = evaluateSummaryV2StyleFulfillment({
+    return evaluateSummaryV2StyleFulfillment({
       style,
       sourceText: sourceSummary,
       candidateText: candidate,
       locale: options.locale,
     }).styleValidationPassed;
-    if (!fulfilled || !frenchStructuredStronger) return fulfilled;
-    return hashNorm(candidate) === hashNorm(frenchStructuredStronger.text);
   };
 
   if (provider) {
     diag.rewriteStylePropagatedToProvider = Boolean(style);
-    const providerQ = validateSummaryV2AgainstManifest(provider, manifest, {
-      candidateSource: 'provider',
-    });
+    const providerQ = validateSummaryV2AgainstManifest(provider, manifest);
     if (providerQ.ok && styleOk(provider)) {
       text = provider;
       origin = 'ai_generated';
@@ -387,18 +298,8 @@ export function runSummaryV2(options: RunSummaryV2Options): SummaryV2PipelineRes
           style,
           sourceSummary,
         });
-        const frenchCanonicalDiffers = Boolean(
-          frenchStructuredStronger
-          && hashNorm(sourceSummary) !== hashNorm(frenchStructuredStronger.text),
-        );
-        if (
-          saturated.noSafeMaterialChange
-          && !frenchCanonicalDiffers
-          && !appOwnedKnownRolePresentationViolation
-        ) {
-          const validation = validateSummaryV2AgainstManifest(sourceSummary, manifest, {
-            candidateSource: 'final_selected',
-          });
+        if (saturated.noSafeMaterialChange) {
+          const validation = validateSummaryV2AgainstManifest(sourceSummary, manifest);
           return {
             blocked: true,
             reason: 'style_no_safe_material_change',
@@ -434,9 +335,7 @@ export function runSummaryV2(options: RunSummaryV2Options): SummaryV2PipelineRes
       }
       // Only count as a repair attempt when the surface actually changed.
       diag.repairAttempted = hashNorm(repaired) !== hashNorm(provider);
-      const repairQ = validateSummaryV2AgainstManifest(repaired, manifest, {
-        candidateSource: 'repaired_provider',
-      });
+      const repairQ = validateSummaryV2AgainstManifest(repaired, manifest);
       if (diag.repairAttempted && repairQ.ok && styleOk(repaired)) {
         text = repaired;
         origin = 'ai_repaired';
@@ -462,56 +361,6 @@ export function runSummaryV2(options: RunSummaryV2Options): SummaryV2PipelineRes
   if (!text) {
     if (style && sourceSummary) {
       diag.rewriteStylePropagatedToDeterministic = true;
-      // AAB436 stored French summaries can contain legacy token/casing defects.
-      // Rebuild Stronger directly from immutable structured facts so the old
-      // visible surface is never treated as factual authority or as the
-      // deterministic candidate's semantic structure.
-      if (style === 'stronger' && options.locale === 'fr' && frenchStructuredStronger) {
-        if (hashNorm(sourceSummary) === hashNorm(frenchStructuredStronger.text)) {
-          const validation = validateSummaryV2AgainstManifest(sourceSummary, manifest, {
-            candidateSource: 'final_selected',
-          });
-          return {
-            blocked: true,
-            reason: 'style_no_safe_material_change',
-            text: sourceSummary,
-            origin: 'deterministic_fallback',
-            countedAsSuccess: false,
-            manifest,
-            validation,
-            snapshot,
-            pipelineDiagnostics: {
-              ...diag,
-              styleNoSafeMaterialChange: true,
-              candidateTransformationKind: null,
-              candidateTransformationBeforeHash: hashNorm(sourceSummary),
-              candidateTransformationAfterHash: hashNorm(sourceSummary),
-              styleFulfillment: evaluateSummaryV2StyleFulfillment({
-                style,
-                sourceText: sourceSummary,
-                candidateText: sourceSummary,
-                locale: options.locale,
-              }),
-            },
-          };
-        }
-        text = frenchStructuredStronger.text;
-        origin = 'deterministic_fallback';
-        deterministicConstructionOrder = true;
-        diag.candidateTransformationKind = `v2_rewrite_${style}`;
-        diag.candidateTransformationBeforeHash = hashNorm(sourceSummary);
-        diag.candidateTransformationAfterHash = hashNorm(text);
-        diag.styleFulfillment = evaluateSummaryV2StyleFulfillment({
-          style,
-          sourceText: sourceSummary,
-          candidateText: text,
-          locale: options.locale,
-        });
-      }
-      if (text) {
-        // Skip prose reparsing below; the structured French candidate is already
-        // the immutable-manifest realization selected for this operation.
-      } else {
       const transformed = transformSummaryV2ForRewriteStyle({
         manifest,
         style,
@@ -521,10 +370,8 @@ export function runSummaryV2(options: RunSummaryV2Options): SummaryV2PipelineRes
       diag.candidateTransformationBeforeHash = transformed.beforeHash;
       diag.candidateTransformationAfterHash = transformed.afterHash;
       diag.styleNoSafeMaterialChange = transformed.noSafeMaterialChange;
-      if (transformed.noSafeMaterialChange && !appOwnedKnownRolePresentationViolation) {
-        const validation = validateSummaryV2AgainstManifest(sourceSummary, manifest, {
-          candidateSource: 'final_selected',
-        });
+      if (transformed.noSafeMaterialChange) {
+        const validation = validateSummaryV2AgainstManifest(sourceSummary, manifest);
         return {
           blocked: true,
           reason: 'style_no_safe_material_change',
@@ -545,31 +392,11 @@ export function runSummaryV2(options: RunSummaryV2Options): SummaryV2PipelineRes
           },
         };
       }
-      const selectedDeterministicCandidate = transformed.noSafeMaterialChange
-        ? buildSummaryV2StyledDeterministicText(manifest, style)
-        : transformed.text;
-      const styledQ = validateSummaryV2AgainstManifest(selectedDeterministicCandidate, manifest, {
-        candidateSource: 'deterministic',
-        // Rewrite styles are built from this immutable manifest.  Preserve its
-        // duration/current/prior construction order instead of attempting to
-        // infer structured ownership again from rewritten prose.
-        preserveConstructionOrder: true,
-        trustedConstructionAuthority: true,
-      });
-      const styleFulfilled = !transformed.noSafeMaterialChange
-        && (transformed.styleFulfilled || styleOk(selectedDeterministicCandidate));
-      const applyingKnownRolePresentationRepair = Boolean(
-        transformed.noSafeMaterialChange && appOwnedKnownRolePresentationViolation,
-      );
-      if (styledQ.ok && (styleFulfilled || applyingKnownRolePresentationRepair)) {
-        text = selectedDeterministicCandidate;
+      const styledQ = validateSummaryV2AgainstManifest(transformed.text, manifest);
+      const styleFulfilled = transformed.styleFulfilled || styleOk(transformed.text);
+      if (styledQ.ok && styleFulfilled) {
+        text = transformed.text;
         origin = 'deterministic_fallback';
-        deterministicConstructionOrder = true;
-        if (applyingKnownRolePresentationRepair) {
-          diag.appOwnedKnownRolePresentationRepairApplied = true;
-          diag.candidateTransformationKind = 'v2_known_role_presentation_repair';
-          diag.candidateTransformationAfterHash = hashNorm(text);
-        }
         diag.styleFulfillment = evaluateSummaryV2StyleFulfillment({
           style,
           sourceText: sourceSummary,
@@ -581,15 +408,10 @@ export function runSummaryV2(options: RunSummaryV2Options): SummaryV2PipelineRes
         // Prefer a fresh styled deterministic build; if that also fails, block
         // with the precise validation / style reason.
         const styledFresh = buildSummaryV2StyledDeterministicText(manifest, style);
-        const freshQ = validateSummaryV2AgainstManifest(styledFresh, manifest, {
-          candidateSource: 'deterministic',
-          preserveConstructionOrder: true,
-          trustedConstructionAuthority: true,
-        });
+        const freshQ = validateSummaryV2AgainstManifest(styledFresh, manifest);
         if (freshQ.ok && styleOk(styledFresh)) {
           text = styledFresh;
           origin = 'deterministic_fallback';
-          deterministicConstructionOrder = true;
           diag.candidateTransformationKind = `v2_rewrite_${style}`;
           diag.candidateTransformationBeforeHash = transformed.beforeHash;
           diag.candidateTransformationAfterHash = hashNorm(styledFresh);
@@ -610,6 +432,7 @@ export function runSummaryV2(options: RunSummaryV2Options): SummaryV2PipelineRes
               locale: options.locale,
             }).styleRejectionReasons,
           ];
+          const validation = styledQ.ok ? freshQ : styledQ;
           return {
             blocked: true,
             reason: reasons[0] || 'style_not_fulfilled',
@@ -620,7 +443,6 @@ export function runSummaryV2(options: RunSummaryV2Options): SummaryV2PipelineRes
             validation: validateSummaryV2AgainstManifest(
               transformed.text || styledFresh || sourceSummary,
               manifest,
-              { candidateSource: 'final_selected' },
             ),
             snapshot,
             pipelineDiagnostics: {
@@ -639,22 +461,18 @@ export function runSummaryV2(options: RunSummaryV2Options): SummaryV2PipelineRes
           };
         }
       }
-      }
     } else {
       // Generate empty → canonical. Generate-with-existing → balanced enhance.
       // Never silently reuse a dedicated rewrite style for enhance-without-style.
       if (style) {
         text = buildSummaryV2StyledDeterministicText(manifest, style);
-        deterministicConstructionOrder = true;
       } else if (sourceSummary) {
         text = buildSummaryV2BalancedEnhanceText(manifest);
-        deterministicConstructionOrder = true;
         diag.candidateTransformationKind = 'v2_balanced_enhance';
         diag.candidateTransformationBeforeHash = hashNorm(sourceSummary);
         diag.candidateTransformationAfterHash = hashNorm(text);
       } else {
         text = buildSummaryV2DeterministicText(manifest);
-        deterministicConstructionOrder = true;
       }
       origin = 'deterministic_fallback';
       if (style) {
@@ -671,83 +489,7 @@ export function runSummaryV2(options: RunSummaryV2Options): SummaryV2PipelineRes
     }
   }
 
-  const validation = validateSummaryV2AgainstManifest(text, manifest, {
-    candidateSource: 'final_selected',
-    // Any deterministic rewrite remains manifest-owned through final selection.
-    preserveConstructionOrder: deterministicConstructionOrder,
-    trustedConstructionAuthority: deterministicConstructionOrder,
-  });
-
-  if (frenchStructuredStronger) {
-    const candidateHashMatches = hashNorm(text) === hashNorm(frenchStructuredStronger.text);
-    const rejectionReasons: string[] = [];
-    if (!candidateHashMatches) rejectionReasons.push('final_candidate_hash_mismatch');
-    const predicateEvidence = frenchStructuredStronger.predicateEvidence.map((evidence) => {
-      const accepted = candidateHashMatches
-        && evidence.tenseMatch
-        && evidence.actionIdentityPreserved
-        && evidence.responsibilityTierPreserved
-        && evidence.objectScopePreserved;
-      const rejectionReason = accepted
-        ? null
-        : (!candidateHashMatches
-          ? 'final_candidate_hash_mismatch'
-          : !evidence.tenseMatch
-            ? 'tense_mismatch'
-            : !evidence.actionIdentityPreserved
-              ? 'action_identity_changed'
-              : !evidence.responsibilityTierPreserved
-                ? 'responsibility_tier_changed'
-                : 'object_scope_changed');
-      if (!accepted && rejectionReason && !rejectionReasons.includes(rejectionReason)) {
-        rejectionReasons.push(rejectionReason);
-      }
-      return { ...evidence, accepted, rejectionReason };
-    });
-    const roleTenseEvidence = frenchStructuredStronger.roleTenseEvidence.map((evidence) => {
-      const accepted = candidateHashMatches && evidence.tenseMatch;
-      const rejectionReason = accepted
-        ? null
-        : (!candidateHashMatches ? 'final_candidate_hash_mismatch' : 'role_tense_mismatch');
-      if (!accepted && rejectionReason && !rejectionReasons.includes(rejectionReason)) {
-        rejectionReasons.push(rejectionReason);
-      }
-      return { ...evidence, accepted, rejectionReason };
-    });
-    const evidenceSafe = predicateEvidence.every((evidence) => (
-      evidence.tenseMatch
-      && evidence.actionIdentityPreserved
-      && evidence.responsibilityTierPreserved
-      && evidence.objectScopePreserved
-      && evidence.accepted !== false
-    )) && roleTenseEvidence.every((evidence) => evidence.tenseMatch && evidence.accepted !== false);
-    const currentStyle = diag.styleFulfillment || evaluateSummaryV2StyleFulfillment({
-      style,
-      sourceText: sourceSummary,
-      candidateText: text,
-      locale: options.locale,
-    });
-    diag.styleFulfillment = {
-      ...currentStyle,
-      frenchPredicateEvidence: predicateEvidence,
-      frenchRoleTenseEvidence: roleTenseEvidence,
-    };
-    diag.frenchStrongerSemanticValidationPassed = evidenceSafe && candidateHashMatches;
-    diag.frenchStrongerSemanticRejectionReasons = rejectionReasons;
-    if (!diag.frenchStrongerSemanticValidationPassed) {
-      return {
-        blocked: true,
-        reason: 'french_stronger_semantic_validation_failed',
-        text,
-        origin,
-        countedAsSuccess: false,
-        manifest,
-        validation,
-        snapshot,
-        pipelineDiagnostics: diag,
-      };
-    }
-  }
+  const validation = validateSummaryV2AgainstManifest(text, manifest);
   if (!validation.ok) {
     return {
       blocked: true,
@@ -789,11 +531,7 @@ export function runSummaryV2(options: RunSummaryV2Options): SummaryV2PipelineRes
 
   if (style) {
     const sf = diag.styleFulfillment;
-    if (
-      !sf.styleValidationPassed
-      && sourceSummary
-      && !diag.appOwnedKnownRolePresentationRepairApplied
-    ) {
+    if (!sf.styleValidationPassed && sourceSummary) {
       return {
         blocked: true,
         reason: sf.styleRejectionReasons[0] || 'style_not_fulfilled',

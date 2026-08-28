@@ -15,19 +15,7 @@ export type {
   SummaryV2SelectionManifest,
   SummaryV2ValidationResult,
   SummaryV2PipelineResult,
-  SummaryV2CandidateSourceKind,
-  SummaryV2FinalUnitRoleSlot,
-  SummaryV2FinalUnitOwnershipEvidence,
-  SummaryV2FactUnitCoverageEvidence,
-  SummaryV2MaterialClaimCategory,
-  SummaryV2MaterialAuthorityPhase,
-  SummaryV2SourceMaterialAuthorityEvidence,
-  SummaryV2FinalMaterialClaimAuthorityEvidence,
-  SummaryV2SourceFactContentFingerprint,
-  SummaryV2SelectedEntrySourceContentFingerprint,
-  SummaryV2MaterialAuthorityResult,
 } from './types';
-export { SUMMARY_V2_PRINT_MATERIAL_CATEGORY } from './types';
 export {
   captureSummaryV2Snapshot,
   liveExperienceDescription,
@@ -46,13 +34,7 @@ export {
 } from './manifest';
 export {
   resolveSummaryCurrentRole,
-  resolveSummaryCurrentRoleWithEvidence,
   SUMMARY_CURRENT_ROLE_RESOLVER_REVISION,
-} from '@/lib/cv-summary-current-role';
-export type {
-  SummaryCurrentRoleDateAuthority,
-  SummaryCurrentRoleRankingEvidence,
-  SummaryCurrentRoleResolution,
 } from '@/lib/cv-summary-current-role';
 export {
   buildSummaryV2DeterministicText,
@@ -77,16 +59,6 @@ export {
   validateSummaryV2AgainstManifest,
   entryDutiesMatchEmploymentTense,
 } from './validator';
-export type { SummaryV2ValidationOptions } from './validator';
-export {
-  detectSummaryV2QualityMannerClaims,
-  unsupportedSummaryV2QualityMannerClaims,
-  removeUnsupportedSummaryV2QualityMannerClaims,
-} from './semantic-claims';
-export type {
-  SummaryV2QualityMannerClaim,
-  SummaryV2QualityMannerClaimKind,
-} from './semantic-claims';
 export {
   runSummaryV2,
   buildSummaryV2ManifestForCv,
@@ -144,32 +116,9 @@ export {
   parseSummaryV2LocalizationProviderJson,
   acceptSummaryV2LocalizationResponse,
   buildSameLocaleLocalizedManifest,
-  projectSummaryV2AuthoritativeRoleTitle,
   projectLocalizedSummaryV2Manifest,
   buildSummaryV2ProviderExperienceEntries,
-  classifySummaryV2EntrySurfaceAuthority,
-  buildSummaryV2EntrySurfaceTransportPlan,
-  inspectSummaryV2TranslatableSurface,
 } from './localization';
-export { validateLocalizedSummaryRoleTitleGender } from '@/lib/cv-summary-structured-role-localization';
-export {
-  SUMMARY_V2_MATERIAL_CLAIM_CONTRACT_REVISION,
-  SUMMARY_V2_MATERIAL_CLAIM_DETECTOR_REVISION,
-  detectSummaryV2MaterialClaimCategories,
-  detectPrintMediumClaim,
-  auditSummaryV2MaterialClaims,
-  auditSummaryV2PrintClaims,
-  validateSummaryV2MaterialAuthorityProvenance,
-} from './material-claims';
-export {
-  SUMMARY_V2_ENTRY_OWNED_FINAL_UNITS_REVISION,
-  splitSummaryV2FinalUnits,
-  analyzeSummaryV2FinalUnitOwnership,
-} from './unit-ownership';
-export type {
-  SummaryV2UnitOwnershipOptions,
-  SummaryV2UnitOwnershipResult,
-} from './unit-ownership';
 export {
   localizeSummaryV2Manifest,
   clearSummaryV2LocalizationCacheForTests,
@@ -179,7 +128,6 @@ export type {
   SummaryV2LocalizationTransport,
   SummaryV2LocalizationTransportInput,
   SummaryV2LocalizationOutcome,
-  SummaryV2LocalizationLineage,
 } from './localization-client';
 export type {
   SummaryV2LocalizedManifest,
@@ -188,12 +136,7 @@ export type {
   SummaryV2LocalizationProviderResponse,
   SummaryV2LocalizationValidation,
   SummaryV2LocalizationSource,
-  SummaryV2LocalizationFailureEvidence,
-  SummaryV2ProtectedEntityTokenClass,
   SummaryV2ProviderExperienceEntry,
-  SummaryV2EntrySurfaceAuthority,
-  SummaryV2EntrySurfaceTransportPlan,
-  SummaryV2SurfaceAuthorityState,
 } from './localization';
 export type {
   SummaryV2NativeSurfaceResult,

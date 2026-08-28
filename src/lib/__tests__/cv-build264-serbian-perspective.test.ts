@@ -226,7 +226,8 @@ function runExactBuild264(opts?: {
       visibleCoveredFactCount: finalized.diagnostics?.finalCoveredFactCount ?? 3,
       visibleUncoveredFactIdentityHashes: [],
       visibleFactCoveragePassed: true,
-      visibleRequiredPredicateCount: finalized.diagnostics?.sourcePredicateIdentityCount ?? 0,
+      visibleRequiredPredicateCount:
+        finalized.diagnostics?.sourcePredicateIdentityCount ?? 0,
       visibleCoveredPredicateCount:
         finalized.diagnostics?.finalCandidatePredicateIdentityCount ?? 0,
       visiblePredicateCoveragePassed: true,
