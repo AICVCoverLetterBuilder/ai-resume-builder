@@ -77,8 +77,10 @@ import {
 import {
   EXPERIENCE_V3_ENHANCE_ACTION,
   EXPERIENCE_V3_GENERATE_ACTION,
+  SUMMARY_V3_GENERATE_ACTION,
   executeExperienceV3EnhanceServer,
   executeExperienceV3GenerateServer,
+  executeSummaryV3GenerateServer,
   isAiCoreV3Enabled,
 } from '@/lib/ai-core-v3';
 
@@ -1903,6 +1905,44 @@ Rules:
         serverFallbackUsed: false,
         clientFallbackUsed: false,
       });
+    }
+
+    if (action === SUMMARY_V3_GENERATE_ACTION) {
+      const v3Enabled = isAiCoreV3Enabled({
+        AI_CORE_V3_ENABLED:
+          process.env.AI_CORE_V3_ENABLED ?? process.env.NEXT_PUBLIC_AI_CORE_V3_ENABLED,
+      });
+      if (!v3Enabled) {
+        return jsonResponse({
+          ok: false,
+          action: SUMMARY_V3_GENERATE_ACTION,
+          typedReason: 'v3_feature_disabled',
+        }, { status: 409 });
+      }
+      const result = await executeSummaryV3GenerateServer(params, {
+        write: async (prompt) => getText(await callWithRetry({
+          model: MODEL,
+          max_tokens: 1800,
+          temperature: 0,
+          system: 'You are the AI Core V3 Summary prose writer. Follow the strict JSON contract exactly.',
+          messages: [{ role: 'user', content: prompt }],
+        }, deadlineAt, undefined, AI_PROVIDER_CALL_TIMEOUT_MS, 'provider', undefined, false)),
+        evaluate: async (prompt) => getText(await callWithRetry({
+          model: MODEL,
+          max_tokens: 1400,
+          temperature: 0,
+          system: 'You are the independent non-writing AI Core V3 Summary evaluator. Return structured violations only.',
+          messages: [{ role: 'user', content: prompt }],
+        }, deadlineAt, undefined, AI_PROVIDER_CALL_TIMEOUT_MS, 'verifier', undefined, false)),
+      });
+      const status = result.ok
+        ? 200
+        : result.typedReason === 'invalid_request_contract'
+          ? 400
+          : /provider|evaluator|validator/u.test(result.typedReason)
+            ? 502
+            : 422;
+      return jsonResponse(result, { status });
     }
 
     if (action === 'summary') {

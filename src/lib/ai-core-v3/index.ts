@@ -8,4 +8,6 @@ export * from './experience-enhance-server';
 export * from './feature-flag';
 export * from './source-authority';
 export * from './summary-manifest';
+export * from './summary-generate';
+export * from './summary-generate-server';
 export * from './validators';

@@ -202,9 +202,11 @@ import { apiFetch } from '@/lib/api';
 import {
   EXPERIENCE_V3_ENHANCE_ACTION,
   EXPERIENCE_V3_GENERATE_ACTION,
+  SUMMARY_V3_GENERATE_ACTION,
   isAiCoreV3Enabled,
   runExperienceV3EnhanceAdapter,
   runExperienceV3GenerateAdapter,
+  runSummaryV3GenerateAdapter,
 } from '@/lib/ai-core-v3';
 import { motion } from 'framer-motion';
 import { toast } from 'sonner';
@@ -475,9 +477,11 @@ export default function CVBuilderPage() {
   const [expIndustry, setExpIndustry] = useState<Record<string, BulletIndustry>>({});
   const [expLevel, setExpLevel] = useState<Record<string, BulletLevel>>({});
   const experienceV3UiLocaleRef = useRef(locale);
+  const summaryV3UiLocaleRef = useRef(locale);
   const experienceV3IndustryRef = useRef(expIndustry);
   const experienceV3LevelRef = useRef(expLevel);
   experienceV3UiLocaleRef.current = locale;
+  summaryV3UiLocaleRef.current = locale;
   experienceV3IndustryRef.current = expIndustry;
   experienceV3LevelRef.current = expLevel;
   const [isSummaryGenerating, setIsSummaryGenerating] = useState(false);
@@ -1187,7 +1191,11 @@ export default function CVBuilderPage() {
     if (!proToken) return;
     if (isSummaryGenerating) return;
     const liveCvAtPress = cvRef.current;
-    const liveSummaryAtPress = (liveCvAtPress.summary || '').trim();
+    const summaryEditorAtPress = typeof document === 'undefined'
+      ? null
+      : document.querySelector('[data-summary-v3-editor]') as HTMLTextAreaElement | null;
+    const exactVisibleSummaryAtPress = summaryEditorAtPress?.value ?? liveCvAtPress.summary ?? '';
+    const liveSummaryAtPress = exactVisibleSummaryAtPress.trim();
     const operationMode = resolveAiButtonOperationMode('summary_generate', liveSummaryAtPress);
     if (
       operationMode === 'generate_from_context'
@@ -1214,6 +1222,109 @@ export default function CVBuilderPage() {
       position: primaryExpForJobCtx?.position || liveCvAtPress.personal?.jobTitle,
       locale: requestedLocale,
     });
+    const referenceDateIso = new Date().toISOString().slice(0, 10);
+    const readSummaryV3VisibleSources = (): Readonly<Record<string, string>> => {
+      const sources: Record<string, string> = {};
+      for (const entry of cvRef.current.experience) {
+        if (typeof document !== 'undefined') {
+          const escapedId = typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
+            ? CSS.escape(entry.id)
+            : entry.id.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+          const field = document.querySelector(
+            `[data-experience-description-id="${escapedId}"]`,
+          ) as HTMLTextAreaElement | null;
+          if (field && typeof field.value === 'string') sources[entry.id] = field.value;
+        }
+      }
+      return sources;
+    };
+    const readSummaryV3VisibleSummary = (): string => {
+      if (typeof document !== 'undefined') {
+        const field = document.querySelector('[data-summary-v3-editor]') as HTMLTextAreaElement | null;
+        if (field && typeof field.value === 'string') return field.value;
+      }
+      return cvRef.current.summary || '';
+    };
+    const summaryV3Enabled = isAiCoreV3Enabled({
+      AI_CORE_V3_ENABLED: process.env.NEXT_PUBLIC_AI_CORE_V3_ENABLED,
+    });
+    const summaryV3Result = summaryV3Enabled
+      ? await runSummaryV3GenerateAdapter({
+        enabled: true,
+        operationKind: 'summary_generate',
+        operationId: reqCtx.requestId,
+        requestId: reqCtx.requestId,
+        cv: liveCvAtPress,
+        requestedLocale,
+        uiLocale: locale,
+        storedContentLocale: String(liveCvAtPress.contentLocale || ''),
+        exactVisibleSummary: exactVisibleSummaryAtPress,
+        visibleExperienceSources: readSummaryV3VisibleSources(),
+        referenceDateIso,
+        jobContextHash: summaryJobContext.key,
+        usageCountBefore: countBefore,
+      }, {
+        request: async ({ manifest }) => {
+          const { data } = await apiFetch<unknown>('/api/generate', {
+            body: {
+              action: SUMMARY_V3_GENERATE_ACTION,
+              proToken,
+              requestId: reqCtx.requestId,
+              manifest,
+            },
+            signal: controller.signal,
+          });
+          return data;
+        },
+        getLiveState: () => ({
+          cv: cvRef.current,
+          requestedLocale,
+          uiLocale: summaryV3UiLocaleRef.current,
+          storedContentLocale: String(cvRef.current.contentLocale || ''),
+          exactVisibleSummary: readSummaryV3VisibleSummary(),
+          visibleExperienceSources: readSummaryV3VisibleSources(),
+          referenceDateIso,
+          jobContextHash: buildExperienceJobContext({
+            position: resolveSummaryCurrentRole(cvRef.current.experience || [])?.position
+              || cvRef.current.personal?.jobTitle,
+            locale: requestedLocale,
+          }).key,
+        }),
+        getActiveOperationId: () => latestSummaryRequestIdRef.current || '',
+        writeCv: (next) => {
+          cvRef.current = next;
+          setCv(next);
+        },
+        projectPreviewSummary: (next) => {
+          const migrated = normalizeLegacyCvRuntime(next, requestedLocale);
+          const quality = applyCvContentQuality(migrated, requestedLocale, {
+            gender: migrated.personal?.gender,
+            summaryOrigin: migrated.summaryOrigin,
+          }).cv;
+          return omitInvalidLocalizedFieldsForPreview(quality, requestedLocale).summary;
+        },
+        persistCv: persistCurrentCvTransactionally,
+        incrementUsage: recordProAiSuccess,
+      })
+      : { kind: 'not_applicable' as const };
+    if (summaryV3Result.kind !== 'not_applicable') {
+      clearTimeout(timer);
+      finishAiClientRequest({
+        ctx: reqCtx,
+        isProVerified: true,
+        countBefore,
+        countAfter: summaryV3Result.kind === 'handled_success' ? countBefore + 1 : countBefore,
+        httpStatus: summaryV3Result.kind === 'handled_success' ? 200 : 422,
+        error: summaryV3Result.kind === 'handled_success'
+          ? null
+          : { code: 'generation_validation_failed', httpStatus: 422 },
+        responseSource: summaryV3Result.kind === 'handled_success' ? 'provider' : 'blocked',
+      });
+      setIsSummaryGenerating(false);
+      if (summaryV3Result.kind === 'handled_success') toast.success(t.cv.genSuccess);
+      else toast.error(aiErrorMessage('generation_validation_failed', locale));
+      return;
+    }
     const summaryDiag = new SummaryAiDiagnosticSession({
       uiLocale: locale,
       requestedLocale,
@@ -1228,7 +1339,6 @@ export default function CVBuilderPage() {
     summaryDiag.recordCvSnapshot(liveCvAtPress, liveSummaryAtPress);
     try {
       // Shared deterministic duration — never let each locale estimate independently.
-      const referenceDateIso = new Date().toISOString().slice(0, 10);
       const durationSnapshot = buildExperienceDurationSnapshot(liveCvAtPress.experience, referenceDateIso);
       const experienceDuration = durationToPromptToken(durationSnapshot.total);
       const localization = await resolveSummaryLocalizedManifest({
@@ -5037,6 +5147,7 @@ export default function CVBuilderPage() {
                       </div>
                     </div>
                     <textarea
+                      data-summary-v3-editor
                       value={cv.summary}
                       onChange={e => setCv(prev => applyCanonicalSummaryEdit(prev, e.target.value, locale))}
                       className={textareaClass + ' min-h-[180px]'}
