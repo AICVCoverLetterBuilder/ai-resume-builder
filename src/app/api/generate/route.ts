@@ -74,6 +74,11 @@ import {
   measureExperienceLocalizationText,
   validateExperienceLocalizationPhysicalBatch,
 } from '@/lib/cv-experience-localized-surfaces';
+import {
+  EXPERIENCE_V3_GENERATE_ACTION,
+  executeExperienceV3GenerateServer,
+  isAiCoreV3Enabled,
+} from '@/lib/ai-core-v3';
 
 /**
  * Explicit Vercel serverless function execution budget (seconds).
@@ -658,6 +663,44 @@ export async function POST(req: NextRequest) {
         { error: 'AI service is not configured. Please try again later.' },
         { status: 500 }
       );
+    }
+
+    if (action === EXPERIENCE_V3_GENERATE_ACTION) {
+      const v3Enabled = isAiCoreV3Enabled({
+        AI_CORE_V3_ENABLED:
+          process.env.AI_CORE_V3_ENABLED ?? process.env.NEXT_PUBLIC_AI_CORE_V3_ENABLED,
+      });
+      if (!v3Enabled) {
+        return jsonResponse({
+          ok: false,
+          action: EXPERIENCE_V3_GENERATE_ACTION,
+          typedReason: 'v3_feature_disabled',
+        }, { status: 409 });
+      }
+      const result = await executeExperienceV3GenerateServer(params, {
+        generate: async (prompt) => getText(await callWithRetry({
+          model: MODEL,
+          max_tokens: 900,
+          temperature: 0,
+          system: 'You are the single AI Core V3 Experience prose writer. Follow the strict JSON contract exactly.',
+          messages: [{ role: 'user', content: prompt }],
+        }, deadlineAt, undefined, AI_PROVIDER_CALL_TIMEOUT_MS, 'provider', undefined, false)),
+        evaluate: async (prompt) => getText(await callWithRetry({
+          model: MODEL,
+          max_tokens: 900,
+          temperature: 0,
+          system: 'You are an independent non-writing CV validator. Return structured validation evidence only.',
+          messages: [{ role: 'user', content: prompt }],
+        }, deadlineAt, undefined, AI_PROVIDER_CALL_TIMEOUT_MS, 'verifier', undefined, false)),
+      });
+      const status = result.ok
+        ? 200
+        : result.typedReason === 'invalid_request_contract'
+          ? 400
+          : result.typedReason.includes('provider') || result.typedReason.includes('evaluator')
+            ? 502
+            : 422;
+      return jsonResponse(result, { status });
     }
 
     if (action === 'cover-letter' || action === 'cover-letter-gen' || action === 'cover-letter-regen') {

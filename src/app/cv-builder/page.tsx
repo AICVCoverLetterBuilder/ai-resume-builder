@@ -199,6 +199,11 @@ import {
   type ExperienceLocalizationDiagnostics,
 } from '@/lib/cv-experience-localized-surfaces';
 import { apiFetch } from '@/lib/api';
+import {
+  EXPERIENCE_V3_GENERATE_ACTION,
+  isAiCoreV3Enabled,
+  runExperienceV3GenerateAdapter,
+} from '@/lib/ai-core-v3';
 import { motion } from 'framer-motion';
 import { toast } from 'sonner';
 import {
@@ -467,6 +472,12 @@ export default function CVBuilderPage() {
   const [aiRecommendModal, setAiRecommendModal] = useState(false);
   const [expIndustry, setExpIndustry] = useState<Record<string, BulletIndustry>>({});
   const [expLevel, setExpLevel] = useState<Record<string, BulletLevel>>({});
+  const experienceV3UiLocaleRef = useRef(locale);
+  const experienceV3IndustryRef = useRef(expIndustry);
+  const experienceV3LevelRef = useRef(expLevel);
+  experienceV3UiLocaleRef.current = locale;
+  experienceV3IndustryRef.current = expIndustry;
+  experienceV3LevelRef.current = expLevel;
   const [isSummaryGenerating, setIsSummaryGenerating] = useState(false);
   const [rewritingStyle, setRewritingStyle] = useState<string | null>(null);
   const [generatingBulletsId, setGeneratingBulletsId] = useState<string | null>(null);
@@ -1729,6 +1740,7 @@ export default function CVBuilderPage() {
 
     // Prefer the visible DOM textarea value over any lagged React/cvRef snapshot.
     let liveDescription = (expFromState.description || '').trim();
+    let exactLiveDescription = expFromState.description || '';
     if (typeof document !== 'undefined') {
       const escapedId = typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
         ? CSS.escape(clickedExperienceEntryId)
@@ -1738,6 +1750,7 @@ export default function CVBuilderPage() {
       ) as HTMLTextAreaElement | null;
       if (domField && typeof domField.value === 'string') {
         liveDescription = domField.value;
+        exactLiveDescription = domField.value;
       }
     }
     const exp = liveDescription === (expFromState.description || '')
@@ -1774,6 +1787,101 @@ export default function CVBuilderPage() {
       [clickedExperienceEntryId]: requestContext.key,
     };
     const countBefore = getProAiUsageCount();
+
+    // M2: one early, additive adapter seam. Only an enabled, same-locale,
+    // empty-source Experience Generate click is owned by V3. Every owned
+    // failure is terminal; only not_applicable may continue into unchanged V2.
+    const readExperienceV3VisibleDescription = (): string => {
+      const currentEntry = cvRef.current.experience.find(
+        (entry) => entry.id === clickedExperienceEntryId,
+      );
+      let currentValue = currentEntry?.description || '';
+      if (typeof document !== 'undefined') {
+        const escapedId = typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
+          ? CSS.escape(clickedExperienceEntryId)
+          : clickedExperienceEntryId.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+        const domField = document.querySelector(
+          `[data-experience-description-id="${escapedId}"]`,
+        ) as HTMLTextAreaElement | null;
+        if (domField && typeof domField.value === 'string') currentValue = domField.value;
+      }
+      return currentValue;
+    };
+    const experienceV3Enabled = isAiCoreV3Enabled({
+      AI_CORE_V3_ENABLED: process.env.NEXT_PUBLIC_AI_CORE_V3_ENABLED,
+    });
+    const experienceV3Result = experienceV3Enabled
+      ? await runExperienceV3GenerateAdapter({
+        enabled: true,
+        operationKind: 'experience_generate',
+        operationId: reqCtx.requestId,
+        entryId: clickedExperienceEntryId,
+        entryIndexDiagnostic: liveCv.experience.findIndex(
+          (entry) => entry.id === clickedExperienceEntryId,
+        ),
+        cv: liveCv,
+        industry,
+        level,
+        gender: liveCv.personal.gender || '',
+        requestedLocale,
+        uiLocale: locale,
+        storedContentLocale: String(liveCv.contentLocale || ''),
+        exactVisibleDescription: exactLiveDescription,
+        usageCountBefore: countBefore,
+      }, {
+        request: async ({ manifest }) => {
+          const { data } = await apiFetch<unknown>('/api/generate', {
+            body: {
+              action: EXPERIENCE_V3_GENERATE_ACTION,
+              proToken,
+              requestId: reqCtx.requestId,
+              manifest,
+            },
+            signal: controller.signal,
+          });
+          return data;
+        },
+        getLiveState: () => ({
+          cv: cvRef.current,
+          requestedLocale,
+          uiLocale: experienceV3UiLocaleRef.current,
+          storedContentLocale: String(cvRef.current.contentLocale || ''),
+          exactVisibleDescription: readExperienceV3VisibleDescription(),
+          industry: experienceV3IndustryRef.current[clickedExperienceEntryId] ?? 'general',
+          level: experienceV3LevelRef.current[clickedExperienceEntryId] ?? 'mid',
+        }),
+        writeCv: (next) => {
+          cvRef.current = next;
+          setCv(next);
+        },
+        persistCv: persistCurrentCvTransactionally,
+        incrementUsage: recordProAiSuccess,
+      })
+      : { kind: 'not_applicable' as const };
+    if (experienceV3Result.kind !== 'not_applicable') {
+      clearTimeout(timer);
+      finishAiClientRequest({
+        ctx: reqCtx,
+        isProVerified: true,
+        countBefore,
+        countAfter: experienceV3Result.kind === 'handled_success' ? countBefore + 1 : countBefore,
+        httpStatus: experienceV3Result.kind === 'handled_success' ? 200 : 422,
+        error: experienceV3Result.kind === 'handled_success'
+          ? null
+          : { code: 'generation_validation_failed', httpStatus: 422 },
+        responseSource: experienceV3Result.kind === 'handled_success' ? 'provider' : 'blocked',
+      });
+      setGeneratingBulletsId(null);
+      if (experienceV3Result.kind === 'handled_success') {
+        toast.success(t.cv.bulletsSuccess);
+      } else {
+        if (process.env.NODE_ENV !== 'production') {
+          console.info('[ExperienceV3GenerateRejected]', experienceV3Result.typedReason);
+        }
+        toast.error(aiErrorMessage('generation_validation_failed', locale));
+      }
+      return;
+    }
 
     // Freeze the live textarea first — empty live means Generation Mode and must
     // not resurrect generatedDescription/canonical into the payload.
