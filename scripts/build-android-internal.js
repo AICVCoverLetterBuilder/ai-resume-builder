@@ -14,17 +14,15 @@ const {
   enforceAndroidProductionApiBaseUrl,
 } = require('./android-production-api-contract');
 const {
+  applyAndroidInternalApiContract,
+} = require('./android-internal-api-contract');
+const {
   establishAndroidPackagingEnvironment,
   validateCheckedInCommercialState,
   assertManifest,
 } = require('./android-commercial-state-contract');
 
 const root = path.resolve(__dirname, '..');
-loadEnvConfig(root);
-enforceAndroidProductionApiBaseUrl(process.env);
-establishAndroidPackagingEnvironment(process.env);
-validateCheckedInCommercialState(root);
-
 const win = process.platform === 'win32';
 const copied = path.join(root, 'android', 'app', 'src', 'main', 'assets', 'public');
 const capacitorConfig = path.join(root, 'android', 'app', 'src', 'main', 'assets', 'capacitor.config.json');
@@ -38,17 +36,11 @@ function fail(message) {
   process.exit(1);
 }
 
-function requiredEnv(name) {
-  const value = String(process.env[name] || '').trim();
+function readRequiredEnv(environment, name) {
+  const value = String(environment[name] || '').trim();
   if (!value) fail(`missing required ${name}`);
   return value;
 }
-
-const apiBaseUrl = requiredEnv('NEXT_PUBLIC_API_BASE_URL');
-if (apiBaseUrl !== ANDROID_PRODUCTION_API_BASE_URL) {
-  fail('Android packaging must use the public Production API base URL');
-}
-const revenueCatAndroidKey = requiredEnv('NEXT_PUBLIC_REVENUECAT_ANDROID_API_KEY');
 
 function runFile(command, args, options = {}) {
   console.log(`[build:android:internal] ${path.basename(command)} ${args.join(' ')}`);
@@ -74,35 +66,102 @@ function treeContainsExactValue(rootDir, value) {
   return false;
 }
 
-// execFileSync keeps `C:\\Program Files\\nodejs\\node.exe` intact on Windows.
-runFile(process.execPath, [nextBin, 'build']);
-runFile(process.execPath, [staticBuildScript]);
-fs.writeFileSync(path.join(root, 'out', 'aab392-internal-diagnostics-packaging.txt'), `${packagingMarker}\n`, 'utf8');
-runFile(win ? 'npx.cmd' : 'npx', ['cap', 'sync', 'android'], { shell: win });
-runFile(process.execPath, [verifyScript, '--dir', copied, '--expect', 'enabled']);
+function runAndroidInternalBuild(options = {}) {
+  const dependencies = {
+    fs,
+    loadEnvConfig,
+    establishAndroidPackagingEnvironment,
+    validateCheckedInCommercialState,
+    assertManifest,
+    runFile,
+    treeContainsExactValue,
+    ...options.dependencies,
+  };
+  const usesProcessEnvironment = options.environment === undefined;
+  if (usesProcessEnvironment) dependencies.loadEnvConfig(root);
+  const childEnvironment = usesProcessEnvironment
+    ? process.env
+    : { ...options.environment };
+  const requiredEnv = (name) => readRequiredEnv(childEnvironment, name);
 
-if (!fs.existsSync(capacitorConfig)) fail('missing copied Capacitor config');
-if (JSON.parse(fs.readFileSync(capacitorConfig, 'utf8')).server?.url) {
-  fail('Capacitor server.url must be absent from packaged internal assets');
+  const apiContract = usesProcessEnvironment
+    ? applyAndroidInternalApiContract(process.env)
+    : applyAndroidInternalApiContract(childEnvironment);
+  if (usesProcessEnvironment) {
+    if (apiContract.mode === 'production') enforceAndroidProductionApiBaseUrl(process.env);
+  }
+  if (apiContract.mode === 'production' && !usesProcessEnvironment) {
+    enforceAndroidProductionApiBaseUrl(childEnvironment);
+  }
+
+  dependencies.establishAndroidPackagingEnvironment(childEnvironment);
+  dependencies.validateCheckedInCommercialState(root);
+  const apiBaseUrl = requiredEnv('NEXT_PUBLIC_API_BASE_URL');
+  if (apiBaseUrl !== apiContract.apiBaseUrl) {
+    fail('resolved Android API base URL changed after validation');
+  }
+  const revenueCatAndroidKey = requiredEnv('NEXT_PUBLIC_REVENUECAT_ANDROID_API_KEY');
+
+  // execFileSync keeps `C:\Program Files\nodejs\node.exe` intact on Windows.
+  dependencies.runFile(process.execPath, [nextBin, 'build'], { env: childEnvironment });
+  dependencies.runFile(process.execPath, [staticBuildScript], { env: childEnvironment });
+  dependencies.fs.writeFileSync(
+    path.join(root, 'out', 'aab392-internal-diagnostics-packaging.txt'),
+    `${packagingMarker}\n`,
+    'utf8',
+  );
+  dependencies.runFile(
+    win ? 'npx.cmd' : 'npx',
+    ['cap', 'sync', 'android'],
+    { shell: win, env: childEnvironment },
+  );
+  dependencies.runFile(
+    process.execPath,
+    [verifyScript, '--dir', copied, '--expect', 'enabled'],
+    { env: childEnvironment },
+  );
+
+  if (!dependencies.fs.existsSync(capacitorConfig)) fail('missing copied Capacitor config');
+  if (JSON.parse(dependencies.fs.readFileSync(capacitorConfig, 'utf8')).server?.url) {
+    fail('Capacitor server.url must be absent from packaged internal assets');
+  }
+  const commercialManifestPath = path.join(copied, 'android-commercial-state.json');
+  if (!dependencies.fs.existsSync(commercialManifestPath)) {
+    fail('missing copied Android commercial state manifest');
+  }
+  try {
+    dependencies.assertManifest(JSON.parse(
+      dependencies.fs.readFileSync(commercialManifestPath, 'utf8'),
+    ));
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+  }
+  if (!dependencies.treeContainsExactValue(copied, apiBaseUrl)) {
+    fail('configured production API base URL is absent from copied Android assets');
+  }
+  if (dependencies.treeContainsExactValue(copied, PROTECTED_ANDROID_API_BASE_URL)) {
+    fail('Vercel-protected API host is present in copied Android assets');
+  }
+  if (!dependencies.treeContainsExactValue(copied, revenueCatAndroidKey)) {
+    fail('RevenueCat Android public key is absent from copied Android assets');
+  }
+  const copiedMarker = path.join(copied, 'aab392-internal-diagnostics-packaging.txt');
+  if (!dependencies.fs.existsSync(copiedMarker)
+    || !dependencies.fs.readFileSync(copiedMarker, 'utf8').includes(packagingMarker)) {
+    fail(`missing copied packaging marker ${packagingMarker}`);
+  }
+  console.log('[build:android:internal] OK copied Android assets are internal, V2-on, diagnostic-enabled, API-host verified, and RevenueCat-configured');
+
+  return Object.freeze({
+    ...apiContract,
+    childEnvironment,
+  });
 }
-const commercialManifestPath = path.join(copied, 'android-commercial-state.json');
-if (!fs.existsSync(commercialManifestPath)) fail('missing copied Android commercial state manifest');
-try {
-  assertManifest(JSON.parse(fs.readFileSync(commercialManifestPath, 'utf8')));
-} catch (error) {
-  fail(error instanceof Error ? error.message : String(error));
+
+if (require.main === module) {
+  runAndroidInternalBuild();
 }
-if (!treeContainsExactValue(copied, apiBaseUrl)) {
-  fail('configured production API base URL is absent from copied Android assets');
-}
-if (treeContainsExactValue(copied, PROTECTED_ANDROID_API_BASE_URL)) {
-  fail('Vercel-protected API host is present in copied Android assets');
-}
-if (!treeContainsExactValue(copied, revenueCatAndroidKey)) {
-  fail('RevenueCat Android public key is absent from copied Android assets');
-}
-if (!fs.existsSync(path.join(copied, 'aab392-internal-diagnostics-packaging.txt'))
-  || !fs.readFileSync(path.join(copied, 'aab392-internal-diagnostics-packaging.txt'), 'utf8').includes(packagingMarker)) {
-  fail(`missing copied packaging marker ${packagingMarker}`);
-}
-console.log('[build:android:internal] OK copied Android assets are internal, V2-on, diagnostic-enabled, API-host verified, and RevenueCat-configured');
+
+module.exports = {
+  runAndroidInternalBuild,
+};

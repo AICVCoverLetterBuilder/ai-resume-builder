@@ -14,6 +14,9 @@ const {
   enforceAndroidProductionApiBaseUrl,
 } = require('./android-production-api-contract');
 const {
+  applyAndroidInternalApiContract,
+} = require('./android-internal-api-contract');
+const {
   establishAndroidPackagingEnvironment,
   validateCheckedInCommercialState,
   buildManifest,
@@ -21,39 +24,18 @@ const {
 } = require('./android-commercial-state-contract');
 
 const repoRoot = path.resolve(__dirname, '..');
-loadEnvConfig(repoRoot);
-enforceAndroidProductionApiBaseUrl(process.env);
-const commercialKey = establishAndroidPackagingEnvironment(process.env);
-validateCheckedInCommercialState(repoRoot);
+const nextBin = path.join(repoRoot, 'node_modules', 'next', 'dist', 'bin', 'next');
+const verify = path.join(__dirname, 'verify-internal-ai-reset-assets.mjs');
+const outDir = path.join(repoRoot, 'out');
 
-function requiredEnv(name) {
-  const value = String(process.env[name] || '').trim();
+function readRequiredEnv(environment, name) {
+  const value = String(environment[name] || '').trim();
   if (!value) {
     console.error(`[build:static:internal] FAIL: missing required ${name}`);
     process.exit(1);
   }
   return value;
 }
-
-const revenueCatAndroidKey = requiredEnv('NEXT_PUBLIC_REVENUECAT_ANDROID_API_KEY');
-const apiBaseUrl = requiredEnv('NEXT_PUBLIC_API_BASE_URL');
-if (apiBaseUrl !== ANDROID_PRODUCTION_API_BASE_URL) {
-  console.error('[build:static:internal] FAIL: Android static build must use the public Production API base URL');
-  process.exit(1);
-}
-
-const env = {
-  ...process.env,
-  NEXT_PUBLIC_STATIC_EXPORT: 'true',
-  NEXT_PUBLIC_BUILD_CHANNEL: 'internal',
-  NEXT_PUBLIC_ENABLE_AI_TEST_RESET: 'true',
-  // Internal device validation only — do not set this in production/web builds.
-  NEXT_PUBLIC_ENABLE_SUMMARY_V2: 'true',
-};
-
-const nextBin = path.join(repoRoot, 'node_modules', 'next', 'dist', 'bin', 'next');
-const verify = path.join(__dirname, 'verify-internal-ai-reset-assets.mjs');
-const outDir = path.join(repoRoot, 'out');
 
 function treeContainsExactValue(root, value) {
   const stack = [root];
@@ -69,25 +51,82 @@ function treeContainsExactValue(root, value) {
   return false;
 }
 
-console.log(
-  '[build:static:internal] channel=internal enableAiTestReset=true staticExport=true enableSummaryV2=true',
-);
-execFileSync(process.execPath, [nextBin, 'build'], {
-  cwd: repoRoot,
-  stdio: 'inherit',
-  env,
-});
-writeManifest(outDir, buildManifest({
-  apiHost: apiBaseUrl,
-  keyFingerprint: commercialKey.fingerprint,
-}));
-execFileSync(process.execPath, [verify, '--dir', 'out', '--expect', 'enabled'], {
-  cwd: repoRoot,
-  stdio: 'inherit',
-  env,
-});
-if (!treeContainsExactValue(outDir, revenueCatAndroidKey)) {
-  console.error('[build:static:internal] FAIL: RevenueCat Android public key is absent from built assets');
-  process.exit(1);
+function runStaticInternalBuild(options = {}) {
+  const dependencies = {
+    execFileSync,
+    loadEnvConfig,
+    establishAndroidPackagingEnvironment,
+    validateCheckedInCommercialState,
+    buildManifest,
+    writeManifest,
+    treeContainsExactValue,
+    ...options.dependencies,
+  };
+  const usesProcessEnvironment = options.environment === undefined;
+  if (usesProcessEnvironment) dependencies.loadEnvConfig(repoRoot);
+  const childEnvironment = usesProcessEnvironment
+    ? process.env
+    : { ...options.environment };
+  const requiredEnv = (name) => readRequiredEnv(childEnvironment, name);
+
+  const apiContract = usesProcessEnvironment
+    ? applyAndroidInternalApiContract(process.env)
+    : applyAndroidInternalApiContract(childEnvironment);
+  if (usesProcessEnvironment) {
+    if (apiContract.mode === 'production') enforceAndroidProductionApiBaseUrl(process.env);
+  }
+  if (apiContract.mode === 'production' && !usesProcessEnvironment) {
+    enforceAndroidProductionApiBaseUrl(childEnvironment);
+  }
+
+  const commercialKey = dependencies.establishAndroidPackagingEnvironment(childEnvironment);
+  dependencies.validateCheckedInCommercialState(repoRoot);
+  const revenueCatAndroidKey = requiredEnv('NEXT_PUBLIC_REVENUECAT_ANDROID_API_KEY');
+  const apiBaseUrl = requiredEnv('NEXT_PUBLIC_API_BASE_URL');
+  if (apiBaseUrl !== apiContract.apiBaseUrl) {
+    console.error('[build:static:internal] FAIL: resolved Android API base URL changed after validation');
+    process.exit(1);
+  }
+
+  childEnvironment.NEXT_PUBLIC_STATIC_EXPORT = 'true';
+  childEnvironment.NEXT_PUBLIC_BUILD_CHANNEL = 'internal';
+  childEnvironment.NEXT_PUBLIC_ENABLE_AI_TEST_RESET = 'true';
+  // Internal device validation only — do not set this in production/web builds.
+  childEnvironment.NEXT_PUBLIC_ENABLE_SUMMARY_V2 = 'true';
+
+  console.log(
+    '[build:static:internal] channel=internal enableAiTestReset=true staticExport=true enableSummaryV2=true',
+  );
+  dependencies.execFileSync(process.execPath, [nextBin, 'build'], {
+    cwd: repoRoot,
+    stdio: 'inherit',
+    env: childEnvironment,
+  });
+  dependencies.writeManifest(outDir, dependencies.buildManifest({
+    apiHost: apiBaseUrl,
+    keyFingerprint: commercialKey.fingerprint,
+  }));
+  dependencies.execFileSync(process.execPath, [verify, '--dir', 'out', '--expect', 'enabled'], {
+    cwd: repoRoot,
+    stdio: 'inherit',
+    env: childEnvironment,
+  });
+  if (!dependencies.treeContainsExactValue(outDir, revenueCatAndroidKey)) {
+    console.error('[build:static:internal] FAIL: RevenueCat Android public key is absent from built assets');
+    process.exit(1);
+  }
+  console.log('[build:static:internal] OK — internal diagnostics and RevenueCat configuration are present in out/');
+
+  return Object.freeze({
+    ...apiContract,
+    childEnvironment,
+  });
 }
-console.log('[build:static:internal] OK — internal diagnostics and RevenueCat configuration are present in out/');
+
+if (require.main === module) {
+  runStaticInternalBuild();
+}
+
+module.exports = {
+  runStaticInternalBuild,
+};
