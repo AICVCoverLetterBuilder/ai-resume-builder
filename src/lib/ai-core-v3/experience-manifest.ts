@@ -22,6 +22,9 @@ export interface ExperienceFactManifestInput {
   readonly exactSourceText: string;
   readonly facts: readonly ExperienceFact[];
   readonly snapshotHash: string;
+  readonly sourceLocale?: string;
+  readonly targetLocale?: string;
+  readonly contextHash?: string;
 }
 
 export function createExperienceFactManifest(
@@ -58,5 +61,8 @@ export function createExperienceFactManifest(
     exactSourceText: input.exactSourceText,
     facts: input.facts,
     snapshotHash: input.snapshotHash,
+    ...(input.sourceLocale !== undefined ? { sourceLocale: input.sourceLocale } : {}),
+    ...(input.targetLocale !== undefined ? { targetLocale: input.targetLocale } : {}),
+    ...(input.contextHash !== undefined ? { contextHash: input.contextHash } : {}),
   }) as ExperienceFactManifest;
 }

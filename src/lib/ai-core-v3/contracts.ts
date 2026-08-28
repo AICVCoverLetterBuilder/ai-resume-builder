@@ -76,6 +76,9 @@ export interface ExperienceFactManifest {
   readonly exactSourceText: string;
   readonly facts: readonly ExperienceFact[];
   readonly snapshotHash: string;
+  readonly sourceLocale?: string;
+  readonly targetLocale?: string;
+  readonly contextHash?: string;
 }
 
 export interface SummaryEntryFactManifest {

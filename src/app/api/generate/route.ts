@@ -75,7 +75,9 @@ import {
   validateExperienceLocalizationPhysicalBatch,
 } from '@/lib/cv-experience-localized-surfaces';
 import {
+  EXPERIENCE_V3_ENHANCE_ACTION,
   EXPERIENCE_V3_GENERATE_ACTION,
+  executeExperienceV3EnhanceServer,
   executeExperienceV3GenerateServer,
   isAiCoreV3Enabled,
 } from '@/lib/ai-core-v3';
@@ -2414,6 +2416,45 @@ ${sourceFactsText || '(none)'}`
         violationCount: activated.violations.length,
         operationMode: isEmptyTarget ? 'generate_from_context' : 'enhance_existing_content',
       });
+    }
+
+    if (action === EXPERIENCE_V3_ENHANCE_ACTION) {
+      const v3Enabled = isAiCoreV3Enabled({
+        AI_CORE_V3_ENABLED:
+          process.env.AI_CORE_V3_ENABLED ?? process.env.NEXT_PUBLIC_AI_CORE_V3_ENABLED,
+      });
+      if (!v3Enabled) {
+        return jsonResponse({
+          ok: false,
+          action: EXPERIENCE_V3_ENHANCE_ACTION,
+          typedReason: 'v3_feature_disabled',
+        }, { status: 409 });
+      }
+      const result = await executeExperienceV3EnhanceServer(params, {
+        generate: async (prompt) => getText(await callWithRetry({
+          model: MODEL,
+          max_tokens: 1200,
+          temperature: 0,
+          system: 'You are the single AI Core V3 Experience Enhance prose writer. Preserve every required fact and follow the strict JSON contract exactly.',
+          messages: [{ role: 'user', content: prompt }],
+        }, deadlineAt, undefined, AI_PROVIDER_CALL_TIMEOUT_MS, 'provider', undefined, false)),
+        evaluate: async (prompt) => getText(await callWithRetry({
+          model: MODEL,
+          max_tokens: 1200,
+          temperature: 0,
+          system: 'You are the independent non-writing AI Core V3 Experience Enhance validator. Return structured evidence only.',
+          messages: [{ role: 'user', content: prompt }],
+        }, deadlineAt, undefined, AI_PROVIDER_CALL_TIMEOUT_MS, 'verifier', undefined, false)),
+      });
+      const status = result.ok
+        ? 200
+        : result.typedReason === 'invalid_request_contract'
+          ? 400
+          : result.typedReason.includes('provider') || result.typedReason.includes('evaluator')
+            || result.typedReason === 'validator_exception'
+            ? 502
+            : 422;
+      return jsonResponse(result, { status });
     }
 
     if (action === 'bullets') {

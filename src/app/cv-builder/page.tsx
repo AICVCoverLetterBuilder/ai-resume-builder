@@ -200,8 +200,10 @@ import {
 } from '@/lib/cv-experience-localized-surfaces';
 import { apiFetch } from '@/lib/api';
 import {
+  EXPERIENCE_V3_ENHANCE_ACTION,
   EXPERIENCE_V3_GENERATE_ACTION,
   isAiCoreV3Enabled,
+  runExperienceV3EnhanceAdapter,
   runExperienceV3GenerateAdapter,
 } from '@/lib/ai-core-v3';
 import { motion } from 'framer-motion';
@@ -1877,6 +1879,88 @@ export default function CVBuilderPage() {
       } else {
         if (process.env.NODE_ENV !== 'production') {
           console.info('[ExperienceV3GenerateRejected]', experienceV3Result.typedReason);
+        }
+        toast.error(aiErrorMessage('generation_validation_failed', locale));
+      }
+      return;
+    }
+
+    // M3: non-empty, same-locale Experience Enhance is a separate owned V3
+    // operation. Disabled, empty, or cross-locale requests remain on their
+    // existing M2/V2 paths. An owned failure is terminal and never invokes V2.
+    const experienceV3EnhanceResult = experienceV3Enabled
+      ? await runExperienceV3EnhanceAdapter({
+        enabled: true,
+        operationKind: 'experience_enhance',
+        operationId: reqCtx.requestId,
+        requestId: reqCtx.requestId,
+        entryId: clickedExperienceEntryId,
+        entryIndexDiagnostic: liveCv.experience.findIndex(
+          (entry) => entry.id === clickedExperienceEntryId,
+        ),
+        cv: liveCv,
+        industry,
+        level,
+        gender: liveCv.personal.gender || '',
+        requestedLocale,
+        uiLocale: locale,
+        storedContentLocale: String(liveCv.contentLocale || ''),
+        exactVisibleDescription: exactLiveDescription,
+        jobContextHash: requestContext.key,
+        usageCountBefore: countBefore,
+      }, {
+        request: async ({ manifest }) => {
+          const { data } = await apiFetch<unknown>('/api/generate', {
+            body: {
+              action: EXPERIENCE_V3_ENHANCE_ACTION,
+              proToken,
+              requestId: reqCtx.requestId,
+              manifest,
+            },
+            signal: controller.signal,
+          });
+          return data;
+        },
+        getLiveState: () => ({
+          cv: cvRef.current,
+          requestedLocale,
+          uiLocale: experienceV3UiLocaleRef.current,
+          storedContentLocale: String(cvRef.current.contentLocale || ''),
+          exactVisibleDescription: readExperienceV3VisibleDescription(),
+          industry: experienceV3IndustryRef.current[clickedExperienceEntryId] ?? 'general',
+          level: experienceV3LevelRef.current[clickedExperienceEntryId] ?? 'mid',
+          jobContextHash: latestBulletsContextKeyRef.current[clickedExperienceEntryId] || '',
+        }),
+        getActiveOperationId: () => (
+          latestBulletsRequestIdRef.current[clickedExperienceEntryId] || ''
+        ),
+        writeCv: (next) => {
+          cvRef.current = next;
+          setCv(next);
+        },
+        persistCv: persistCurrentCvTransactionally,
+        incrementUsage: recordProAiSuccess,
+      })
+      : { kind: 'not_applicable' as const };
+    if (experienceV3EnhanceResult.kind !== 'not_applicable') {
+      clearTimeout(timer);
+      finishAiClientRequest({
+        ctx: reqCtx,
+        isProVerified: true,
+        countBefore,
+        countAfter: experienceV3EnhanceResult.kind === 'handled_success' ? countBefore + 1 : countBefore,
+        httpStatus: experienceV3EnhanceResult.kind === 'handled_success' ? 200 : 422,
+        error: experienceV3EnhanceResult.kind === 'handled_success'
+          ? null
+          : { code: 'generation_validation_failed', httpStatus: 422 },
+        responseSource: experienceV3EnhanceResult.kind === 'handled_success' ? 'provider' : 'blocked',
+      });
+      setGeneratingBulletsId(null);
+      if (experienceV3EnhanceResult.kind === 'handled_success') {
+        toast.success(t.cv.bulletsSuccess);
+      } else {
+        if (process.env.NODE_ENV !== 'production') {
+          console.info('[ExperienceV3EnhanceRejected]', experienceV3EnhanceResult.typedReason);
         }
         toast.error(aiErrorMessage('generation_validation_failed', locale));
       }

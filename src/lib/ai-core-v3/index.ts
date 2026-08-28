@@ -3,6 +3,8 @@ export * from './contracts';
 export * from './experience-manifest';
 export * from './experience-generate';
 export * from './experience-generate-server';
+export * from './experience-enhance';
+export * from './experience-enhance-server';
 export * from './feature-flag';
 export * from './source-authority';
 export * from './summary-manifest';
