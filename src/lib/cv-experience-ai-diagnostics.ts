@@ -8,6 +8,10 @@
  * behavior — observation only.
  */
 import type { WorkExperience } from './types';
+import type {
+  ExperienceV3AdapterResult,
+  ExperienceV3TerminalDiagnostic,
+} from './ai-core-v3/experience-generate';
 import { fingerprintText, resolveAppVersionInfo, resolveNextBuildId } from './cv-export-diagnostics';
 import { extractSourceDutyUnits, sourceFactIdentitiesFromDescription } from './cv-source-fact-identity';
 import { splitExperienceBullets } from './cv-canonical-facts';
@@ -111,6 +115,8 @@ void EXPERIENCE_AI_DIAG_MARKER;
 
 export const EXPERIENCE_AI_TRACE_SCHEMA_VERSION = 1 as const;
 export const EXPERIENCE_AI_DIAG_STORAGE_KEY = EXPERIENCE_AI_DIAG_STORAGE_KEY_CANON;
+export const EXPERIENCE_V3_TERMINAL_DIAG_STORAGE_KEY = 'cvpro-experience-v3-terminal-diagnostic-v1';
+export type ExperienceAiDiagnosticRecord = ExperienceAiDiagnosticTrace | ExperienceV3TerminalDiagnostic;
 
 /**
  * Marker / UI strings for Experience AI diagnostics live only in
@@ -677,6 +683,7 @@ export type ExperienceAiDiagnosticTrace = {
 };
 
 let latestTrace: ExperienceAiDiagnosticTrace | null = null;
+let latestV3TerminalTrace: ExperienceV3TerminalDiagnostic | null = null;
 
 export function hashRequestId(requestId: string): string {
   return fingerprintText(requestId || '');
@@ -3755,16 +3762,113 @@ function readStoredExperienceAiDiagnostic(): ExperienceAiDiagnosticTrace | null 
   }
 }
 
+export function isExperienceV3TerminalDiagnostic(
+  value: unknown,
+): value is ExperienceV3TerminalDiagnostic {
+  if (!value || typeof value !== 'object') return false;
+  const record = value as Record<string, unknown>;
+  return record.schemaVersion === 1
+    && record.marker === 'EXPERIENCE_V3_TERMINAL_DIAGNOSTIC'
+    && record.revision === 'experience-v3-terminal-diagnostic-v1'
+    && record.operation === 'experience_v3_generate'
+    && typeof record.capturedAt === 'string'
+    && typeof record.requestIdHash === 'string'
+    && typeof record.stableEntryIdHash === 'string'
+    && Array.isArray(record.rejectionReasonCodes);
+}
+
+function readStoredExperienceV3TerminalDiagnostic(): ExperienceV3TerminalDiagnostic | null {
+  if (typeof localStorage === 'undefined') return null;
+  try {
+    const raw = localStorage.getItem(EXPERIENCE_V3_TERMINAL_DIAG_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as unknown;
+    if (!isExperienceV3TerminalDiagnostic(parsed)) {
+      localStorage.removeItem(EXPERIENCE_V3_TERMINAL_DIAG_STORAGE_KEY);
+      return null;
+    }
+    return parsed;
+  } catch {
+    try {
+      localStorage.removeItem(EXPERIENCE_V3_TERMINAL_DIAG_STORAGE_KEY);
+    } catch {
+      /* ignore */
+    }
+    return null;
+  }
+}
+
+/** Publish one complete, non-PII terminal M2 record to the dedicated Experience surface. */
+export function recordExperienceV3TerminalDiagnostic(
+  trace: ExperienceV3TerminalDiagnostic,
+): ExperienceV3TerminalDiagnostic {
+  latestV3TerminalTrace = trace;
+  if (typeof localStorage !== 'undefined') {
+    try {
+      localStorage.setItem(EXPERIENCE_V3_TERMINAL_DIAG_STORAGE_KEY, JSON.stringify(trace));
+    } catch {
+      /* quota — keep in-memory */
+    }
+  }
+  try {
+    appendCvAiDiagnosticHistory({
+      timestamp: trace.capturedAt,
+      requestIdHash: trace.requestIdHash,
+      operationKind: 'experience',
+      operationMode: 'experience_v3_generate',
+      targetLocale: trace.requestedLocale,
+      success: trace.finalDecision === 'accept',
+      finalCandidateSource: trace.finalDecision === 'accept' ? 'v3_writer_evaluator' : null,
+      finalTypedFailureReason: trace.rejectionReasonCodes[0] || null,
+      invariantPassed: true,
+      completenessPassed: true,
+      usageCountBefore: trace.usageBefore,
+      usageCountAfter: trace.usageAfter,
+    });
+  } catch {
+    /* ignore */
+  }
+  try {
+    emitCvAiDiagnosticsChanged({ kind: 'experience', action: 'commit' });
+  } catch {
+    /* ignore */
+  }
+  return trace;
+}
+
+/** Actual page-terminal seam: persist first, then emit exactly one terminal toast callback. */
+export function routeExperienceV3PageTerminal(
+  result: ExperienceV3AdapterResult,
+  callbacks: {
+    readonly onSuccess: () => void;
+    readonly onFailure: (typedReason: string) => void;
+  },
+): boolean {
+  if (result.kind === 'not_applicable') return false;
+  recordExperienceV3TerminalDiagnostic(result.diagnostic);
+  if (result.kind === 'handled_success') callbacks.onSuccess();
+  else callbacks.onFailure(result.typedReason);
+  return true;
+}
+
 export function getLatestExperienceAiDiagnostic(): ExperienceAiDiagnosticTrace | null {
   return latestTrace || readStoredExperienceAiDiagnostic();
 }
 
-export function formatExperienceAiDiagnosticForCopy(trace: ExperienceAiDiagnosticTrace): string {
+export function getLatestExperienceAiDiagnosticRecord(): ExperienceAiDiagnosticRecord | null {
+  const legacy = getLatestExperienceAiDiagnostic();
+  const v3 = latestV3TerminalTrace || readStoredExperienceV3TerminalDiagnostic();
+  if (!legacy) return v3;
+  if (!v3) return legacy;
+  return Date.parse(v3.capturedAt) >= Date.parse(legacy.capturedAt) ? v3 : legacy;
+}
+
+export function formatExperienceAiDiagnosticForCopy(trace: ExperienceAiDiagnosticRecord): string {
   return `${JSON.stringify(trace, null, 2)}\n`;
 }
 
 export function assertExperienceAiDiagnosticHasNoCvText(
-  trace: ExperienceAiDiagnosticTrace,
+  trace: ExperienceAiDiagnosticRecord,
 ): string[] {
   const json = JSON.stringify(trace);
   const violations: string[] = [];
@@ -3780,7 +3884,7 @@ export function assertExperienceAiDiagnosticHasNoCvText(
 }
 
 export async function copyExperienceAiDiagnosticsToClipboard(): Promise<boolean> {
-  const trace = getLatestExperienceAiDiagnostic();
+  const trace = getLatestExperienceAiDiagnosticRecord();
   if (!trace) return false;
   const text = formatExperienceAiDiagnosticForCopy(trace);
   try {
@@ -3809,9 +3913,11 @@ export async function copyExperienceAiDiagnosticsToClipboard(): Promise<boolean>
 
 export function clearExperienceAiDiagnosticsForTests(): void {
   latestTrace = null;
+  latestV3TerminalTrace = null;
   if (typeof localStorage === 'undefined') return;
   try {
     localStorage.removeItem(EXPERIENCE_AI_DIAG_STORAGE_KEY);
+    localStorage.removeItem(EXPERIENCE_V3_TERMINAL_DIAG_STORAGE_KEY);
   } catch {
     /* ignore */
   }
@@ -3829,7 +3935,7 @@ export function clearExperienceAiDiagnostics(): void {
 
 /** Summary lines for the internal diagnostics modal (non-PII). */
 export function summarizeExperienceAiDiagnostic(
-  trace: ExperienceAiDiagnosticTrace | null,
+  trace: ExperienceAiDiagnosticRecord | null,
 ): {
   timestamp: string;
   locale: string;
@@ -3847,6 +3953,25 @@ export function summarizeExperienceAiDiagnostic(
   operationKind: string;
 } | null {
   if (!trace) return null;
+  if (isExperienceV3TerminalDiagnostic(trace)) {
+    const passedPhases = Object.values(trace.phases).filter((status) => status === 'passed').length;
+    return {
+      timestamp: trace.capturedAt,
+      locale: trace.requestedLocale,
+      finalStage: trace.finalDecision,
+      typedFailureReason: trace.rejectionReasonCodes[0] || 'none',
+      sourceUnitCount: 0,
+      requiredCovered: `${passedPhases}/3`,
+      providerFallbackCounts: `${trace.writer.result}/${trace.evaluator.result}`,
+      finalScripts: 'none',
+      countedAsSuccess: trace.finalDecision === 'accept',
+      finalCandidateSource: trace.finalDecision === 'accept' ? 'v3_writer_evaluator' : null,
+      invariantPassed: true,
+      completenessPassed: true,
+      success: trace.finalDecision === 'accept',
+      operationKind: trace.operation,
+    };
+  }
   const failed = [...trace.stages].reverse().find((s) => s.result === 'fail');
   return {
     timestamp: trace.capturedAt,

@@ -12,11 +12,91 @@ import { createSourceAuthoritySnapshot } from './source-authority';
 import type { AggregateValidationResult } from './validators';
 
 export const EXPERIENCE_V3_GENERATE_ACTION = 'experience_v3_generate' as const;
+export const EXPERIENCE_V3_TERMINAL_DIAGNOSTIC_MARKER = 'EXPERIENCE_V3_TERMINAL_DIAGNOSTIC' as const;
+export const EXPERIENCE_V3_TERMINAL_DIAGNOSTIC_REVISION = 'experience-v3-terminal-diagnostic-v1' as const;
+
+export const EXPERIENCE_V3_TERMINAL_REASON_CODES = [
+  'none',
+  'snapshot_capture_failed',
+  'target_entry_missing',
+  'role_title_missing',
+  'structured_dates_invalid',
+  'source_not_empty',
+  'invalid_request_contract',
+  'v3_feature_disabled',
+  'provider_request_failed',
+  'provider_output_malformed',
+  'structural_validation_failed',
+  'evaluator_request_failed',
+  'evaluator_output_malformed',
+  'validation_rejected',
+  'invalid_v3_response',
+  'candidate_or_validation_mismatch',
+  'stale_snapshot',
+  'target_entry_deleted',
+  'visible_readback_failed',
+  'rollback_failed',
+  'persistence_failed',
+  'usage_increment_failed',
+  'client_verification_exception',
+  'transport_or_request_failure',
+] as const;
+
+export type ExperienceV3TerminalReasonCode = (typeof EXPERIENCE_V3_TERMINAL_REASON_CODES)[number];
+export type ExperienceV3DiagnosticPhaseStatus = 'passed' | 'failed' | 'not_evaluated';
+export type ExperienceV3DiagnosticAttempt = {
+  readonly attempted: boolean | null;
+  readonly result: 'succeeded' | 'failed' | 'malformed' | 'not_attempted' | 'unknown';
+};
+
+export interface ExperienceV3TerminalDiagnostic {
+  readonly schemaVersion: 1;
+  readonly marker: typeof EXPERIENCE_V3_TERMINAL_DIAGNOSTIC_MARKER;
+  readonly revision: typeof EXPERIENCE_V3_TERMINAL_DIAGNOSTIC_REVISION;
+  readonly capturedAt: string;
+  readonly operation: typeof EXPERIENCE_V3_GENERATE_ACTION;
+  readonly requestIdHash: string;
+  readonly operationIdHash: string;
+  readonly stableEntryIdHash: string;
+  readonly requestedLocale: string;
+  readonly uiLocale: string;
+  readonly contentLocale: string;
+  readonly sourceWasEmpty: boolean;
+  readonly normalizedIndustry: string;
+  readonly normalizedLevel: string;
+  readonly employmentState: 'present' | 'completed' | 'unknown';
+  readonly ownershipResult: 'owned';
+  readonly routeHttpStatus: number | null;
+  readonly writer: ExperienceV3DiagnosticAttempt;
+  readonly evaluator: ExperienceV3DiagnosticAttempt;
+  readonly phases: Readonly<Record<'structural' | 'semantic' | 'language_quality', ExperienceV3DiagnosticPhaseStatus>>;
+  readonly rejectionReasonCodes: readonly ExperienceV3TerminalReasonCode[];
+  readonly finalDecision: 'accept' | 'reject' | 'not_ready' | 'transport_failure' | 'race_failure';
+  readonly applyAuthorized: boolean;
+  readonly applyAttempted: boolean;
+  readonly applyCommitted: boolean;
+  readonly v2FallthroughCount: 0;
+  readonly usageBefore: number;
+  readonly usageAfter: number;
+  readonly usageDelta: number;
+  readonly raceGuardResult: 'passed' | 'failed' | 'not_evaluated';
+  readonly sourceCommitMarker: string | null;
+  readonly buildChannel: string | null;
+}
 
 export type ExperienceV3RoutingResult =
   | { readonly kind: 'not_applicable' }
   | { readonly kind: 'handled_success' }
   | { readonly kind: 'handled_failure'; readonly typedReason: string };
+
+export type ExperienceV3AdapterResult =
+  | { readonly kind: 'not_applicable' }
+  | { readonly kind: 'handled_success'; readonly diagnostic: ExperienceV3TerminalDiagnostic }
+  | {
+    readonly kind: 'handled_failure';
+    readonly typedReason: string;
+    readonly diagnostic: ExperienceV3TerminalDiagnostic;
+  };
 
 export interface ExperienceV3ProviderOutput {
   readonly operationId: string;
@@ -79,6 +159,9 @@ export interface ExperienceV3AdapterInput {
   readonly cv: CVData;
   readonly industry: string;
   readonly level: string;
+  /** Normalized finite values used only by diagnostics; request authority is unchanged. */
+  readonly diagnosticIndustry?: string;
+  readonly diagnosticLevel?: string;
   readonly gender: string;
   readonly requestedLocale: string;
   readonly uiLocale: string;
@@ -106,6 +189,8 @@ export interface ExperienceV3AdapterDependencies {
   readonly writeCv: (next: CVData) => void;
   readonly persistCv: (next: CVData) => boolean;
   readonly incrementUsage: () => void;
+  readonly getUsageCount?: () => number;
+  readonly getRouteHttpStatus?: () => number | null;
 }
 
 function normalizeLocale(value: string): string {
@@ -438,7 +523,7 @@ export function applyExperienceV3Transaction(
     ExperienceV3AdapterDependencies,
     'getLiveState' | 'writeCv' | 'persistCv' | 'incrementUsage'
   >,
-): ExperienceV3RoutingResult {
+): Exclude<ExperienceV3RoutingResult, { kind: 'not_applicable' }> {
   const liveBefore = dependencies.getLiveState();
   if (!liveStateMatchesSnapshot(liveBefore, snapshot)) {
     return { kind: 'handled_failure', typedReason: 'stale_snapshot' };
@@ -535,10 +620,218 @@ function failureReasonFromResponse(value: unknown): string {
     : 'invalid_v3_response';
 }
 
+const EXPERIENCE_V3_TERMINAL_REASON_SET = new Set<string>(EXPERIENCE_V3_TERMINAL_REASON_CODES);
+
+function finiteTerminalReason(value: string): ExperienceV3TerminalReasonCode {
+  return EXPERIENCE_V3_TERMINAL_REASON_SET.has(value)
+    ? value as ExperienceV3TerminalReasonCode
+    : 'transport_or_request_failure';
+}
+
+function diagnosticContextValue(value: string | undefined): string {
+  const normalized = String(value || '').trim().toLowerCase();
+  return /^[a-z0-9][a-z0-9_-]{0,39}$/u.test(normalized) ? normalized : 'unknown';
+}
+
+function diagnosticEnvironmentValue(value: string | undefined): string | null {
+  const normalized = String(value || '').trim().toLowerCase();
+  return ['internal', 'preview', 'production', 'development', 'test'].includes(normalized)
+    ? normalized
+    : null;
+}
+
+function diagnosticSourceMarker(value: string | undefined): string | null {
+  const normalized = String(value || '').trim().toLowerCase();
+  return /^[0-9a-f]{7,40}$/u.test(normalized) ? normalized.slice(0, 7) : null;
+}
+
+function responseValidation(value: unknown): AggregateValidationResult | null {
+  if (!isRecord(value) || !isRecord(value.validation) || !isRecord(value.validation.phases)) return null;
+  return value.validation as unknown as AggregateValidationResult;
+}
+
+function diagnosticPhaseStatus(
+  validation: AggregateValidationResult | null,
+  phase: 'structural' | 'semantic' | 'language_quality',
+): ExperienceV3DiagnosticPhaseStatus {
+  const status = validation?.phases?.[phase]?.status;
+  return status === 'passed' || status === 'failed' || status === 'not_evaluated'
+    ? status
+    : 'not_evaluated';
+}
+
+function diagnosticAttempts(
+  reason: ExperienceV3TerminalReasonCode,
+  serverResponseReceived: boolean,
+  acceptedResponse: boolean,
+): { writer: ExperienceV3DiagnosticAttempt; evaluator: ExperienceV3DiagnosticAttempt } {
+  const notAttempted: ExperienceV3DiagnosticAttempt = { attempted: false, result: 'not_attempted' };
+  const succeeded: ExperienceV3DiagnosticAttempt = { attempted: true, result: 'succeeded' };
+  if (acceptedResponse || [
+    'candidate_or_validation_mismatch',
+    'stale_snapshot',
+    'target_entry_deleted',
+    'visible_readback_failed',
+    'rollback_failed',
+    'persistence_failed',
+    'usage_increment_failed',
+    'client_verification_exception',
+  ].includes(reason)) {
+    return { writer: succeeded, evaluator: succeeded };
+  }
+  if (reason === 'provider_request_failed') {
+    return { writer: { attempted: true, result: 'failed' }, evaluator: notAttempted };
+  }
+  if (reason === 'provider_output_malformed') {
+    return { writer: { attempted: true, result: 'malformed' }, evaluator: notAttempted };
+  }
+  if (reason === 'structural_validation_failed') {
+    return { writer: succeeded, evaluator: notAttempted };
+  }
+  if (reason === 'evaluator_request_failed') {
+    return { writer: succeeded, evaluator: { attempted: true, result: 'failed' } };
+  }
+  if (reason === 'evaluator_output_malformed') {
+    return { writer: succeeded, evaluator: { attempted: true, result: 'malformed' } };
+  }
+  if (reason === 'validation_rejected') return { writer: succeeded, evaluator: succeeded };
+  if (reason === 'invalid_request_contract' || reason === 'v3_feature_disabled'
+    || reason === 'snapshot_capture_failed' || reason === 'target_entry_missing'
+    || reason === 'role_title_missing' || reason === 'structured_dates_invalid'
+    || reason === 'source_not_empty') {
+    return { writer: notAttempted, evaluator: notAttempted };
+  }
+  if (!serverResponseReceived) {
+    return {
+      writer: { attempted: null, result: 'unknown' },
+      evaluator: { attempted: null, result: 'unknown' },
+    };
+  }
+  return {
+    writer: { attempted: null, result: 'unknown' },
+    evaluator: { attempted: null, result: 'unknown' },
+  };
+}
+
+function buildExperienceV3TerminalDiagnostic(
+  input: ExperienceV3AdapterInput,
+  dependencies: ExperienceV3AdapterDependencies,
+  result: Exclude<ExperienceV3RoutingResult, { kind: 'not_applicable' }>,
+  rawResponse: unknown,
+  serverResponseReceived: boolean,
+): ExperienceV3TerminalDiagnostic {
+  const rawReason = result.kind === 'handled_success' ? 'none' : result.typedReason;
+  const reason = finiteTerminalReason(rawReason);
+  const acceptedResponse = Boolean(parseExperienceV3SuccessResponse(rawResponse));
+  const validation = responseValidation(rawResponse);
+  const routeHttpStatus = (() => {
+    try {
+      const value = dependencies.getRouteHttpStatus?.();
+      return Number.isInteger(value) && Number(value) >= 100 && Number(value) <= 599
+        ? Number(value)
+        : null;
+    } catch {
+      return null;
+    }
+  })();
+  const usageAfter = (() => {
+    try {
+      const value = dependencies.getUsageCount?.();
+      return Number.isFinite(value) && Number(value) >= 0
+        ? Number(value)
+        : input.usageCountBefore + (result.kind === 'handled_success' ? 1 : 0);
+    } catch {
+      return input.usageCountBefore + (result.kind === 'handled_success' ? 1 : 0);
+    }
+  })();
+  const raceFailure = reason === 'stale_snapshot' || reason === 'target_entry_deleted';
+  const transportFailure = reason === 'provider_request_failed'
+    || reason === 'evaluator_request_failed'
+    || reason === 'transport_or_request_failure'
+    || (routeHttpStatus !== null && routeHttpStatus >= 500);
+  const notReady = reason === 'snapshot_capture_failed'
+    || reason === 'target_entry_missing'
+    || reason === 'role_title_missing'
+    || reason === 'structured_dates_invalid'
+    || reason === 'source_not_empty'
+    || reason === 'invalid_request_contract'
+    || reason === 'v3_feature_disabled';
+  const applyAuthorized = acceptedResponse;
+  const applyAttempted = applyAuthorized && !raceFailure;
+  const entry = input.cv.experience.find((item) => item.id === input.entryId);
+  const attempts = diagnosticAttempts(reason, serverResponseReceived, acceptedResponse);
+
+  return immutableCopy({
+    schemaVersion: 1 as const,
+    marker: EXPERIENCE_V3_TERMINAL_DIAGNOSTIC_MARKER,
+    revision: EXPERIENCE_V3_TERMINAL_DIAGNOSTIC_REVISION,
+    capturedAt: new Date().toISOString(),
+    operation: EXPERIENCE_V3_GENERATE_ACTION,
+    requestIdHash: hashExperienceV3Value(input.operationId),
+    operationIdHash: hashExperienceV3Value(input.operationId),
+    stableEntryIdHash: hashExperienceV3Value(input.entryId),
+    requestedLocale: normalizeLocale(input.requestedLocale),
+    uiLocale: normalizeLocale(input.uiLocale),
+    contentLocale: normalizeLocale(input.storedContentLocale),
+    sourceWasEmpty: normalizeExperienceV3Source(input.exactVisibleDescription).length === 0,
+    normalizedIndustry: diagnosticContextValue(input.diagnosticIndustry ?? input.industry),
+    normalizedLevel: diagnosticContextValue(input.diagnosticLevel ?? input.level),
+    employmentState: entry ? (entry.isPresent ? 'present' as const : 'completed' as const) : 'unknown' as const,
+    ownershipResult: 'owned' as const,
+    routeHttpStatus,
+    writer: attempts.writer,
+    evaluator: attempts.evaluator,
+    phases: {
+      structural: diagnosticPhaseStatus(validation, 'structural'),
+      semantic: diagnosticPhaseStatus(validation, 'semantic'),
+      language_quality: diagnosticPhaseStatus(validation, 'language_quality'),
+    },
+    rejectionReasonCodes: result.kind === 'handled_success' ? [] : [reason],
+    finalDecision: result.kind === 'handled_success'
+      ? 'accept' as const
+      : raceFailure
+        ? 'race_failure' as const
+        : transportFailure
+          ? 'transport_failure' as const
+          : notReady
+            ? 'not_ready' as const
+            : 'reject' as const,
+    applyAuthorized,
+    applyAttempted,
+    applyCommitted: result.kind === 'handled_success',
+    v2FallthroughCount: 0 as const,
+    usageBefore: input.usageCountBefore,
+    usageAfter,
+    usageDelta: usageAfter - input.usageCountBefore,
+    raceGuardResult: raceFailure ? 'failed' as const : applyAuthorized ? 'passed' as const : 'not_evaluated' as const,
+    sourceCommitMarker: diagnosticSourceMarker(process.env.NEXT_PUBLIC_SOURCE_COMMIT_SHORT),
+    buildChannel: diagnosticEnvironmentValue(process.env.NEXT_PUBLIC_BUILD_CHANNEL),
+  }) as ExperienceV3TerminalDiagnostic;
+}
+
+function withTerminalDiagnostic(
+  input: ExperienceV3AdapterInput,
+  dependencies: ExperienceV3AdapterDependencies,
+  result: Exclude<ExperienceV3RoutingResult, { kind: 'not_applicable' }>,
+  rawResponse: unknown,
+  serverResponseReceived: boolean,
+): ExperienceV3AdapterResult {
+  const diagnostic = buildExperienceV3TerminalDiagnostic(
+    input,
+    dependencies,
+    result,
+    rawResponse,
+    serverResponseReceived,
+  );
+  return result.kind === 'handled_success'
+    ? { kind: 'handled_success', diagnostic }
+    : { kind: 'handled_failure', typedReason: result.typedReason, diagnostic };
+}
+
 export async function runExperienceV3GenerateAdapter(
   input: ExperienceV3AdapterInput,
   dependencies: ExperienceV3AdapterDependencies,
-): Promise<ExperienceV3RoutingResult> {
+): Promise<ExperienceV3AdapterResult> {
   if (classifyExperienceV3Routing(input) === 'not_applicable') {
     return { kind: 'not_applicable' };
   }
@@ -547,10 +840,10 @@ export async function runExperienceV3GenerateAdapter(
   try {
     snapshot = captureExperienceV3OperationSnapshot(input);
   } catch (error) {
-    return {
+    return withTerminalDiagnostic(input, dependencies, {
       kind: 'handled_failure',
       typedReason: error instanceof Error ? error.message : 'snapshot_capture_failed',
-    };
+    }, undefined, false);
   }
 
   let rawResponse: unknown;
@@ -560,22 +853,37 @@ export async function runExperienceV3GenerateAdapter(
       manifest: snapshot.manifest,
     });
   } catch (error) {
-    return {
+    return withTerminalDiagnostic(input, dependencies, {
       kind: 'handled_failure',
       typedReason: error instanceof Error && error.message ? error.message : 'provider_request_failed',
-    };
+    }, undefined, false);
   }
 
   const response = parseExperienceV3SuccessResponse(rawResponse);
   if (!response) {
-    return { kind: 'handled_failure', typedReason: failureReasonFromResponse(rawResponse) };
+    return withTerminalDiagnostic(input, dependencies, {
+      kind: 'handled_failure',
+      typedReason: failureReasonFromResponse(rawResponse),
+    }, rawResponse, true);
   }
   try {
     if (!responseMatchesExperienceV3Snapshot(response, snapshot)) {
-      return { kind: 'handled_failure', typedReason: 'candidate_or_validation_mismatch' };
+      return withTerminalDiagnostic(input, dependencies, {
+        kind: 'handled_failure',
+        typedReason: 'candidate_or_validation_mismatch',
+      }, rawResponse, true);
     }
-    return applyExperienceV3Transaction(snapshot, response, dependencies);
+    return withTerminalDiagnostic(
+      input,
+      dependencies,
+      applyExperienceV3Transaction(snapshot, response, dependencies),
+      rawResponse,
+      true,
+    );
   } catch {
-    return { kind: 'handled_failure', typedReason: 'client_verification_exception' };
+    return withTerminalDiagnostic(input, dependencies, {
+      kind: 'handled_failure',
+      typedReason: 'client_verification_exception',
+    }, rawResponse, true);
   }
 }

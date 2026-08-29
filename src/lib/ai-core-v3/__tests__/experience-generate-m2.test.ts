@@ -288,7 +288,12 @@ describe('M2 A. exact routing', () => {
 
   it('5. eligible provider failure is terminal handled_failure with no write or usage', async () => {
     const run = await runHarness({ serverOptions: { writerThrows: true } });
-    expect(run.result).toEqual({ kind: 'handled_failure', typedReason: 'provider_request_failed' });
+    expect(run.result).toMatchObject({ kind: 'handled_failure', typedReason: 'provider_request_failed' });
+    expect(run.result.kind === 'handled_failure' && run.result.diagnostic).toMatchObject({
+      finalDecision: 'transport_failure',
+      usageDelta: 0,
+      v2FallthroughCount: 0,
+    });
     expect([run.writeCount, run.usageCallCount]).toEqual([0, 0]);
   });
 

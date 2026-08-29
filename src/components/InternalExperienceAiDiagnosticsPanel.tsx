@@ -10,7 +10,8 @@ import { toast } from 'sonner';
 import {
   clearExperienceAiDiagnostics,
   copyExperienceAiDiagnosticsToClipboard,
-  getLatestExperienceAiDiagnostic,
+  getLatestExperienceAiDiagnosticRecord,
+  isExperienceV3TerminalDiagnostic,
   summarizeExperienceAiDiagnostic,
 } from '@/lib/cv-experience-ai-diagnostics';
 import {
@@ -62,7 +63,7 @@ export function InternalExperienceAiDiagnosticsPanel({
   const full = useMemo(() => {
     void refreshToken;
     void rev;
-    return getLatestExperienceAiDiagnostic();
+    return getLatestExperienceAiDiagnosticRecord();
   }, [refreshToken, rev]);
   const summary = useMemo(() => summarizeExperienceAiDiagnostic(full), [full]);
   const history = useMemo(() => {
@@ -89,7 +90,10 @@ export function InternalExperienceAiDiagnosticsPanel({
   }, []);
 
   const warnings: string[] = [];
-  if (full) {
+  if (full && isExperienceV3TerminalDiagnostic(full)) {
+    if (full.usageDelta !== (full.finalDecision === 'accept' ? 1 : 0)) warnings.push('usage mismatch');
+    if (full.finalDecision !== 'accept' && full.applyCommitted) warnings.push('rejected output applied');
+  } else if (full) {
     if (full.diagnosticInvariantCheckPassed === false) warnings.push('invariant check failed');
     if (full.diagnosticCompletenessPassed === false) warnings.push('completeness check failed');
     if (full.visibleApplySucceeded === false && full.countedAsSuccess) {
@@ -127,7 +131,7 @@ export function InternalExperienceAiDiagnosticsPanel({
         <dl className="mt-2 space-y-1 text-xs text-muted-foreground">
           <div>
             <dt className="inline font-medium text-foreground">operation: </dt>
-            <dd className="inline">experience</dd>
+            <dd className="inline">{summary.operationKind}</dd>
           </div>
           <div>
             <dt className="inline font-medium text-foreground">timestamp: </dt>
@@ -244,7 +248,7 @@ export function InternalExperienceAiCopyLink() {
   );
   const hasTrace = useMemo(() => {
     void rev;
-    return Boolean(getLatestExperienceAiDiagnostic());
+    return Boolean(getLatestExperienceAiDiagnosticRecord());
   }, [rev]);
 
   if (!hasTrace) return null;

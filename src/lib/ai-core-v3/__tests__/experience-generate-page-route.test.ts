@@ -1,6 +1,47 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
+import type { ExperienceV3TerminalDiagnostic } from '../experience-generate';
+import {
+  clearExperienceAiDiagnosticsForTests,
+  getLatestExperienceAiDiagnosticRecord,
+  routeExperienceV3PageTerminal,
+} from '../../cv-experience-ai-diagnostics';
+
+const terminalDiagnostic: ExperienceV3TerminalDiagnostic = {
+  schemaVersion: 1,
+  marker: 'EXPERIENCE_V3_TERMINAL_DIAGNOSTIC',
+  revision: 'experience-v3-terminal-diagnostic-v1',
+  capturedAt: '2026-08-29T13:59:19.149Z',
+  operation: 'experience_v3_generate',
+  requestIdHash: 'v3-request',
+  operationIdHash: 'v3-operation',
+  stableEntryIdHash: 'v3-entry',
+  requestedLocale: 'de',
+  uiLocale: 'de',
+  contentLocale: 'de',
+  sourceWasEmpty: true,
+  normalizedIndustry: 'engineering',
+  normalizedLevel: 'mid',
+  employmentState: 'present',
+  ownershipResult: 'owned',
+  routeHttpStatus: 502,
+  writer: { attempted: true, result: 'failed' },
+  evaluator: { attempted: false, result: 'not_attempted' },
+  phases: { structural: 'not_evaluated', semantic: 'not_evaluated', language_quality: 'not_evaluated' },
+  rejectionReasonCodes: ['provider_request_failed'],
+  finalDecision: 'transport_failure',
+  applyAuthorized: false,
+  applyAttempted: false,
+  applyCommitted: false,
+  v2FallthroughCount: 0,
+  usageBefore: 0,
+  usageAfter: 0,
+  usageDelta: 0,
+  raceGuardResult: 'not_evaluated',
+  sourceCommitMarker: '77cf650',
+  buildChannel: 'internal',
+};
 
 const pageSource = readFileSync(
   resolve(process.cwd(), 'src/app/cv-builder/page.tsx'),
@@ -37,6 +78,24 @@ describe('M2 focused page and route integration', () => {
     );
     expect(terminalBlock).toContain('return;');
     expect(terminalBlock).not.toContain("action: 'bullets'");
+  });
+
+  it('executes the page terminal seam by recording the owned failure before its toast callback', () => {
+    clearExperienceAiDiagnosticsForTests();
+    const observed: string[] = [];
+    const handled = routeExperienceV3PageTerminal({
+      kind: 'handled_failure',
+      typedReason: 'provider_request_failed',
+      diagnostic: terminalDiagnostic,
+    }, {
+      onSuccess: () => observed.push('success_toast'),
+      onFailure: () => {
+        observed.push(getLatestExperienceAiDiagnosticRecord() ? 'diagnostic_before_toast' : 'missing');
+        observed.push('failure_toast');
+      },
+    });
+    expect(handled).toBe(true);
+    expect(observed).toEqual(['diagnostic_before_toast', 'failure_toast']);
   });
 
   it('routes the isolated V3 discriminator before the legacy bullets action', () => {

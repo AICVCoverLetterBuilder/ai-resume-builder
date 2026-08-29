@@ -49,6 +49,7 @@ import {
 import {
   copyExperienceAiDiagnosticsToClipboard,
   ExperienceAiDiagnosticSession,
+  routeExperienceV3PageTerminal,
 } from '@/lib/cv-experience-ai-diagnostics';
 import { SummaryAiDiagnosticSession, resolveAuthoritativeVisibleSummaryText } from '@/lib/cv-summary-ai-diagnostics';
 import { resolveSummaryFinalizeClientOutcome } from '@/lib/cv-summary-noop-ui';
@@ -1922,6 +1923,7 @@ export default function CVBuilderPage() {
     const experienceV3Enabled = isAiCoreV3Enabled({
       AI_CORE_V3_ENABLED: process.env.NEXT_PUBLIC_AI_CORE_V3_ENABLED,
     });
+    let experienceV3RouteHttpStatus: number | null = null;
     const experienceV3Result = experienceV3Enabled
       ? await runExperienceV3GenerateAdapter({
         enabled: true,
@@ -1934,6 +1936,8 @@ export default function CVBuilderPage() {
         cv: liveCv,
         industry,
         level,
+        diagnosticIndustry: requestContext.industryNorm,
+        diagnosticLevel: requestContext.levelNorm,
         gender: liveCv.personal.gender || '',
         requestedLocale,
         uiLocale: locale,
@@ -1942,7 +1946,7 @@ export default function CVBuilderPage() {
         usageCountBefore: countBefore,
       }, {
         request: async ({ manifest }) => {
-          const { data } = await apiFetch<unknown>('/api/generate', {
+          const { data, response } = await apiFetch<unknown>('/api/generate', {
             body: {
               action: EXPERIENCE_V3_GENERATE_ACTION,
               proToken,
@@ -1951,6 +1955,7 @@ export default function CVBuilderPage() {
             },
             signal: controller.signal,
           });
+          experienceV3RouteHttpStatus = response.status;
           return data;
         },
         getLiveState: () => ({
@@ -1968,6 +1973,8 @@ export default function CVBuilderPage() {
         },
         persistCv: persistCurrentCvTransactionally,
         incrementUsage: recordProAiSuccess,
+        getUsageCount: getProAiUsageCount,
+        getRouteHttpStatus: () => experienceV3RouteHttpStatus,
       })
       : { kind: 'not_applicable' as const };
     if (experienceV3Result.kind !== 'not_applicable') {
@@ -1984,14 +1991,15 @@ export default function CVBuilderPage() {
         responseSource: experienceV3Result.kind === 'handled_success' ? 'provider' : 'blocked',
       });
       setGeneratingBulletsId(null);
-      if (experienceV3Result.kind === 'handled_success') {
-        toast.success(t.cv.bulletsSuccess);
-      } else {
-        if (process.env.NODE_ENV !== 'production') {
-          console.info('[ExperienceV3GenerateRejected]', experienceV3Result.typedReason);
-        }
-        toast.error(aiErrorMessage('generation_validation_failed', locale));
-      }
+      routeExperienceV3PageTerminal(experienceV3Result, {
+        onSuccess: () => toast.success(t.cv.bulletsSuccess),
+        onFailure: (typedReason) => {
+          if (process.env.NODE_ENV !== 'production') {
+            console.info('[ExperienceV3GenerateRejected]', typedReason);
+          }
+          toast.error(aiErrorMessage('generation_validation_failed', locale));
+        },
+      });
       return;
     }
 
