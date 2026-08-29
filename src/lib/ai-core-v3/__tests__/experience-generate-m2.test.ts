@@ -10,7 +10,11 @@ import {
   type ExperienceV3AdapterInput,
   type ExperienceV3GenerateResponse,
 } from '..';
-import { executeExperienceV3GenerateServer } from '../experience-generate-server';
+import {
+  buildExperienceV3EvaluatorPrompt,
+  executeExperienceV3GenerateServer,
+  parseExperienceV3EvaluatorOutput,
+} from '../experience-generate-server';
 import { GERMAN_AAB529_DEVICE_OUTPUT_FIXTURE } from '../fixtures/german-aab529-device-output';
 
 const EN_BULLETS = [
@@ -151,6 +155,7 @@ async function validServerResponse(
     semanticCode?: string;
     languageCode?: string;
     evaluatorExtra?: Record<string, unknown>;
+    evaluatorRaw?: string;
     writerThrows?: boolean;
     evaluatorThrows?: boolean;
   } = {},
@@ -162,6 +167,7 @@ async function validServerResponse(
     },
     evaluate: async () => {
       if (options.evaluatorThrows) throw new Error('evaluator timeout');
+      if (options.evaluatorRaw !== undefined) return options.evaluatorRaw;
       return evaluatorJson(manifest, {
         semanticStatus: options.semanticStatus,
         languageStatus: options.languageStatus,
@@ -450,7 +456,81 @@ describe('M2 C and D. bounded transports and fail-closed validation', () => {
     expect(run.writeCount).toBe(0);
   });
 
-  it('23. wrong locale in provider output is rejected', async () => {
+  it('23. makes the evaluator raw-object contract explicit without accepting wrappers', () => {
+    const manifest = captureExperienceV3OperationSnapshot(makeInput()).manifest;
+    const prompt = buildExperienceV3EvaluatorPrompt(manifest, {
+      operationId: manifest.operationId,
+      candidateId: 'candidate-m2',
+      operationKind: 'experience_generate',
+      targetLocale: manifest.locale,
+      sourceSnapshotHash: manifest.snapshotHash,
+      text: EN_BULLETS.map((bullet) => `• ${bullet}`).join('\n'),
+      units: EN_BULLETS.map((text, index) => ({
+        unitId: `${manifest.entryId}:bullet:${index + 1}`,
+        entryId: manifest.entryId,
+        text,
+      })),
+    });
+    expect(prompt).toContain('Return one complete raw JSON object only. Begin with { and end with }.');
+    expect(prompt).toContain('Do not use Markdown, code fences, commentary, explanations, headings, or reasoning.');
+    expect(prompt).toContain('Echo operationId, entryId, snapshotHash, and locale exactly from the immutable manifest.');
+  });
+
+  it('24. rejects malformed, wrapped, truncated, schema-invalid, and identity-mismatched evaluator evidence as not evaluated', async () => {
+    const manifest = captureExperienceV3OperationSnapshot(makeInput()).manifest;
+    const valid = JSON.parse(evaluatorJson(manifest)) as Record<string, unknown>;
+    const missingFields = JSON.parse(JSON.stringify(valid)) as { phases: Record<string, unknown> };
+    delete missingFields.phases.language_quality;
+    const unexpectedAuthority = { ...valid, accepted: true };
+    const invalidEnum = JSON.parse(JSON.stringify(valid)) as { phases: { semantic: { status: string } } };
+    invalidEnum.phases.semantic.status = 'pending';
+    const wrongIdentity = { ...valid, entryId: 'another-entry' };
+    const cases = [
+      '{"operationId":',
+      `${evaluatorJson(manifest)}${evaluatorJson(manifest)}`,
+      `Evaluator notes:\n${evaluatorJson(manifest)}`,
+      `\`\`\`json\n${evaluatorJson(manifest)}\n\`\`\``,
+      JSON.stringify(missingFields),
+      JSON.stringify(unexpectedAuthority),
+      JSON.stringify(invalidEnum),
+      JSON.stringify(wrongIdentity),
+    ];
+    for (const raw of cases) {
+      expect(parseExperienceV3EvaluatorOutput(raw, manifest)).toBeNull();
+      const result = await executeExperienceV3GenerateServer({ manifest }, {
+        generate: async () => writerJson(manifest),
+        evaluate: async () => raw,
+      });
+      expect(result).toMatchObject({ ok: false, typedReason: 'evaluator_output_malformed' });
+      if (!result.ok) {
+        expect(result.validation?.phases).toMatchObject({
+          structural: { status: 'passed' },
+          semantic: { status: 'not_evaluated' },
+          language_quality: { status: 'not_evaluated' },
+        });
+      }
+    }
+  });
+
+  it('25. keeps malformed evaluator output terminal with no apply, usage, or V2 fallthrough', async () => {
+    const run = await runHarness({ serverOptions: { evaluatorRaw: '{"operationId":' } });
+    expect(run.result).toMatchObject({ kind: 'handled_failure', typedReason: 'evaluator_output_malformed' });
+    if (run.result.kind === 'handled_failure') {
+      expect(run.result.diagnostic).toMatchObject({
+        evaluator: { attempted: true, result: 'malformed' },
+        phases: {
+          structural: 'passed',
+          semantic: 'not_evaluated',
+          language_quality: 'not_evaluated',
+        },
+        usageDelta: 0,
+        v2FallthroughCount: 0,
+      });
+    }
+    expect([run.writeCount, run.usageCallCount]).toEqual([0, 0]);
+  });
+
+  it('26. wrong locale in provider output is rejected', async () => {
     const manifest = captureExperienceV3OperationSnapshot(makeInput()).manifest;
     const result = await executeExperienceV3GenerateServer({ manifest }, {
       generate: async () => JSON.stringify({

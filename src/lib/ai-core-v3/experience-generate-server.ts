@@ -379,9 +379,11 @@ export function buildExperienceV3EvaluatorPrompt(
   return [
     'Act only as an independent non-writing validator. Never rewrite, correct, or replace candidate prose.',
     'Check relevance, unsupported concrete claims, metrics, achievements, certifications, tools, leadership, cross-entry facts, role/company mutation, responsibility escalation, Summary leakage, target locale/script, grammar, CV form, and employment tense.',
-    'Return strict JSON only with operationId, entryId, snapshotHash, locale, and phases.',
-    'phases must contain exactly semantic and language_quality. Each phase contains status (passed or failed) and violations.',
+    'Return one complete raw JSON object only. Begin with { and end with }. Do not use Markdown, code fences, commentary, explanations, headings, or reasoning.',
+    'The top-level object has exactly operationId, entryId, snapshotHash, locale, and phases. Echo operationId, entryId, snapshotHash, and locale exactly from the immutable manifest.',
+    'phases has exactly semantic and language_quality. Each phase has exactly status (passed or failed) and violations.',
     'Each violation contains only code, category, detail, and optional factIds/entryIds. A passed phase has an empty violations array; a failed phase has at least one violation.',
+    'Keep each violation detail concise and return no fields other than the required validation schema.',
     'Do not return replacement prose, corrected bullets, apply authorization, or usage authorization.',
     JSON.stringify({ manifest, candidate }),
   ].join('\n');
@@ -435,7 +437,7 @@ export async function executeExperienceV3GenerateServer(
       manifest,
       candidate,
       structural,
-      failedPhase('semantic', 'malformed_evaluator_response', 'Independent evaluator response was malformed', manifest.entryId),
+      notEvaluatedPhase('semantic'),
       notEvaluatedPhase('language_quality'),
     );
     return failure('evaluator_output_malformed', validation);

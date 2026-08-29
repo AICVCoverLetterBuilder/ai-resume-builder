@@ -691,7 +691,7 @@ export async function POST(req: NextRequest) {
         }, deadlineAt, undefined, AI_PROVIDER_CALL_TIMEOUT_MS, 'provider', undefined, false)),
         evaluate: async (prompt) => getText(await callWithRetry({
           model: MODEL,
-          max_tokens: 900,
+          max_tokens: 1200,
           temperature: 0,
           system: 'You are an independent non-writing CV validator. Return structured validation evidence only.',
           messages: [{ role: 'user', content: prompt }],

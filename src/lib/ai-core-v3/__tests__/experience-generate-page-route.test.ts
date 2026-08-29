@@ -232,6 +232,125 @@ describe('M2 focused page and route integration', () => {
     vi.resetModules();
   });
 
+  it('uses one writer and one evaluator transport call with the bounded raw-JSON evaluator contract', async () => {
+    const environmentKeys = [
+      'AI_CORE_V3_ENABLED',
+      'NEXT_PUBLIC_AI_CORE_V3_ENABLED',
+      'ANTHROPIC_API_KEY',
+      'ANTHROPIC_AUTH_TOKEN',
+    ] as const;
+    const originalEnvironment = Object.fromEntries(environmentKeys.map((key) => [key, {
+      present: Object.prototype.hasOwnProperty.call(process.env, key),
+      value: process.env[key],
+    }])) as Record<(typeof environmentKeys)[number], { present: boolean; value: string | undefined }>;
+    const manifest = {
+      operationId: 'enabled-route-operation',
+      operationKind: 'experience_generate' as const,
+      mode: 'generate' as const,
+      entryId: 'enabled-route-entry',
+      locale: 'de',
+      roleTitle: 'Technische Fachkraft',
+      company: 'Beispielbetrieb',
+      employmentState: 'present' as const,
+      dates: { start: { year: 2024, month: 1 }, end: null },
+      industry: 'engineering',
+      level: 'mid',
+      exactSourceText: '',
+      facts: [],
+      snapshotHash: 'enabled-route-snapshot',
+    };
+    const writerResponse = JSON.stringify({
+      operationId: manifest.operationId,
+      entryId: manifest.entryId,
+      snapshotHash: manifest.snapshotHash,
+      locale: manifest.locale,
+      bullets: [
+        'Unterstützt routinemäßige technische Aufgaben.',
+        'Dokumentiert ausgeführte Arbeitsschritte.',
+        'Stimmt laufende Aufgaben mit Kolleginnen und Kollegen ab.',
+      ],
+    });
+    const evaluatorResponse = JSON.stringify({
+      operationId: manifest.operationId,
+      entryId: manifest.entryId,
+      snapshotHash: manifest.snapshotHash,
+      locale: manifest.locale,
+      phases: {
+        semantic: { status: 'passed', violations: [] },
+        language_quality: { status: 'passed', violations: [] },
+      },
+    });
+    const messagesCreateSpy = vi.fn(async (params: {
+      system?: unknown;
+      max_tokens?: unknown;
+      temperature?: unknown;
+      messages?: readonly { content?: unknown }[];
+    }) => {
+      const system = String(params.system || '');
+      if (system.includes('single AI Core V3 Experience prose writer')) {
+        return { content: [{ type: 'text', text: writerResponse }] };
+      }
+      if (system.includes('independent non-writing CV validator')) {
+        return { content: [{ type: 'text', text: evaluatorResponse }] };
+      }
+      throw new Error('Unexpected Anthropic transport call in enabled route test');
+    });
+    let coreModule: typeof import('..') | null = null;
+
+    try {
+      process.env.AI_CORE_V3_ENABLED = 'true';
+      process.env.NEXT_PUBLIC_AI_CORE_V3_ENABLED = 'true';
+      process.env.ANTHROPIC_API_KEY = 'enabled-route-test-key';
+      delete process.env.ANTHROPIC_AUTH_TOKEN;
+      vi.resetModules();
+      vi.doMock('@anthropic-ai/sdk', () => {
+        class MockAnthropic {
+          readonly messages = { create: messagesCreateSpy };
+        }
+        return { default: MockAnthropic };
+      });
+      vi.doMock('@/lib/pro-token', () => ({
+        verifyProToken: vi.fn(async () => ({ subject: 'enabled-route-test' })),
+      }));
+
+      coreModule = await import('..');
+      const request = new Request('http://localhost/api/generate', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          action: coreModule.EXPERIENCE_V3_GENERATE_ACTION,
+          proToken: 'enabled-route-pro-token',
+          requestId: manifest.operationId,
+          manifest,
+        }),
+      });
+      const { POST } = await import('@/app/api/generate/route');
+      const response = await POST(request as Parameters<typeof POST>[0]);
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ ok: true, action: coreModule.EXPERIENCE_V3_GENERATE_ACTION });
+      expect(messagesCreateSpy).toHaveBeenCalledTimes(2);
+      const writerCall = messagesCreateSpy.mock.calls.find(([params]) =>
+        String(params.system || '').includes('single AI Core V3 Experience prose writer'))?.[0];
+      const evaluatorCall = messagesCreateSpy.mock.calls.find(([params]) =>
+        String(params.system || '').includes('independent non-writing CV validator'))?.[0];
+      expect(writerCall).toMatchObject({ max_tokens: 900, temperature: 0 });
+      expect(evaluatorCall).toMatchObject({ max_tokens: 1200, temperature: 0 });
+      expect(String(evaluatorCall?.messages?.[0]?.content)).toContain('Return one complete raw JSON object only. Begin with { and end with }.');
+      expect(String(evaluatorCall?.messages?.[0]?.content)).toContain('Do not use Markdown, code fences, commentary, explanations, headings, or reasoning.');
+    } finally {
+      coreModule?.resetAiCoreV3TestOverride();
+      vi.restoreAllMocks();
+      vi.doUnmock('@anthropic-ai/sdk');
+      vi.doUnmock('@/lib/pro-token');
+      vi.resetModules();
+      for (const key of environmentKeys) {
+        const original = originalEnvironment[key];
+        if (original.present) process.env[key] = original.value;
+        else delete process.env[key];
+      }
+    }
+  });
+
   it('has one V3 writer path and one evaluator path, both with provider retries disabled', () => {
     const branch = routeSource.slice(
       routeSource.indexOf('if (action === EXPERIENCE_V3_GENERATE_ACTION)'),

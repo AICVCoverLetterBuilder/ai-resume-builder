@@ -26,6 +26,7 @@ import {
   type ExperienceV3AdapterResult,
 } from '../experience-generate';
 import { executeExperienceV3GenerateServer } from '../experience-generate-server';
+import { M4_M2_EVALUATOR_MALFORMED_DEVICE_DIAGNOSTIC_FIXTURE } from '../fixtures/m4-m2-evaluator-malformed-device-diagnostic';
 
 const DEVICE_ROLE = 'Servicetechniker Elektrotechnik';
 const DEVICE_EMPLOYER = 'NordWerk Elektroservice Test';
@@ -139,7 +140,7 @@ function evaluatorJson(
   });
 }
 
-type RunMode = 'success' | 'writer_failure' | 'semantic_reject' | 'race_failure';
+type RunMode = 'success' | 'writer_failure' | 'evaluator_malformed' | 'semantic_reject' | 'race_failure';
 
 async function runDeviceFixture(mode: RunMode = 'success') {
   const input = makeDeviceInput();
@@ -161,6 +162,7 @@ async function runDeviceFixture(mode: RunMode = 'success') {
         },
         evaluate: async () => {
           evaluatorCalls += 1;
+          if (mode === 'evaluator_malformed') return '{"operationId":';
           return evaluatorJson(manifest, mode === 'semantic_reject' ? 'failed' : 'passed');
         },
       });
@@ -389,5 +391,38 @@ describe('M4 device-test-1 V3 Experience terminal diagnostics', () => {
       expect(rejected.diagnostic.applyAuthorized).toBe(false);
       expect(rejected.diagnostic.applyCommitted).toBe(false);
     }
+  });
+
+  it('21. records the immutable M4 malformed-evaluator fixture truthfully with no semantic evidence', async () => {
+    const fixture = M4_M2_EVALUATOR_MALFORMED_DEVICE_DIAGNOSTIC_FIXTURE;
+    expect(Object.isFrozen(fixture)).toBe(true);
+    expect(Object.isFrozen(fixture.phases)).toBe(true);
+    expect(fixture).toMatchObject({
+      routeHttpStatus: 502,
+      writer: { attempted: true, result: 'succeeded' },
+      evaluator: { attempted: true, result: 'malformed' },
+      phases: { structural: 'passed', semantic: 'not_evaluated', language_quality: 'not_evaluated' },
+      rejectionReasonCodes: ['evaluator_output_malformed'],
+      applyAuthorized: false,
+      usageDelta: 0,
+      v2FallthroughCount: 0,
+    });
+    const run = await runDeviceFixture('evaluator_malformed');
+    expect(run.result).toMatchObject({ kind: 'handled_failure', typedReason: 'evaluator_output_malformed' });
+    if (run.result.kind === 'handled_failure') {
+      expect(run.result.diagnostic).toMatchObject({
+        routeHttpStatus: fixture.routeHttpStatus,
+        writer: fixture.writer,
+        evaluator: fixture.evaluator,
+        phases: fixture.phases,
+        rejectionReasonCodes: fixture.rejectionReasonCodes,
+        applyAuthorized: fixture.applyAuthorized,
+        usageDelta: fixture.usageDelta,
+        v2FallthroughCount: fixture.v2FallthroughCount,
+      });
+      expect(assertExperienceAiDiagnosticHasNoCvText(run.result.diagnostic)).toEqual([]);
+    }
+    expect([run.writeCalls, run.persistCalls, run.usage]).toEqual([0, 0, 0]);
+    expect(routeLikePage(run.result)).toBe(0);
   });
 });
