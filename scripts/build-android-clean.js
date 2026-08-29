@@ -11,6 +11,12 @@
 const { execSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
+const {
+  applyAndroidInternalApiContract,
+} = require('./android-internal-api-contract');
+const {
+  enforceAndroidProductionApiBaseUrl,
+} = require('./android-production-api-contract');
 
 const repoRoot = path.resolve(__dirname, '..');
 const isWindows = process.platform === 'win32';
@@ -34,9 +40,9 @@ function removeIfExists(relPath) {
   }
 }
 
-function run(commandLine) {
+function run(commandLine, environment = process.env) {
   log(`running: ${commandLine}`);
-  execSync(commandLine, { cwd: repoRoot, stdio: 'inherit' });
+  execSync(commandLine, { cwd: repoRoot, stdio: 'inherit', env: environment });
 }
 
 function assertFile(relPath) {
@@ -77,15 +83,7 @@ function verifySyncedAppChunks() {
   log(`OK  synced Android assets contain ${jsFiles.length} JS files and _next/`);
 }
 
-function main() {
-  removeIfExists('.next');
-  removeIfExists('out');
-  removeIfExists(path.join('android', 'app', 'src', 'main', 'assets', 'public'));
-
-  run(isWindows ? 'node scripts/build-static.js' : 'node scripts/build-static.js');
-
-  assertFile('out/index.html');
-
+function verifyStaticFonts() {
   const { REQUIRED_PDF_FONT_FILES, MIN_FONT_BYTES } = require('./pdf-font-manifest');
   for (const fileName of REQUIRED_PDF_FONT_FILES) {
     const rel = path.join('out', 'fonts', fileName);
@@ -94,20 +92,61 @@ function main() {
     if (fs.statSync(full).size < MIN_FONT_BYTES) fail(`font too small in static export: ${rel}`);
     log(`OK  ${rel}`);
   }
-
-  run(isWindows ? 'npx.cmd cap sync android' : 'npx cap sync android');
-
-  assertFile('android/app/src/main/assets/public/index.html');
-  for (const fileName of REQUIRED_PDF_FONT_FILES) {
-    const rel = path.join('android', 'app', 'src', 'main', 'assets', 'public', 'fonts', fileName);
-    assertFile(rel);
-  }
-  assertCapacitorConfigNoServerUrl('android/app/src/main/assets/capacitor.config.json');
-  verifySyncedAppChunks();
-
-  run(isWindows ? 'node scripts/verify-android-release-assets.js' : 'node scripts/verify-android-release-assets.js');
-
-  log('done — production static export synced and verified for Android release startup.');
+  return REQUIRED_PDF_FONT_FILES;
 }
 
-main();
+function runAndroidCleanBuild(options = {}) {
+  const environment = options.environment === undefined ? process.env : { ...options.environment };
+  const dependencies = {
+    removeIfExists,
+    run,
+    assertFile,
+    assertCapacitorConfigNoServerUrl,
+    verifySyncedAppChunks,
+    verifyStaticFonts,
+    ...options.dependencies,
+  };
+  const apiContract = applyAndroidInternalApiContract(environment);
+  if (apiContract.mode === 'production') enforceAndroidProductionApiBaseUrl(environment);
+  const commands = [];
+  const runChild = (commandLine) => {
+    commands.push(commandLine);
+    dependencies.run(commandLine, environment);
+  };
+
+  dependencies.removeIfExists('.next');
+  dependencies.removeIfExists('out');
+  dependencies.removeIfExists(path.join('android', 'app', 'src', 'main', 'assets', 'public'));
+
+  const staticCommand = apiContract.mode === 'preview'
+    ? 'node scripts/build-static-internal.js'
+    : 'node scripts/build-static.js';
+  runChild(staticCommand);
+
+  dependencies.assertFile('out/index.html');
+
+  const requiredPdfFontFiles = dependencies.verifyStaticFonts();
+
+  runChild(isWindows ? 'npx.cmd cap sync android' : 'npx cap sync android');
+
+  dependencies.assertFile('android/app/src/main/assets/public/index.html');
+  for (const fileName of requiredPdfFontFiles) {
+    const rel = path.join('android', 'app', 'src', 'main', 'assets', 'public', 'fonts', fileName);
+    dependencies.assertFile(rel);
+  }
+  dependencies.assertCapacitorConfigNoServerUrl('android/app/src/main/assets/capacitor.config.json');
+  dependencies.verifySyncedAppChunks();
+
+  runChild('node scripts/verify-android-release-assets.js');
+
+  log(`done — ${apiContract.mode} static export synced and verified for Android release startup.`);
+  return Object.freeze({ ...apiContract, environment, commands });
+}
+
+if (require.main === module) {
+  runAndroidCleanBuild();
+}
+
+module.exports = {
+  runAndroidCleanBuild,
+};

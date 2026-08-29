@@ -26,6 +26,85 @@ const COMMERCIAL_STATE = Object.freeze({
   apiHost: 'https://ai-resume-builder-six-gamma.vercel.app',
 });
 
+class AndroidCommercialStateContractError extends Error {
+  constructor(label, expected, actual) {
+    super(`COMMERCIAL_STATE_MISMATCH ${label} expected=${expected} actual=${actual || 'missing'}`);
+    this.name = 'AndroidCommercialStateContractError';
+    this.code = 'commercial_state_mismatch';
+    this.label = label;
+  }
+}
+
+const approvedCommercialStates = new WeakSet([COMMERCIAL_STATE]);
+
+function commercialMismatch(label, expected, actual) {
+  throw new AndroidCommercialStateContractError(label, expected, actual);
+}
+
+function deepFreeze(value) {
+  if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value;
+  for (const nested of Object.values(value)) deepFreeze(nested);
+  return Object.freeze(value);
+}
+
+function resolveExpectedAndroidCommercialState(apiContract) {
+  if (!apiContract || typeof apiContract !== 'object' || Array.isArray(apiContract)) {
+    commercialMismatch('apiContract', 'resolved_object', typeof apiContract);
+  }
+  if (!Object.isFrozen(apiContract)) {
+    commercialMismatch('apiContract.mutability', 'frozen_resolved_contract', 'mutable');
+  }
+  const keys = Object.keys(apiContract).sort();
+  const expectedKeys = ['apiBaseUrl', 'hostClass', 'mode'];
+  if (keys.length !== expectedKeys.length || keys.some((key, index) => key !== expectedKeys[index])) {
+    commercialMismatch('apiContract.shape', expectedKeys.join(','), keys.join(','));
+  }
+
+  const { mode, apiBaseUrl, hostClass } = apiContract;
+  if (mode === 'production') {
+    if (hostClass !== 'production') {
+      commercialMismatch('apiContract.hostClass', 'production', hostClass);
+    }
+    if (apiBaseUrl !== COMMERCIAL_STATE.apiHost) {
+      commercialMismatch('apiContract.apiBaseUrl', COMMERCIAL_STATE.apiHost, apiBaseUrl);
+    }
+    return COMMERCIAL_STATE;
+  }
+  if (mode !== 'preview') {
+    commercialMismatch('apiContract.mode', 'production|preview', mode);
+  }
+  if (hostClass !== 'vercel_preview') {
+    commercialMismatch('apiContract.hostClass', 'vercel_preview', hostClass);
+  }
+  if (typeof apiBaseUrl !== 'string' || !apiBaseUrl) {
+    commercialMismatch('apiContract.apiBaseUrl', 'canonical_https_vercel_preview_origin', apiBaseUrl);
+  }
+
+  let parsed;
+  try {
+    parsed = new URL(apiBaseUrl);
+  } catch {
+    commercialMismatch('apiContract.apiBaseUrl', 'canonical_https_vercel_preview_origin', apiBaseUrl);
+  }
+  if (parsed.protocol !== 'https:'
+    || parsed.origin !== apiBaseUrl
+    || !parsed.hostname.endsWith('.vercel.app')
+    || apiBaseUrl === COMMERCIAL_STATE.apiHost) {
+    commercialMismatch('apiContract.apiBaseUrl', 'canonical_https_vercel_preview_origin', apiBaseUrl);
+  }
+
+  const expectedState = deepFreeze({ ...COMMERCIAL_STATE, apiHost: apiBaseUrl });
+  approvedCommercialStates.add(expectedState);
+  return expectedState;
+}
+
+function requireApprovedCommercialState(expectedState) {
+  if (!expectedState || typeof expectedState !== 'object' || !approvedCommercialStates.has(expectedState)) {
+    commercialMismatch('expectedState', 'approved_commercial_projection', 'unapproved');
+  }
+  return expectedState;
+}
+
 const AUTHORITATIVE_KEY_ENV = 'CVPRO_ANDROID_REVENUECAT_PUBLIC_KEY';
 const PUBLIC_KEY_ENV = 'NEXT_PUBLIC_REVENUECAT_ANDROID_API_KEY';
 
@@ -70,7 +149,7 @@ function establishAndroidPackagingEnvironment(env) {
 
 function requireExact(value, expected, label) {
   if (value !== expected) {
-    throw new Error(`COMMERCIAL_STATE_MISMATCH ${label} expected=${expected} actual=${value || 'missing'}`);
+    commercialMismatch(label, expected, value);
   }
 }
 
@@ -109,21 +188,25 @@ function validateCheckedInCommercialState(root) {
   }
 }
 
-function buildManifest({ apiHost, signingCertificateFingerprint = COMMERCIAL_STATE.releaseSigningCertificateFingerprint, keyFingerprint }) {
-  requireExact(apiHost, COMMERCIAL_STATE.apiHost, 'apiHost');
-  requireExact(signingCertificateFingerprint, COMMERCIAL_STATE.releaseSigningCertificateFingerprint, 'releaseSigningCertificateFingerprint');
-  requireExact(keyFingerprint, COMMERCIAL_STATE.revenueCatAndroidKeyFingerprint, 'revenueCatAndroidKeyFingerprint');
+function buildManifest({ apiHost, signingCertificateFingerprint, keyFingerprint }, expectedState = COMMERCIAL_STATE) {
+  const expected = requireApprovedCommercialState(expectedState);
+  const expectedSigningFingerprint = signingCertificateFingerprint === undefined
+    ? expected.releaseSigningCertificateFingerprint
+    : signingCertificateFingerprint;
+  requireExact(apiHost, expected.apiHost, 'apiHost');
+  requireExact(expectedSigningFingerprint, expected.releaseSigningCertificateFingerprint, 'releaseSigningCertificateFingerprint');
+  requireExact(keyFingerprint, expected.revenueCatAndroidKeyFingerprint, 'revenueCatAndroidKeyFingerprint');
   return {
     schemaVersion: 1,
     revenueCatAndroidKey: { present: true, prefix: 'goog_', fingerprint: keyFingerprint },
-    applicationId: COMMERCIAL_STATE.applicationId,
-    entitlementId: COMMERCIAL_STATE.entitlementId,
-    productId: COMMERCIAL_STATE.productId,
-    offeringId: COMMERCIAL_STATE.offeringId,
-    packageId: COMMERCIAL_STATE.packageId,
-    revenueCatPlugin: `${COMMERCIAL_STATE.revenueCatPlugin}@${COMMERCIAL_STATE.revenueCatPluginVersion}`,
-    revenueCatNativeDependency: COMMERCIAL_STATE.revenueCatNativeDependency,
-    releaseSigningCertificateFingerprint: signingCertificateFingerprint,
+    applicationId: expected.applicationId,
+    entitlementId: expected.entitlementId,
+    productId: expected.productId,
+    offeringId: expected.offeringId,
+    packageId: expected.packageId,
+    revenueCatPlugin: `${expected.revenueCatPlugin}@${expected.revenueCatPluginVersion}`,
+    revenueCatNativeDependency: expected.revenueCatNativeDependency,
+    releaseSigningCertificateFingerprint: expectedSigningFingerprint,
     apiHost,
     capacitorServerUrl: null,
   };
@@ -133,20 +216,21 @@ function writeManifest(outputDirectory, manifest) {
   fs.writeFileSync(path.join(outputDirectory, 'android-commercial-state.json'), `${JSON.stringify(manifest, null, 2)}\n`);
 }
 
-function assertManifest(manifest) {
-  requireExact(manifest?.revenueCatAndroidKey?.fingerprint, COMMERCIAL_STATE.revenueCatAndroidKeyFingerprint, 'manifest.revenueCatAndroidKeyFingerprint');
+function assertManifest(manifest, expectedState = COMMERCIAL_STATE) {
+  const expected = requireApprovedCommercialState(expectedState);
+  requireExact(manifest?.revenueCatAndroidKey?.fingerprint, expected.revenueCatAndroidKeyFingerprint, 'manifest.revenueCatAndroidKeyFingerprint');
   requireExact(manifest?.revenueCatAndroidKey?.prefix, 'goog_', 'manifest.revenueCatAndroidKeyPrefix');
-  requireExact(manifest?.applicationId, COMMERCIAL_STATE.applicationId, 'manifest.applicationId');
-  requireExact(manifest?.entitlementId, COMMERCIAL_STATE.entitlementId, 'manifest.entitlementId');
-  requireExact(manifest?.productId, COMMERCIAL_STATE.productId, 'manifest.productId');
-  requireExact(manifest?.offeringId, COMMERCIAL_STATE.offeringId, 'manifest.offeringId');
-  requireExact(manifest?.packageId, COMMERCIAL_STATE.packageId, 'manifest.packageId');
-  requireExact(manifest?.revenueCatPlugin, `${COMMERCIAL_STATE.revenueCatPlugin}@${COMMERCIAL_STATE.revenueCatPluginVersion}`, 'manifest.revenueCatPlugin');
-  requireExact(manifest?.revenueCatNativeDependency, COMMERCIAL_STATE.revenueCatNativeDependency, 'manifest.revenueCatNativeDependency');
-  requireExact(manifest?.releaseSigningCertificateFingerprint, COMMERCIAL_STATE.releaseSigningCertificateFingerprint, 'manifest.releaseSigningCertificateFingerprint');
-  requireExact(manifest?.apiHost, COMMERCIAL_STATE.apiHost, 'manifest.apiHost');
+  requireExact(manifest?.applicationId, expected.applicationId, 'manifest.applicationId');
+  requireExact(manifest?.entitlementId, expected.entitlementId, 'manifest.entitlementId');
+  requireExact(manifest?.productId, expected.productId, 'manifest.productId');
+  requireExact(manifest?.offeringId, expected.offeringId, 'manifest.offeringId');
+  requireExact(manifest?.packageId, expected.packageId, 'manifest.packageId');
+  requireExact(manifest?.revenueCatPlugin, `${expected.revenueCatPlugin}@${expected.revenueCatPluginVersion}`, 'manifest.revenueCatPlugin');
+  requireExact(manifest?.revenueCatNativeDependency, expected.revenueCatNativeDependency, 'manifest.revenueCatNativeDependency');
+  requireExact(manifest?.releaseSigningCertificateFingerprint, expected.releaseSigningCertificateFingerprint, 'manifest.releaseSigningCertificateFingerprint');
+  requireExact(manifest?.apiHost, expected.apiHost, 'manifest.apiHost');
   if (manifest?.capacitorServerUrl !== null) {
-    throw new Error('COMMERCIAL_STATE_MISMATCH manifest.capacitorServerUrl expected=absent actual=set');
+    commercialMismatch('manifest.capacitorServerUrl', 'absent', manifest?.capacitorServerUrl);
   }
 }
 
@@ -154,6 +238,8 @@ module.exports = {
   AUTHORITATIVE_KEY_ENV,
   PUBLIC_KEY_ENV,
   COMMERCIAL_STATE,
+  AndroidCommercialStateContractError,
+  resolveExpectedAndroidCommercialState,
   safeFingerprint,
   resolveAndroidRevenueCatKey,
   establishAndroidPackagingEnvironment,

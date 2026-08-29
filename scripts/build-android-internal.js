@@ -20,6 +20,7 @@ const {
   establishAndroidPackagingEnvironment,
   validateCheckedInCommercialState,
   assertManifest,
+  resolveExpectedAndroidCommercialState,
 } = require('./android-commercial-state-contract');
 
 const root = path.resolve(__dirname, '..');
@@ -76,6 +77,7 @@ function runAndroidInternalBuild(options = {}) {
     runFile,
     treeContainsExactValue,
     ...options.dependencies,
+    resolveExpectedAndroidCommercialState,
   };
   const usesProcessEnvironment = options.environment === undefined;
   if (usesProcessEnvironment) dependencies.loadEnvConfig(root);
@@ -92,6 +94,10 @@ function runAndroidInternalBuild(options = {}) {
   }
   if (apiContract.mode === 'production' && !usesProcessEnvironment) {
     enforceAndroidProductionApiBaseUrl(childEnvironment);
+  }
+  const expectedCommercialState = dependencies.resolveExpectedAndroidCommercialState(apiContract);
+  if (childEnvironment.NEXT_PUBLIC_API_BASE_URL !== expectedCommercialState.apiHost) {
+    throw new Error('COMMERCIAL_STATE_MISMATCH childEnvironment.apiHost');
   }
 
   dependencies.establishAndroidPackagingEnvironment(childEnvironment);
@@ -129,10 +135,12 @@ function runAndroidInternalBuild(options = {}) {
   if (!dependencies.fs.existsSync(commercialManifestPath)) {
     fail('missing copied Android commercial state manifest');
   }
+  let syncedCommercialManifest;
   try {
-    dependencies.assertManifest(JSON.parse(
+    syncedCommercialManifest = JSON.parse(
       dependencies.fs.readFileSync(commercialManifestPath, 'utf8'),
-    ));
+    );
+    dependencies.assertManifest(syncedCommercialManifest, expectedCommercialState);
   } catch (error) {
     fail(error instanceof Error ? error.message : String(error));
   }
@@ -155,6 +163,8 @@ function runAndroidInternalBuild(options = {}) {
   return Object.freeze({
     ...apiContract,
     childEnvironment,
+    expectedCommercialState,
+    syncedCommercialManifest,
   });
 }
 

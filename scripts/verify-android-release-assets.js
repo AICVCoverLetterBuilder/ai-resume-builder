@@ -13,7 +13,14 @@ const {
   safeFingerprint,
   validateCheckedInCommercialState,
   assertManifest,
+  resolveExpectedAndroidCommercialState,
 } = require('./android-commercial-state-contract');
+const {
+  applyAndroidInternalApiContract,
+} = require('./android-internal-api-contract');
+const {
+  enforceAndroidProductionApiBaseUrl,
+} = require('./android-production-api-contract');
 
 const repoRoot = path.resolve(__dirname, '..');
 
@@ -110,10 +117,10 @@ function assertRevenueCatKey(dir, label) {
   console.log(`[verify:android:release] ${label} RevenueCat Android key fingerprint OK (${fingerprint})`);
 }
 
-function assertCommercialManifest(fullPath, label) {
+function readCommercialManifest(fullPath, label) {
   if (!fs.existsSync(fullPath)) fail(`${label} commercial state manifest is missing`);
   try {
-    assertManifest(JSON.parse(fs.readFileSync(fullPath, 'utf8')));
+    return JSON.parse(fs.readFileSync(fullPath, 'utf8'));
   } catch (error) {
     fail(error instanceof Error ? error.message : String(error));
   }
@@ -142,8 +149,14 @@ function verifySyncedAssets() {
   assertSensitiveDataBackupDisabled();
 
   const publicDir = path.join(repoRoot, 'android', 'app', 'src', 'main', 'assets', 'public');
-  assertCommercialManifest(path.join(repoRoot, 'out', 'android-commercial-state.json'), 'static export');
-  assertCommercialManifest(path.join(publicDir, 'android-commercial-state.json'), 'synced Android assets');
+  const staticManifest = readCommercialManifest(
+    path.join(repoRoot, 'out', 'android-commercial-state.json'),
+    'static export',
+  );
+  const syncedManifest = readCommercialManifest(
+    path.join(publicDir, 'android-commercial-state.json'),
+    'synced Android assets',
+  );
   assertRevenueCatKey(publicDir, 'synced Android assets');
   const jsFiles = collectJsFiles(publicDir);
   if (jsFiles.length === 0) {
@@ -155,10 +168,7 @@ function verifySyncedAssets() {
     fail('android/app/src/main/assets/public/_next is missing');
   }
 
-  console.log('[verify:android:release] synced assets OK');
-  console.log(`  webDir: ${rootConfig.webDir}`);
-  console.log(`  server.url: (not set)`);
-  console.log(`  android JS bundles: ${jsFiles.length} files`);
+  return { staticManifest, syncedManifest, webDir: rootConfig.webDir, jsFileCount: jsFiles.length };
 }
 
 function verifyAab(aabPath) {
@@ -167,6 +177,7 @@ function verifyAab(aabPath) {
 
   const isWindows = process.platform === 'win32';
   let listing;
+  let extractedManifest;
   try {
     listing = execSync(`jar tf "${full}"`, { encoding: 'utf8', shell: isWindows });
   } catch (err) {
@@ -212,7 +223,10 @@ function verifyAab(aabPath) {
     );
     assertNoDevServerUrl(bundledConfig, 'AAB bundled capacitor.config.json');
     const aabPublicDir = path.join(extractDir, 'base', 'assets', 'public');
-    assertCommercialManifest(path.join(aabPublicDir, 'android-commercial-state.json'), 'AAB bundled');
+    extractedManifest = readCommercialManifest(
+      path.join(aabPublicDir, 'android-commercial-state.json'),
+      'AAB bundled',
+    );
     assertRevenueCatKey(aabPublicDir, 'AAB bundled');
     let certificate;
     try {
@@ -232,16 +246,60 @@ function verifyAab(aabPath) {
     fs.rmSync(extractDir, { recursive: true, force: true });
   }
 
-  console.log('[verify:android:release] AAB assets OK');
-  console.log(`  ${full}`);
-  console.log('  base/assets/public/index.html: present');
-  console.log('  base/assets/public/_next/: present');
+  return { extractedManifest, fullPath: full };
 }
 
-function main() {
-  verifySyncedAssets();
-  const aabArg = process.argv.find((arg) => arg.startsWith('--aab='));
-  if (aabArg) verifyAab(aabArg.slice('--aab='.length));
+function runVerifyAndroidReleaseAssets(options = {}) {
+  const environment = options.environment === undefined ? process.env : { ...options.environment };
+  const dependencies = {
+    verifySyncedAssets,
+    verifyAab,
+    ...options.dependencies,
+    assertManifest,
+    resolveExpectedAndroidCommercialState,
+  };
+  const apiContract = applyAndroidInternalApiContract(environment);
+  if (apiContract.mode === 'production') enforceAndroidProductionApiBaseUrl(environment);
+  const expectedCommercialState = dependencies.resolveExpectedAndroidCommercialState(apiContract);
+  if (environment.NEXT_PUBLIC_API_BASE_URL !== expectedCommercialState.apiHost) {
+    throw new Error('COMMERCIAL_STATE_MISMATCH verifierEnvironment.apiHost');
+  }
+
+  const synced = dependencies.verifySyncedAssets();
+  dependencies.assertManifest(synced.staticManifest, expectedCommercialState);
+  dependencies.assertManifest(synced.syncedManifest, expectedCommercialState);
+  console.log('[verify:android:release] synced assets OK');
+  if (synced.webDir) console.log(`  webDir: ${synced.webDir}`);
+  console.log('  server.url: (not set)');
+  if (synced.jsFileCount !== undefined) {
+    console.log(`  android JS bundles: ${synced.jsFileCount} files`);
+  }
+
+  const aabPath = options.aabPath
+    || process.argv.find((arg) => arg.startsWith('--aab='))?.slice('--aab='.length);
+  let aab = null;
+  if (aabPath) {
+    aab = dependencies.verifyAab(aabPath);
+    dependencies.assertManifest(aab.extractedManifest, expectedCommercialState);
+    console.log('[verify:android:release] AAB assets OK');
+    if (aab.fullPath) console.log(`  ${aab.fullPath}`);
+    console.log('  base/assets/public/index.html: present');
+    console.log('  base/assets/public/_next/: present');
+  }
+  return Object.freeze({
+    ...apiContract,
+    environment,
+    expectedCommercialState,
+    staticManifest: synced.staticManifest,
+    syncedManifest: synced.syncedManifest,
+    extractedAabManifest: aab?.extractedManifest || null,
+  });
 }
 
-main();
+if (require.main === module) {
+  runVerifyAndroidReleaseAssets();
+}
+
+module.exports = {
+  runVerifyAndroidReleaseAssets,
+};

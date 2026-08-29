@@ -21,6 +21,8 @@ const {
   validateCheckedInCommercialState,
   buildManifest,
   writeManifest,
+  assertManifest,
+  resolveExpectedAndroidCommercialState,
 } = require('./android-commercial-state-contract');
 
 const repoRoot = path.resolve(__dirname, '..');
@@ -57,10 +59,12 @@ function runStaticInternalBuild(options = {}) {
     loadEnvConfig,
     establishAndroidPackagingEnvironment,
     validateCheckedInCommercialState,
-    buildManifest,
     writeManifest,
     treeContainsExactValue,
     ...options.dependencies,
+    buildManifest,
+    assertManifest,
+    resolveExpectedAndroidCommercialState,
   };
   const usesProcessEnvironment = options.environment === undefined;
   if (usesProcessEnvironment) dependencies.loadEnvConfig(repoRoot);
@@ -78,8 +82,12 @@ function runStaticInternalBuild(options = {}) {
   if (apiContract.mode === 'production' && !usesProcessEnvironment) {
     enforceAndroidProductionApiBaseUrl(childEnvironment);
   }
+  const expectedCommercialState = dependencies.resolveExpectedAndroidCommercialState(apiContract);
+  if (childEnvironment.NEXT_PUBLIC_API_BASE_URL !== expectedCommercialState.apiHost) {
+    throw new Error('COMMERCIAL_STATE_MISMATCH childEnvironment.apiHost');
+  }
 
-  const commercialKey = dependencies.establishAndroidPackagingEnvironment(childEnvironment);
+  dependencies.establishAndroidPackagingEnvironment(childEnvironment);
   dependencies.validateCheckedInCommercialState(repoRoot);
   const revenueCatAndroidKey = requiredEnv('NEXT_PUBLIC_REVENUECAT_ANDROID_API_KEY');
   const apiBaseUrl = requiredEnv('NEXT_PUBLIC_API_BASE_URL');
@@ -102,10 +110,12 @@ function runStaticInternalBuild(options = {}) {
     stdio: 'inherit',
     env: childEnvironment,
   });
-  dependencies.writeManifest(outDir, dependencies.buildManifest({
+  const commercialManifest = dependencies.buildManifest({
     apiHost: apiBaseUrl,
-    keyFingerprint: commercialKey.fingerprint,
-  }));
+    keyFingerprint: expectedCommercialState.revenueCatAndroidKeyFingerprint,
+  }, expectedCommercialState);
+  dependencies.writeManifest(outDir, commercialManifest);
+  dependencies.assertManifest(commercialManifest, expectedCommercialState);
   dependencies.execFileSync(process.execPath, [verify, '--dir', 'out', '--expect', 'enabled'], {
     cwd: repoRoot,
     stdio: 'inherit',
@@ -120,6 +130,8 @@ function runStaticInternalBuild(options = {}) {
   return Object.freeze({
     ...apiContract,
     childEnvironment,
+    expectedCommercialState,
+    commercialManifest,
   });
 }
 
