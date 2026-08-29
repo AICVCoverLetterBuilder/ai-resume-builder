@@ -1,5 +1,6 @@
 import type { NextConfig } from "next";
 import { execSync } from "node:child_process";
+import { resolve } from "node:path";
 
 /**
  * Compile the internal AI reset gate into a single NEXT_PUBLIC_* value that
@@ -73,6 +74,27 @@ const nextConfig: NextConfig = {
         hostname: '**.revenuecat.com',
       },
     ],
+  },
+  webpack: (config, { isServer }) => {
+    // These two browser artifacts retain upstream build-machine references:
+    // Yoga's import.meta.url override and PDFKit's PDF/A profile directory.
+    // The scoped loader canonicalizes only those values, preserving Yoga's
+    // document.currentScript fallback and avoiding source-host metadata in
+    // emitted browser assets.
+    if (!isServer) {
+      config.module.rules.push({
+        test: /[\\/]node_modules[\\/](?:yoga-layout[\\/]dist[\\/]binaries[\\/]yoga-wasm-base64-esm|@react-pdf[\\/]pdfkit[\\/]lib[\\/]pdfkit\.browser)\.js$/,
+        use: [
+          {
+            loader: resolve(
+              process.cwd(),
+              'scripts/webpack-third-party-local-path-loader.cjs',
+            ),
+          },
+        ],
+      });
+    }
+    return config;
   },
 } satisfies NextConfig;
 
