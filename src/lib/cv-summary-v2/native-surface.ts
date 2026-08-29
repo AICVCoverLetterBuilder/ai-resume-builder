@@ -33,6 +33,10 @@ export const SUMMARY_V2_SPANISH_PERSPECTIVE_NATIVE_SURFACE_391_REVISION =
 export const SUMMARY_V2_SPANISH_SLOT_WIDE_PERSON_393_REVISION =
   'summary-v2-spanish-slot-wide-person-393-v1' as const;
 
+/** Hindi Summary first-person agreement is validated at every V2 candidate gate. */
+export const SUMMARY_V2_HINDI_FIRST_PERSON_AGREEMENT_427_REVISION =
+  'summary-v2-hindi-first-person-agreement-427-v1' as const;
+
 export type SummaryV2NativeSurfaceResult = {
   nativeSurfaceValidationPassed: boolean;
   capitalizationValidationPassed: boolean;
@@ -62,7 +66,30 @@ export type SummaryV2NativeSurfaceResult = {
   predicateChainRejectionReasons: string[];
   sourcePredicateChainHash: string;
   finalPredicateChainHash: string;
+  frenchGrammarValidationPassed?: boolean;
+  frenchGrammarRejectionReason?: string | null;
+  frenchTokenBoundaryValidationPassed?: boolean;
+  frenchClauseCasingValidationPassed?: boolean;
 };
+
+export type HindiSummarySentenceAgreementRecord = {
+  sentenceIndex: number;
+  clauseIndex: number;
+  employmentState: 'present' | 'completed' | 'unknown';
+  perspectiveMode: 'first_person' | 'neutral_or_unspecified';
+  genderMode: SummaryV2GenderMode;
+  finiteVerbOrAuxiliaryDetected: boolean;
+  agreementMode: 'first_person_habitual' | 'first_person_perfective' | 'neutral' | 'unknown';
+  aspect: 'present_habitual' | 'past_habitual' | 'perfective' | 'mixed' | 'unknown';
+  grammarPassed: boolean;
+  grammarReasons: string[];
+};
+
+const ARABIC_DIACRITICS_RE = /[\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06ED]/gu;
+
+function stripArabicDiacritics(value: string): string {
+  return (value || '').replace(ARABIC_DIACRITICS_RE, '');
+}
 
 function capitalizeFirstLetter(text: string): string {
   return (text || '').replace(/^\p{L}/u, (c) => c.toLocaleUpperCase());
@@ -607,21 +634,142 @@ const LOCALE_FINITE_CUE_RE: Record<string, RegExp> = {
 const SUBORDINATE_OPENER_RE =
   /^(?:where|wo|donde|où|dove|onde|gd(?:j)?e|где|حيث|जहाँ|jahan)\b/iu;
 
+const HINDI_FIRST_PERSON_RE = /(?:^|[^\p{L}])मैं(?:ने)?(?=[^\p{L}]|$)/u;
+const HINDI_PRIOR_MARKER_RE = /इससे\s+(?:पहले|पूर्व)|पहले\s+मैं/u;
+const HINDI_HABITUAL_AUX_RE = /([\p{Script=Devanagari}\p{M}]+(?:ती|ता))\s+(हूँ|हूं|हैं|है|थीं|थे|थी|था)/gu;
+const HINDI_PERFECTIVE_TAIL_RE = /(?:[\p{Script=Devanagari}\p{M}]+(?:या|यी|ाई|ए|ीं)|की)(?=\s*(?:[,।.!?]|और|तथा|$))/u;
+
+/**
+ * Brazilian Portuguese `exercer` takes a role through an explicit nominal
+ * complement (`exercer a função de ...`), not the bare `exercer como ...`
+ * shell emitted by the old Professional rewrite.  Keep this structural and
+ * title-agnostic so every occupation and free-text role is covered.
+ */
+export function detectPortugueseBrazilRoleIntroValencyDefect(text: string): boolean {
+  return /(?:^|[^\p{L}])(?:exerço|exerci|exerce|exerceu)\s+como\s+(?=\p{L})/iu.test(
+    (text || '').replace(/\s+/g, ' ').trim(),
+  );
+}
+
+/**
+ * Privacy-safe Hindi clause grammar audit. It keys on subject, auxiliary and
+ * inflection morphology only: no role, employer, duty vocabulary or text is
+ * retained in the returned records.
+ */
+export function analyzeHindiSummaryFirstPersonAgreement(options: {
+  text: string;
+  gender?: string | null;
+  perspectiveMode?: SummaryV2PerspectiveContract;
+}): HindiSummarySentenceAgreementRecord[] {
+  const mode = resolveSummaryV2GenderMode(options.gender);
+  const perspective = options.perspectiveMode ?? 'first_person';
+  return splitNativeSentences(options.text).flatMap((sentence, sentenceIndex) => {
+    const firstPerson = perspective === 'first_person' && HINDI_FIRST_PERSON_RE.test(sentence);
+    const employmentState = HINDI_PRIOR_MARKER_RE.test(sentence)
+      ? 'completed'
+      : (firstPerson ? 'present' : 'unknown');
+    const habituals = [...sentence.matchAll(HINDI_HABITUAL_AUX_RE)];
+    const hasPerfective = HINDI_PERFECTIVE_TAIL_RE.test(sentence);
+    const hasErgative = /(?:^|[^\p{L}])मैंने(?=[^\p{L}]|$)/u.test(sentence);
+    const finiteClauses = habituals.length > 0 ? habituals : [null];
+    return finiteClauses.map((match, clauseIndex) => {
+      const reasons: string[] = [];
+      if (firstPerson && match) {
+        const form = match[1] || '';
+        const auxiliary = match[2] || '';
+        const feminine = /ती$/u.test(form);
+        if ((mode === 'female' && !feminine) || (mode === 'male' && feminine)) {
+          reasons.push('hindi_first_person_gender_agreement_invalid');
+        }
+        const expected = employmentState === 'completed'
+          ? (mode === 'female' ? 'थी' : mode === 'male' ? 'था' : '')
+          : 'हूँ';
+        const normalizedAuxiliary = auxiliary === 'हूं' ? 'हूँ' : auxiliary;
+        if (expected && normalizedAuxiliary !== expected) {
+          reasons.push(employmentState === 'completed'
+            ? 'hindi_first_person_completed_auxiliary_invalid'
+            : 'hindi_first_person_present_auxiliary_invalid');
+        }
+      }
+      if (firstPerson && hasPerfective && !hasErgative) {
+        reasons.push('hindi_first_person_perfective_ergative_missing');
+      }
+      if (firstPerson && hasPerfective && habituals.length > 0) {
+        reasons.push('hindi_first_person_mixed_aspect_coordination');
+      }
+
+      const aspect = hasPerfective && habituals.length > 0
+        ? 'mixed'
+        : hasPerfective
+          ? 'perfective'
+          : habituals.length > 0
+            ? (employmentState === 'completed' ? 'past_habitual' : 'present_habitual')
+            : 'unknown';
+      return {
+        sentenceIndex,
+        clauseIndex,
+        employmentState,
+        perspectiveMode: firstPerson ? 'first_person' : 'neutral_or_unspecified',
+        genderMode: mode,
+        finiteVerbOrAuxiliaryDetected: Boolean(match) || /(?:हूँ|हूं|है|हैं|था|थी|थीं|थे)/u.test(sentence),
+        agreementMode: firstPerson
+          ? (hasPerfective ? 'first_person_perfective' : habituals.length ? 'first_person_habitual' : 'unknown')
+          : 'neutral',
+        aspect,
+        grammarPassed: reasons.length === 0,
+        grammarReasons: [...new Set(reasons)],
+      };
+    });
+  });
+}
+
 /**
  * Third-person duty forms that must never appear inside a first-person Summary.
  * Arabic: a duty verb after حيث / كما must be 1sg (أ… present, …ت past).
  */
 function detectThirdPersonDutyClause(text: string, locale: Locale): boolean {
   if (locale === 'ar') {
-    const re = /(?:حيث|كما|و)\s+([\u0600-\u06FF\u0651]+)/gu;
+    const dutyClauses = [...text.matchAll(/(?:حيث|كما)\s+([^.!؟]+)/gu)];
+    for (const match of dutyClauses) {
+      const clause = match[1];
+      const beforeClause = text.slice(0, match.index ?? 0).split(/[.!؟]/u).pop() || '';
+      const completedClause = /(?:سابق(?:اً|ا)|عملت|كنت)/u.test(beforeClause);
+      // Arabic waw is attached both as a conjunction and as the first letter
+      // of ordinary words (وثائق, وموقع). Commas delimit the independent duty
+      // heads here; coordinated present/feminine/geminated heads are already
+      // normalized by arabicFirstPersonPredicateChain.
+      const predicates = clause.split(/،/u);
+      for (const predicate of predicates) {
+        const predicateBody = predicate.replace(/^\s*كما\s+/u, '');
+        const verb = /^\s*([\p{Script=Arabic}\p{M}]+)/u.exec(predicateBody)?.[1] || '';
+        if (!verb) continue;
+        const plain = stripArabicDiacritics(verb);
+        // Attached waw in ordinary prepositional phrases (for example وفق
+        // "according to") is not a coordinated finite predicate.
+        if (completedClause && /^(?:فق|مع|بين|ضمن|حول|عبر|داخل|خارج|دون|لدى)$/u.test(plain)) {
+          continue;
+        }
+        if (/^كانت$/u.test(plain)) return true;
+        const firstPerson = completedClause
+          ? /ت$/u.test(plain)
+          : /^[أإآا]/u.test(plain) || /^كنت$/u.test(plain);
+        const thirdPersonFinite = completedClause
+          ? !/^ال/u.test(plain) && !firstPerson
+          : /^[يتن]/u.test(plain);
+        if (thirdPersonFinite && !firstPerson) return true;
+      }
+    }
+    // Provider prose may use a role-intro comma without حيث; validate the
+    // immediately following finite predicate without scanning unrelated duration coordination.
+    const re = /،\s*([\p{Script=Arabic}\p{M}]+)/gu;
     let m: RegExpExecArray | null = re.exec(text);
     while (m) {
       const verb = m[1];
-      const firstPerson = /^[أانن]/u.test(verb) || /ت$/u.test(verb) || /تُ$/u.test(verb);
-      const looksVerbal = verb.length >= 3 && !/^(?:ال|في|من|على|عن|إلى)/u.test(verb);
-      if (looksVerbal && !firstPerson && /^(?:راجع|أعد|ضبط|فحص|سجل|نفذ|قام|كتب|حدث|نسق)/u.test(verb)) {
-        return true;
-      }
+      const plain = stripArabicDiacritics(verb);
+      if (/^كانت$/u.test(plain)) return true;
+      const firstPerson = /^[أإآا]/u.test(plain) || /^كنت$/u.test(plain) || /ت$/u.test(plain);
+      const thirdPersonFinite = /^[يتن]/u.test(plain);
+      if (thirdPersonFinite && !firstPerson) return true;
       m = re.exec(text);
     }
     return false;
@@ -716,6 +864,8 @@ export type SummaryV2NativeRealizationContract = {
   roleCaseValidationPassed: boolean;
   nativeCoordinationValidationPassed: boolean;
   sentenceCompletenessPassed: boolean;
+  hindiFirstPersonAgreementPassed: boolean;
+  hindiSentenceAgreementRecords: HindiSummarySentenceAgreementRecord[];
   nativeRealizationRejectionReasons: string[];
 };
 
@@ -728,10 +878,12 @@ export function evaluateNativeRealizationContract(options: {
   text: string;
   locale: Locale;
   perspectiveMode?: SummaryV2PerspectiveContract;
+  gender?: string | null;
 }): SummaryV2NativeRealizationContract {
   void SUMMARY_V2_NATIVE_SURFACE_389_REVISION;
   void SUMMARY_V2_SPANISH_PERSPECTIVE_NATIVE_SURFACE_391_REVISION;
   void SUMMARY_V2_SPANISH_SLOT_WIDE_PERSON_393_REVISION;
+  void SUMMARY_V2_HINDI_FIRST_PERSON_AGREEMENT_427_REVISION;
   const text = (options.text || '').replace(/\s+/g, ' ').trim();
   const locale = options.locale;
   const perspective = options.perspectiveMode ?? 'first_person';
@@ -749,9 +901,35 @@ export function evaluateNativeRealizationContract(options: {
     || durationSentences.every((s) => finiteCue.test(s));
   if (!finiteDurationSentencePassed) reasons.push('nominal_duration_fragment');
 
+  const hindiSentenceAgreementRecords = locale === 'hi'
+    ? analyzeHindiSummaryFirstPersonAgreement({
+      text,
+      gender: options.gender,
+      perspectiveMode: perspective,
+    })
+    : [];
+  const hindiFirstPersonAgreementPassed = hindiSentenceAgreementRecords.every(
+    (record) => record.grammarPassed,
+  );
+  const southSlavicPredicateChain = locale === 'sr' || locale === 'hr'
+    ? evaluateSouthSlavicSummaryPredicateChains({
+      text,
+      locale,
+    })
+    : null;
   const firstPersonPredicateChainPassed = perspective === 'cv_third_person'
-    || !detectThirdPersonDutyClause(text, locale);
+    || (!detectThirdPersonDutyClause(text, locale)
+      && hindiFirstPersonAgreementPassed
+      && (southSlavicPredicateChain?.predicateChainValidationPassed ?? true));
   if (!firstPersonPredicateChainPassed) reasons.push('third_person_duty_in_first_person_frame');
+  if (southSlavicPredicateChain && !southSlavicPredicateChain.predicateChainValidationPassed) {
+    reasons.push(...southSlavicPredicateChain.predicateChainRejectionReasons);
+  }
+  for (const record of hindiSentenceAgreementRecords) {
+    for (const reason of record.grammarReasons) {
+      reasons.push(`locale_verb_morphology:${reason}`);
+    }
+  }
 
   const spanishCoordination = locale === 'es'
     ? analyzeSpanishCoordinatedPredicateMorphology(text, perspective)
@@ -760,8 +938,15 @@ export function evaluateNativeRealizationContract(options: {
   if (spanishCoordination.mixedTensePredicateChain) reasons.push('mixed_tense_predicate_chain');
 
   const morphologyDefect = detectLocaleVerbMorphologyDefect(text, locale);
-  const localeVerbMorphologyPassed = morphologyDefect === null;
+  const ptbrRoleIntroValencyDefect = locale === 'pt-BR'
+    && detectPortugueseBrazilRoleIntroValencyDefect(text);
+  const localeVerbMorphologyPassed = morphologyDefect === null
+    && !ptbrRoleIntroValencyDefect
+    && hindiFirstPersonAgreementPassed;
   if (morphologyDefect) reasons.push(`locale_verb_morphology:${morphologyDefect}`);
+  if (ptbrRoleIntroValencyDefect) {
+    reasons.push('locale_verb_morphology:ptbr_invalid_role_intro_valency');
+  }
 
   const roleCaseValidationPassed = !detectRoleCaseDefect(text, locale);
   if (!roleCaseValidationPassed) reasons.push('invalid_role_case');
@@ -787,6 +972,8 @@ export function evaluateNativeRealizationContract(options: {
     roleCaseValidationPassed,
     nativeCoordinationValidationPassed,
     sentenceCompletenessPassed,
+    hindiFirstPersonAgreementPassed,
+    hindiSentenceAgreementRecords,
     nativeRealizationRejectionReasons: [...new Set(reasons)],
   };
 }

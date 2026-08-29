@@ -44,6 +44,32 @@ const ARABIC_CV_VERB_FORMS: ArabicVerbForms[] = [
   { firstPerson: /أعلّ?م/gu, presentFemale: 'تعلّم', presentMale: 'يعلّم', pastFemale: 'علّمت', pastMale: 'علّم' },
 ];
 
+/**
+ * Emit explicit selected-person evidence for Arabic text produced by a trusted
+ * locale realization builder. An unvocalized past form ending in ت is ambiguous
+ * in isolation; the builder knows it selected 3sg feminine, so serialize sukūn
+ * rather than relying on hidden construction history at final/visible checks.
+ */
+export function realizeArabicBuiltExperiencePersonEvidence(
+  text: string,
+  options: { isPresent?: boolean; gender?: string },
+): string {
+  if (options.isPresent !== false || normalizeGender(options.gender) !== 'female') {
+    return text;
+  }
+  return String(text || '')
+    .normalize('NFKC')
+    .split(/(\r?\n)/u)
+    .map((part) => {
+      if (/^\r?\n$/u.test(part)) return part;
+      return part.replace(
+        /^(\s*(?:[•●◦*\-–—]|\d+[.)])?\s*)([\p{Script=Arabic}\p{M}]*ت)(?![\p{L}\p{M}])/u,
+        '$1$2ْ',
+      );
+    })
+    .join('');
+}
+
 export function normalizeArabicExperienceEmploymentGrammar(
   text: string,
   options: { isPresent?: boolean; gender?: string },

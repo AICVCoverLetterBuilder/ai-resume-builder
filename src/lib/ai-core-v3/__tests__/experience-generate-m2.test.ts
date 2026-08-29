@@ -579,8 +579,8 @@ describe('M2 E and F. narrow transaction, usage, and regression defaults', () =>
   });
 
   it('41. reviewed M1 feature/manifest/validator contracts remain available', async () => {
-    const module = await import('..');
-    expect(module).toMatchObject({
+    const importedModule = await import('..');
+    expect(importedModule).toMatchObject({
       createExperienceFactManifest: expect.any(Function),
       createSourceAuthoritySnapshot: expect.any(Function),
       runAiCoreV3Validation: expect.any(Function),

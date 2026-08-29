@@ -270,8 +270,8 @@ describe('M3 A. routing and feature flag', () => {
   });
 
   it('8. empty source remains eligible for M2 Generate', async () => {
-    const module = await import('..');
-    expect(module.classifyExperienceV3Routing({
+    const importedModule = await import('..');
+    expect(importedModule.classifyExperienceV3Routing({
       enabled: true, operationKind: 'experience_generate', requestedLocale: 'en', uiLocale: 'en',
       storedContentLocale: 'en', exactVisibleDescription: '',
     })).toBe('owned');
