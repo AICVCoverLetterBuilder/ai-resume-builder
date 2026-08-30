@@ -172,6 +172,9 @@ function evaluatorJson(
 interface ServerOptions {
   writerThrows?: boolean;
   writerError?: unknown;
+  writerDelayMs?: number;
+  writerTimeoutMs?: number;
+  writerTransportObserved?: (options: { timeout?: number; maxRetries?: number }) => void;
   evaluatorThrows?: boolean;
   evaluatorError?: unknown;
   writerRaw?: string;
@@ -211,7 +214,20 @@ async function serverResponse(
       counts.writer += 1;
       if (options.writerThrows) throw new Error('writer timeout');
       if (options.writerError) throw options.writerError;
-      return options.writerResponse ?? toolResponse(options.writerRaw ?? writerJson(snapshot, { units: options.writerUnits }), EXPERIENCE_V3_ENHANCE_WRITER_TOOL_NAME);
+      const response = options.writerResponse ?? toolResponse(options.writerRaw ?? writerJson(snapshot, { units: options.writerUnits }), EXPERIENCE_V3_ENHANCE_WRITER_TOOL_NAME);
+      if (options.writerDelayMs !== undefined) {
+        return callProviderWithDeadline(
+          async (transportOptions) => {
+            options.writerTransportObserved?.(transportOptions);
+            await new Promise((resolve) => setTimeout(resolve, options.writerDelayMs));
+            return response;
+          },
+          computeExperienceLocalizationDeadline(Date.now()),
+          options.writerTimeoutMs ?? EXPERIENCE_LOCALIZATION_VERIFIER_TIMEOUT_MS,
+          'provider',
+        );
+      }
+      return response;
     },
     evaluate: async () => {
       counts.evaluator += 1;
@@ -1277,7 +1293,7 @@ describe('M4 M3 evaluator timeout budget', () => {
     expect(route).toContain("|| action === EXPERIENCE_V3_ENHANCE_ACTION");
     expect(m3).toMatch(/deadlineAt,\s*undefined,\s*EXPERIENCE_LOCALIZATION_VERIFIER_TIMEOUT_MS,\s*'verifier'/u);
     expect(m3).not.toMatch(/AI_PROVIDER_CALL_TIMEOUT_MS,\s*'verifier'/u);
-    expect(m3).toMatch(/AI_PROVIDER_CALL_TIMEOUT_MS,\s*'provider'/u);
+    expect(m3).toMatch(/EXPERIENCE_V3_ENHANCE_WRITER_TIMEOUT_MS,\s*'provider'/u);
     expect(EXPERIENCE_LOCALIZATION_VERIFIER_TIMEOUT_MS).toBe(11_500);
     expect(EXPERIENCE_LOCALIZATION_SERVER_BUDGET_MS).toBe(27_000);
     expect(EXPERIENCE_LOCALIZATION_SERVER_BUDGET_MS)
@@ -1324,6 +1340,132 @@ describe('M4 M3 evaluator timeout budget', () => {
     await vi.advanceTimersByTimeAsync(EXPERIENCE_LOCALIZATION_VERIFIER_TIMEOUT_MS + 1);
     await rejection;
     expect(create).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('M4 M3 writer timeout budget', () => {
+  const start = 1_700_000_000_000;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(start);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('maps the historical physical writer timeout fingerprint to the old 8000ms transport deadline', async () => {
+    const error = Object.assign(new Error('provider_transport_timeout after 8000ms'), {
+      name: 'AbortError',
+      deadlineOwner: 'provider_transport',
+    });
+    const run = await runHarness({ server: { writerError: error } });
+    expect(run.result).toMatchObject({ kind: 'handled_failure', typedReason: 'writer_request_failed' });
+    expect([run.writerCount, run.evaluatorCount, run.writeCount, run.persistCount, run.usageCallCount, run.usage])
+      .toEqual([1, 0, 0, 0, 0, 9]);
+    if (run.result.kind === 'handled_failure') {
+      expect(run.result.diagnostic).toMatchObject({
+        candidatePresent: false,
+        writer: { attempted: true, result: 'failed' },
+        evaluator: { attempted: false, result: 'not_attempted' },
+        providerFailureStage: 'sdk_request',
+        providerErrorType: 'timeout',
+        providerRetryable: false,
+        providerMessageFingerprint: 'v3e-75034834',
+        applyAuthorized: false,
+        applyAttempted: false,
+        applyCommitted: false,
+        persistenceResult: 'not_attempted',
+        v2FallthroughCount: 0,
+        usageDelta: 0,
+      });
+    }
+  });
+
+  it('uses the existing 11500ms authority for the production M3 writer and leaves the evaluator on that authority', () => {
+    const route = fs.readFileSync(path.resolve('src/app/api/generate/route.ts'), 'utf8');
+    const m3Start = route.indexOf("if (action === EXPERIENCE_V3_ENHANCE_ACTION)");
+    const m3End = route.indexOf("if (action === 'bullets')", m3Start);
+    const m3 = route.slice(m3Start, m3End);
+    expect(route).toContain('const EXPERIENCE_V3_ENHANCE_WRITER_TIMEOUT_MS = EXPERIENCE_LOCALIZATION_VERIFIER_TIMEOUT_MS;');
+    expect(m3).toMatch(/generate:[\s\S]*?EXPERIENCE_V3_ENHANCE_WRITER_TIMEOUT_MS,\s*'provider'/u);
+    expect(m3).toMatch(/evaluate:[\s\S]*?EXPERIENCE_LOCALIZATION_VERIFIER_TIMEOUT_MS,\s*'verifier'/u);
+    expect(m3).not.toMatch(/AI_PROVIDER_CALL_TIMEOUT_MS,\s*'provider'/u);
+    expect(EXPERIENCE_LOCALIZATION_VERIFIER_TIMEOUT_MS).toBe(11_500);
+    expect(EXPERIENCE_LOCALIZATION_SERVER_BUDGET_MS).toBe(27_000);
+    expect(EXPERIENCE_LOCALIZATION_SERVER_BUDGET_MS)
+      .toBeGreaterThan(11_500 + 11_500 + 3_000);
+  });
+
+  it('false-green gate: the identical writer response at 8001ms fails old transport and succeeds on the actual new seam', async () => {
+    const snapshot = captureExperienceV3EnhanceOperationSnapshot(makeInput());
+    const sharedResponse = forcedResponse(
+      EXPERIENCE_V3_ENHANCE_WRITER_TOOL_NAME,
+      JSON.parse(writerJson(snapshot)),
+    );
+    const oldTransport = vi.fn();
+    const newTransport = vi.fn();
+    const oldPending = runHarness({
+      server: {
+        writerResponse: sharedResponse,
+        writerDelayMs: AI_PROVIDER_CALL_TIMEOUT_MS + 1,
+        writerTimeoutMs: AI_PROVIDER_CALL_TIMEOUT_MS,
+        writerTransportObserved: oldTransport,
+      },
+    });
+    const newPending = runHarness({
+      server: {
+        writerResponse: sharedResponse,
+        writerDelayMs: AI_PROVIDER_CALL_TIMEOUT_MS + 1,
+        writerTimeoutMs: EXPERIENCE_LOCALIZATION_VERIFIER_TIMEOUT_MS,
+        writerTransportObserved: newTransport,
+      },
+    });
+    await vi.advanceTimersByTimeAsync(AI_PROVIDER_CALL_TIMEOUT_MS + 1);
+    const [oldRun, newRun] = await Promise.all([oldPending, newPending]);
+
+    expect(oldTransport).toHaveBeenCalledWith(expect.objectContaining({
+      timeout: AI_PROVIDER_CALL_TIMEOUT_MS, maxRetries: 0,
+    }));
+    expect(newTransport).toHaveBeenCalledWith(expect.objectContaining({
+      timeout: EXPERIENCE_LOCALIZATION_VERIFIER_TIMEOUT_MS, maxRetries: 0,
+    }));
+    expect(oldRun.result).toMatchObject({ kind: 'handled_failure', typedReason: 'writer_request_failed' });
+    expect([oldRun.writerCount, oldRun.evaluatorCount, oldRun.writeCount, oldRun.persistCount, oldRun.usageCallCount])
+      .toEqual([1, 0, 0, 0, 0]);
+    expect(newRun.result.kind).toBe('handled_success');
+    expect([newRun.writerCount, newRun.evaluatorCount, newRun.writeCount, newRun.persistCount, newRun.usageCallCount])
+      .toEqual([1, 1, 1, 1, 1]);
+  });
+
+  it('still fails closed when the writer exceeds the new 11500ms deadline', async () => {
+    const pending = runHarness({
+      server: {
+        writerDelayMs: EXPERIENCE_LOCALIZATION_VERIFIER_TIMEOUT_MS + 1,
+        writerTimeoutMs: EXPERIENCE_LOCALIZATION_VERIFIER_TIMEOUT_MS,
+      },
+    });
+    await vi.advanceTimersByTimeAsync(EXPERIENCE_LOCALIZATION_VERIFIER_TIMEOUT_MS + 1);
+    const run = await pending;
+    expect(run.result).toMatchObject({ kind: 'handled_failure', typedReason: 'writer_request_failed' });
+    expect([run.writerCount, run.evaluatorCount, run.writeCount, run.persistCount, run.usageCallCount, run.usage])
+      .toEqual([1, 0, 0, 0, 0, 9]);
+    if (run.result.kind === 'handled_failure') {
+      expect(run.result.diagnostic).toMatchObject({
+        candidatePresent: false,
+        evaluator: { attempted: false, result: 'not_attempted' },
+        providerFailureStage: 'sdk_request',
+        providerErrorType: 'timeout',
+        providerRetryable: false,
+        applyAuthorized: false,
+        applyAttempted: false,
+        applyCommitted: false,
+        persistenceResult: 'not_attempted',
+        v2FallthroughCount: 0,
+        usageDelta: 0,
+      });
+    }
   });
 });
 

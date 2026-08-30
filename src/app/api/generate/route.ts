@@ -427,6 +427,7 @@ function getText(response: Anthropic.Messages.Message): string {
 const EXPERIENCE_COMPACT_TRANSLATOR_MAX_RECORDS = EXPERIENCE_LOCALIZATION_PROVIDER_BATCH_SIZE;
 const EXPERIENCE_COMPACT_LOCALIZED_SURFACE_MAX_CHARS = EXPERIENCE_LOCALIZATION_MAX_SOURCE_TEXT_CHARS;
 const EXPERIENCE_ROUTE_FINALIZATION_MARGIN_MS = 2_000;
+const EXPERIENCE_V3_ENHANCE_WRITER_TIMEOUT_MS = EXPERIENCE_LOCALIZATION_VERIFIER_TIMEOUT_MS;
 
 type CompactTranslatorRecord = {
   recordId: string;
@@ -2615,7 +2616,7 @@ ${sourceFactsText || '(none)'}`
               request,
               deadlineAt,
               undefined,
-              AI_PROVIDER_CALL_TIMEOUT_MS,
+              EXPERIENCE_V3_ENHANCE_WRITER_TIMEOUT_MS,
               'provider',
               undefined,
               false,
