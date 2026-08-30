@@ -81,6 +81,16 @@ function errorClassName(error: unknown): string | null {
     : error instanceof Error ? 'Error' : null;
 }
 
+function isDeadlineOrAbortError(error: unknown): boolean {
+  if (error instanceof Error && (error.name === 'AbortError'
+    || error.name === 'APIUserAbortError'
+    || error.name === 'APIConnectionTimeoutError')) return true;
+  if (!error || typeof error !== 'object') return false;
+  const owner = (error as Record<string, unknown>).deadlineOwner;
+  return owner === 'provider_transport' || owner === 'verifier_transport'
+    || owner === 'route_deadline' || owner === 'client_abort';
+}
+
 function providerType(
   error: unknown,
   status: number | null,
@@ -92,13 +102,15 @@ function providerType(
   if (status === 403) return 'permission';
   if (status === 429) return 'rate_limit';
   if (status !== null && status >= 500) return 'provider_5xx';
-  if (errorClassName(error) === 'APIConnectionTimeoutError' || errorClassName(error) === 'APIUserAbortError') return 'timeout';
+  if (isDeadlineOrAbortError(error)
+    || errorClassName(error) === 'APIConnectionTimeoutError' || errorClassName(error) === 'APIUserAbortError') return 'timeout';
   if (errorClassName(error) === 'APIConnectionError') return 'connection/network';
   return 'unknown';
 }
 
 function derivedFailureStage(error: unknown, status: number | null): ExperienceV3ProviderFailureStage {
   if (status !== null) return 'provider_response';
+  if (isDeadlineOrAbortError(error)) return 'sdk_request';
   if (errorClassName(error) === 'APIConnectionError'
     || errorClassName(error) === 'APIConnectionTimeoutError'
     || errorClassName(error) === 'APIUserAbortError') return 'sdk_request';

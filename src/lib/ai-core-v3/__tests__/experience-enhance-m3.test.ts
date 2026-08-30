@@ -1,4 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
 import {
   APIConnectionError,
   APIConnectionTimeoutError,
@@ -38,6 +40,15 @@ import {
   type ExperienceV3EnhanceEvaluatorResponse,
   type ExperienceV3EnhanceWriterResponse,
 } from '../experience-enhance-server';
+import {
+  AI_PROVIDER_CALL_TIMEOUT_MS,
+  AI_SERVER_BUDGET_MS,
+  EXPERIENCE_LOCALIZATION_SERVER_BUDGET_MS,
+  EXPERIENCE_LOCALIZATION_VERIFIER_TIMEOUT_MS,
+  callProviderWithDeadline,
+  computeExperienceLocalizationDeadline,
+  computeServerDeadline,
+} from '@/lib/ai-request-timing';
 
 const SOURCE = 'help customers with service questions.\nkeep accurate records of requests.';
 const IMPROVED = [
@@ -1140,6 +1151,25 @@ describe('M4 M3 evaluator-failure observability closure', () => {
     }
   });
 
+  it('classifies the proven local verifier timeout with truthful stage and type', async () => {
+    const error = Object.assign(new Error('verifier_transport_timeout after 8000ms'), {
+      name: 'AbortError',
+      deadlineOwner: 'verifier_transport',
+    });
+    const run = await runHarness({ server: { evaluatorError: error } });
+    expectFailClosed(run);
+    if (run.result.kind === 'handled_failure') {
+      expect(run.result.diagnostic).toMatchObject({
+        providerFailureStage: 'sdk_request',
+        providerErrorClass: 'Error',
+        providerHttpStatus: null,
+        providerErrorType: 'timeout',
+        providerRetryable: false,
+        providerMessageFingerprint: 'v3e-de5a1d01',
+      });
+    }
+  });
+
   it('does not add provider-failure fields to a successful evaluator operation', async () => {
     const run = await runHarness();
     expect(run.result.kind).toBe('handled_success');
@@ -1147,6 +1177,99 @@ describe('M4 M3 evaluator-failure observability closure', () => {
       expect(run.result.diagnostic).not.toHaveProperty('providerFailureStage');
       expect(run.result.diagnostic).not.toHaveProperty('providerErrorType');
     }
+  });
+});
+
+describe('M4 M3 evaluator timeout budget', () => {
+  const start = 1_700_000_000_000;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(start);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('proves the old 8000ms verifier fixture times out before the unchanged response', async () => {
+    const response = { marker: 'same-synthetic-evaluator-response' };
+    const create = vi.fn(async () => {
+      await new Promise((resolve) => setTimeout(resolve, AI_PROVIDER_CALL_TIMEOUT_MS + 1));
+      return response;
+    });
+    const pending = callProviderWithDeadline(
+      create,
+      computeServerDeadline(start),
+      AI_PROVIDER_CALL_TIMEOUT_MS,
+      'verifier',
+    );
+    const rejection = expect(pending).rejects.toMatchObject({
+      name: 'AbortError',
+      deadlineOwner: 'verifier_transport',
+      configuredTimeoutMs: AI_PROVIDER_CALL_TIMEOUT_MS,
+      effectiveTimeoutMs: AI_PROVIDER_CALL_TIMEOUT_MS,
+    });
+    await vi.advanceTimersByTimeAsync(AI_PROVIDER_CALL_TIMEOUT_MS + 1);
+    await rejection;
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  it('proves the production M3 evaluator uses the existing 11500ms authority and aligned outer budget', () => {
+    const route = fs.readFileSync(path.resolve('src/app/api/generate/route.ts'), 'utf8');
+    const m3Start = route.indexOf("if (action === EXPERIENCE_V3_ENHANCE_ACTION)");
+    const m3End = route.indexOf("if (action === 'bullets')", m3Start);
+    const m3 = route.slice(m3Start, m3End);
+    expect(route).toContain("|| action === EXPERIENCE_V3_ENHANCE_ACTION");
+    expect(m3).toMatch(/deadlineAt,\s*undefined,\s*EXPERIENCE_LOCALIZATION_VERIFIER_TIMEOUT_MS,\s*'verifier'/u);
+    expect(m3).not.toMatch(/AI_PROVIDER_CALL_TIMEOUT_MS,\s*'verifier'/u);
+    expect(m3).toMatch(/AI_PROVIDER_CALL_TIMEOUT_MS,\s*'provider'/u);
+    expect(EXPERIENCE_LOCALIZATION_VERIFIER_TIMEOUT_MS).toBe(11_500);
+    expect(EXPERIENCE_LOCALIZATION_SERVER_BUDGET_MS).toBe(27_000);
+    expect(EXPERIENCE_LOCALIZATION_SERVER_BUDGET_MS)
+      .toBeGreaterThan(AI_PROVIDER_CALL_TIMEOUT_MS + EXPERIENCE_LOCALIZATION_VERIFIER_TIMEOUT_MS + 3_000);
+    expect(EXPERIENCE_LOCALIZATION_SERVER_BUDGET_MS).toBeGreaterThan(AI_SERVER_BUDGET_MS);
+  });
+
+  it('proves the same response after 8000ms succeeds before the new evaluator deadline', async () => {
+    const response = { marker: 'same-synthetic-evaluator-response' };
+    const create = vi.fn(async (options: { timeout?: number; maxRetries?: number }) => {
+      expect(options.timeout).toBe(EXPERIENCE_LOCALIZATION_VERIFIER_TIMEOUT_MS);
+      expect(options.maxRetries).toBe(0);
+      await new Promise((resolve) => setTimeout(resolve, AI_PROVIDER_CALL_TIMEOUT_MS + 1));
+      return response;
+    });
+    const pending = callProviderWithDeadline(
+      create,
+      computeExperienceLocalizationDeadline(start),
+      EXPERIENCE_LOCALIZATION_VERIFIER_TIMEOUT_MS,
+      'verifier',
+    );
+    await vi.advanceTimersByTimeAsync(AI_PROVIDER_CALL_TIMEOUT_MS + 1);
+    await expect(pending).resolves.toBe(response);
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  it('still fails closed once transport exceeds the new evaluator deadline', async () => {
+    const create = vi.fn(async () => {
+      await new Promise((resolve) => setTimeout(resolve, EXPERIENCE_LOCALIZATION_VERIFIER_TIMEOUT_MS + 1));
+      return { marker: 'late' };
+    });
+    const pending = callProviderWithDeadline(
+      create,
+      computeExperienceLocalizationDeadline(start),
+      EXPERIENCE_LOCALIZATION_VERIFIER_TIMEOUT_MS,
+      'verifier',
+    );
+    const rejection = expect(pending).rejects.toMatchObject({
+      name: 'AbortError',
+      deadlineOwner: 'verifier_transport',
+      configuredTimeoutMs: EXPERIENCE_LOCALIZATION_VERIFIER_TIMEOUT_MS,
+      effectiveTimeoutMs: EXPERIENCE_LOCALIZATION_VERIFIER_TIMEOUT_MS,
+    });
+    await vi.advanceTimersByTimeAsync(EXPERIENCE_LOCALIZATION_VERIFIER_TIMEOUT_MS + 1);
+    await rejection;
+    expect(create).toHaveBeenCalledTimes(1);
   });
 });
 

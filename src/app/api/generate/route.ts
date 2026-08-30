@@ -663,6 +663,7 @@ export async function POST(req: NextRequest) {
       action === 'experience-localize'
       || action === 'export-title-localize'
       || action === 'summary-context-localize'
+      || action === EXPERIENCE_V3_ENHANCE_ACTION
     ) {
       deadlineAt = computeExperienceLocalizationDeadline(serverReceivedAt);
     }
@@ -2613,7 +2614,7 @@ ${sourceFactsText || '(none)'}`
               request,
               deadlineAt,
               undefined,
-              AI_PROVIDER_CALL_TIMEOUT_MS,
+              EXPERIENCE_LOCALIZATION_VERIFIER_TIMEOUT_MS,
               'verifier',
               undefined,
               false,
