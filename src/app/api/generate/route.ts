@@ -86,6 +86,7 @@ import {
   executeExperienceV3EnhanceServer,
   executeExperienceV3GenerateServer,
   executeSummaryV3GenerateServer,
+  createExperienceV3EnhanceProviderTransportError,
   createExperienceV3EnhanceWriterTransportError,
   isAiCoreV3Enabled,
 } from '@/lib/ai-core-v3';
@@ -2591,15 +2592,41 @@ ${sourceFactsText || '(none)'}`
             throw createExperienceV3EnhanceWriterTransportError(error, 'response_extraction');
           }
         },
-        evaluate: async (prompt) => getForcedEvaluatorResponse(await callWithRetry({
-          model: MODEL,
-          max_tokens: 1200,
-          temperature: 0,
-          system: 'You are the independent non-writing AI Core V3 Experience Enhance validator. Invoke only the submit_experience_enhancement_validation tool and return structured evidence only.',
-          tools: [EXPERIENCE_V3_ENHANCE_EVALUATOR_TOOL],
-          tool_choice: { type: 'tool', name: EXPERIENCE_V3_ENHANCE_EVALUATOR_TOOL_NAME, disable_parallel_tool_use: true },
-          messages: [{ role: 'user', content: prompt }],
-        }, deadlineAt, undefined, AI_PROVIDER_CALL_TIMEOUT_MS, 'verifier', undefined, false)),
+        evaluate: async (prompt) => {
+          let request: Parameters<Anthropic['messages']['create']>[0];
+          try {
+            request = {
+              model: MODEL,
+              max_tokens: 1200,
+              temperature: 0,
+              system: 'You are the independent non-writing AI Core V3 Experience Enhance validator. Invoke only the submit_experience_enhancement_validation tool and return structured evidence only.',
+              tools: [EXPERIENCE_V3_ENHANCE_EVALUATOR_TOOL],
+              tool_choice: { type: 'tool', name: EXPERIENCE_V3_ENHANCE_EVALUATOR_TOOL_NAME, disable_parallel_tool_use: true },
+              messages: [{ role: 'user', content: prompt }],
+            };
+          } catch (error) {
+            throw createExperienceV3EnhanceProviderTransportError(error, 'request_construction');
+          }
+          let response: Anthropic.Messages.Message;
+          try {
+            response = await callWithRetry(
+              request,
+              deadlineAt,
+              undefined,
+              AI_PROVIDER_CALL_TIMEOUT_MS,
+              'verifier',
+              undefined,
+              false,
+            );
+          } catch (error) {
+            throw createExperienceV3EnhanceProviderTransportError(error);
+          }
+          try {
+            return getForcedEvaluatorResponse(response);
+          } catch (error) {
+            throw createExperienceV3EnhanceProviderTransportError(error, 'response_extraction');
+          }
+        },
       });
       const status = result.ok
         ? 200

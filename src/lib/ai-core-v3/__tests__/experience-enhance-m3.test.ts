@@ -8,6 +8,15 @@ import {
   PermissionDeniedError,
   RateLimitError,
 } from '@anthropic-ai/sdk';
+import {
+  APIConnectionError,
+  APIConnectionTimeoutError,
+  AuthenticationError,
+  BadRequestError,
+  InternalServerError,
+  PermissionDeniedError,
+  RateLimitError,
+} from '@anthropic-ai/sdk';
 import type { CVData } from '../../types';
 import {
   EXPERIENCE_V3_ENHANCE_ACTION,
@@ -22,6 +31,7 @@ import {
 } from '..';
 import {
   executeExperienceV3EnhanceServer,
+  createExperienceV3EnhanceProviderTransportError,
   createExperienceV3EnhanceWriterTransportError,
   EXPERIENCE_V3_ENHANCE_EVALUATOR_TOOL_NAME,
   EXPERIENCE_V3_ENHANCE_WRITER_TOOL_NAME,
@@ -152,6 +162,7 @@ interface ServerOptions {
   writerThrows?: boolean;
   writerError?: unknown;
   evaluatorThrows?: boolean;
+  evaluatorError?: unknown;
   writerRaw?: string;
   evaluatorRaw?: string;
   writerResponse?: ExperienceV3EnhanceWriterResponse;
@@ -194,6 +205,7 @@ async function serverResponse(
     evaluate: async () => {
       counts.evaluator += 1;
       if (options.evaluatorThrows) throw new Error('evaluator timeout');
+      if (options.evaluatorError) throw options.evaluatorError;
       return options.evaluatorResponse ?? toolResponse(options.evaluatorRaw ?? evaluatorJson(snapshot, options.evaluator), EXPERIENCE_V3_ENHANCE_EVALUATOR_TOOL_NAME);
     },
   });
@@ -998,6 +1010,142 @@ describe('M3 writer provider-failure observability', () => {
       expect(run.result.diagnostic).not.toHaveProperty('providerFailureStage');
       expect(run.result.diagnostic).not.toHaveProperty('providerErrorType');
       expect(run.result.diagnostic.usageDelta).toBe(1);
+    }
+  });
+});
+
+describe('M4 M3 evaluator-failure observability closure', () => {
+  const privateMessage = 'Synthetic private evaluator provider text must never persist.';
+
+  function headers(requestId: string): Headers {
+    return new Headers({ 'request-id': requestId });
+  }
+
+  function expectFailClosed(run: Awaited<ReturnType<typeof runHarness>>): void {
+    expect(run.result).toMatchObject({ kind: 'handled_failure' });
+    expect([run.writerCount, run.evaluatorCount, run.writeCount, run.persistCount, run.usageCallCount, run.usage])
+      .toEqual([1, 1, 0, 0, 0, 9]);
+    if (run.result.kind === 'handled_failure') {
+      expect(run.result.diagnostic).toMatchObject({
+        applyAuthorized: false,
+        applyAttempted: false,
+        applyCommitted: false,
+        usageDelta: 0,
+        v2FallthroughCount: 0,
+      });
+      expect(JSON.stringify(run.result.diagnostic)).not.toContain(privateMessage);
+    }
+  }
+
+  it('classifies evaluator invalid-request errors without changing fail-closed behavior', async () => {
+    const error = new BadRequestError(
+      400,
+      { type: 'invalid_request_error', code: 'invalid_request', message: privateMessage },
+      privateMessage,
+      headers('req-evaluator-invalid'),
+    );
+    const run = await runHarness({ server: { evaluatorError: error } });
+    expectFailClosed(run);
+    if (run.result.kind === 'handled_failure') {
+      expect(run.result.typedReason).toBe('validator_exception');
+      expect(run.result.diagnostic).toMatchObject({
+        providerFailureStage: 'provider_response', providerErrorClass: 'BadRequestError', providerHttpStatus: 400,
+        providerErrorType: 'invalid_request', providerErrorCode: 'invalid_request', providerRetryable: false,
+      });
+      expect(run.result.diagnostic.providerRequestIdHash).toMatch(/^v3e-[0-9a-f]{8}$/u);
+      expect(run.result.diagnostic.providerMessageFingerprint).toMatch(/^v3e-[0-9a-f]{8}$/u);
+      expect(run.result.diagnostic.providerRequestIdHash).not.toContain('req-evaluator-invalid');
+    }
+  });
+
+  it.each([
+    ['authentication', new AuthenticationError(401, { type: 'authentication_error', code: 'invalid_api_key', message: privateMessage }, privateMessage, headers('req-evaluator-auth'))],
+    ['permission', new PermissionDeniedError(403, { type: 'permission_error', code: 'permission_denied', message: privateMessage }, privateMessage, headers('req-evaluator-permission'))],
+  ] as const)('classifies evaluator %s errors safely', async (_label, error) => {
+    const run = await runHarness({ server: { evaluatorError: error } });
+    expectFailClosed(run);
+    if (run.result.kind === 'handled_failure') {
+      expect(run.result.diagnostic).toMatchObject({
+        providerFailureStage: 'provider_response',
+        providerHttpStatus: _label === 'authentication' ? 401 : 403,
+        providerErrorType: _label,
+        providerRetryable: false,
+      });
+    }
+  });
+
+  it('distinguishes evaluator 429 and never retries it', async () => {
+    const error = new RateLimitError(
+      429,
+      { type: 'rate_limit_error', code: 'rate_limit', message: privateMessage },
+      privateMessage,
+      headers('req-evaluator-rate'),
+    );
+    const run = await runHarness({ server: { evaluatorError: error } });
+    expectFailClosed(run);
+    if (run.result.kind === 'handled_failure') {
+      expect(run.result.diagnostic).toMatchObject({ providerFailureStage: 'provider_response', providerHttpStatus: 429, providerErrorType: 'rate_limit', providerRetryable: true });
+    }
+  });
+
+  it('distinguishes evaluator provider 5xx and never retries it', async () => {
+    const error = new InternalServerError(
+      500,
+      { type: 'internal_server_error', code: 'internal_server_error', message: privateMessage },
+      privateMessage,
+      headers('req-evaluator-5xx'),
+    );
+    const run = await runHarness({ server: { evaluatorError: error } });
+    expectFailClosed(run);
+    if (run.result.kind === 'handled_failure') {
+      expect(run.result.diagnostic).toMatchObject({ providerFailureStage: 'provider_response', providerHttpStatus: 500, providerErrorType: 'provider_5xx', providerRetryable: true });
+    }
+  });
+
+  it.each([
+    ['timeout', new APIConnectionTimeoutError({ message: privateMessage })],
+    ['connection/network', new APIConnectionError({ message: privateMessage })],
+  ] as const)('classifies evaluator %s SDK failures', async (expectedType, error) => {
+    const run = await runHarness({ server: { evaluatorError: error } });
+    expectFailClosed(run);
+    if (run.result.kind === 'handled_failure') {
+      expect(run.result.diagnostic).toMatchObject({
+        providerFailureStage: 'sdk_request', providerHttpStatus: null, providerErrorType: expectedType,
+        providerRetryable: expectedType === 'connection/network' ? true : false,
+      });
+    }
+  });
+
+  it('keeps evaluator response-extraction failure distinct from request failure', async () => {
+    const error = createExperienceV3EnhanceProviderTransportError(new Error(privateMessage), 'response_extraction');
+    const run = await runHarness({ server: { evaluatorError: error } });
+    expectFailClosed(run);
+    if (run.result.kind === 'handled_failure') {
+      expect(run.result.diagnostic).toMatchObject({
+        providerFailureStage: 'response_extraction', providerHttpStatus: null,
+        providerErrorType: 'response_extraction', providerRetryable: false,
+      });
+    }
+  });
+
+  it('keeps an ordinary evaluator Error unknown and fail closed', async () => {
+    const run = await runHarness({ server: { evaluatorError: new Error(privateMessage) } });
+    expectFailClosed(run);
+    if (run.result.kind === 'handled_failure') {
+      expect(run.result.diagnostic).toMatchObject({
+        providerFailureStage: 'unknown', providerErrorClass: 'Error', providerHttpStatus: null,
+        providerErrorType: null, providerErrorCode: null, providerRequestIdHash: null,
+        providerRetryable: null, providerStructuralFieldPath: null,
+      });
+    }
+  });
+
+  it('does not add provider-failure fields to a successful evaluator operation', async () => {
+    const run = await runHarness();
+    expect(run.result.kind).toBe('handled_success');
+    if (run.result.kind === 'handled_success') {
+      expect(run.result.diagnostic).not.toHaveProperty('providerFailureStage');
+      expect(run.result.diagnostic).not.toHaveProperty('providerErrorType');
     }
   });
 });

@@ -116,8 +116,8 @@ function structuralPath(value: string | null | undefined): string | null {
   return typeof value === 'string' && /^[a-z][a-z0-9_.-]{0,127}$/u.test(value) ? value : null;
 }
 
-/** Build finite, non-PII writer-failure metadata without changing failure control flow. */
-export function classifyExperienceV3EnhanceWriterFailure(
+/** Build finite, non-PII provider-failure metadata without changing failure control flow. */
+export function classifyExperienceV3EnhanceProviderFailure(
   error: unknown,
   stage?: ExperienceV3ProviderFailureStage,
   fieldPath?: string | null,
@@ -146,15 +146,34 @@ export function classifyExperienceV3EnhanceWriterFailure(
   };
 }
 
-/** Transport wrapper carrying only pre-sanitized writer failure evidence. */
-export class ExperienceV3EnhanceWriterTransportError extends Error {
+/** Backward-compatible writer name; the evidence fields are provider-generic. */
+export const classifyExperienceV3EnhanceWriterFailure = classifyExperienceV3EnhanceProviderFailure;
+
+/** Transport wrapper carrying only pre-sanitized provider failure evidence. */
+export class ExperienceV3EnhanceProviderTransportError extends Error {
   readonly evidence: ExperienceV3ProviderFailureEvidence;
 
   constructor(evidence: ExperienceV3ProviderFailureEvidence) {
-    super('M3 writer transport failure');
-    this.name = 'ExperienceV3EnhanceWriterTransportError';
+    super('M3 provider transport failure');
+    this.name = 'ExperienceV3EnhanceProviderTransportError';
     this.evidence = immutableCopy(evidence);
   }
+}
+
+/** Writer-specific subtype retained for existing callers and tests. */
+export class ExperienceV3EnhanceWriterTransportError extends ExperienceV3EnhanceProviderTransportError {
+  constructor(evidence: ExperienceV3ProviderFailureEvidence) {
+    super(evidence);
+    this.name = 'ExperienceV3EnhanceWriterTransportError';
+  }
+}
+
+export function createExperienceV3EnhanceProviderTransportError(
+  error: unknown,
+  stage?: ExperienceV3ProviderFailureStage,
+  fieldPath?: string | null,
+): ExperienceV3EnhanceProviderTransportError {
+  return new ExperienceV3EnhanceProviderTransportError(classifyExperienceV3EnhanceProviderFailure(error, stage, fieldPath));
 }
 
 export function createExperienceV3EnhanceWriterTransportError(
@@ -162,7 +181,7 @@ export function createExperienceV3EnhanceWriterTransportError(
   stage?: ExperienceV3ProviderFailureStage,
   fieldPath?: string | null,
 ): ExperienceV3EnhanceWriterTransportError {
-  return new ExperienceV3EnhanceWriterTransportError(classifyExperienceV3EnhanceWriterFailure(error, stage, fieldPath));
+  return new ExperienceV3EnhanceWriterTransportError(classifyExperienceV3EnhanceProviderFailure(error, stage, fieldPath));
 }
 
 export const EXPERIENCE_V3_ENHANCE_WRITER_TOOL_NAME = 'submit_experience_enhancement' as const;
@@ -923,9 +942,9 @@ export async function executeExperienceV3EnhanceServer(
   try {
     writerResponse = await transports.generate(buildExperienceV3EnhanceWriterPrompt(manifest));
   } catch (error) {
-    const writerFailure = error instanceof ExperienceV3EnhanceWriterTransportError
+    const writerFailure = error instanceof ExperienceV3EnhanceProviderTransportError
       ? error.evidence
-      : classifyExperienceV3EnhanceWriterFailure(error);
+      : classifyExperienceV3EnhanceProviderFailure(error);
     return failure(
       'writer_request_failed',
       undefined,
@@ -960,8 +979,21 @@ export async function executeExperienceV3EnhanceServer(
   let evaluatorResponse: ExperienceV3EnhanceEvaluatorResponse;
   try {
     evaluatorResponse = await transports.evaluate(buildExperienceV3EnhanceEvaluatorPrompt(manifest, candidate));
-  } catch {
-    return failure('validator_exception', undefined, diagnosticEvidence(candidate, undefined, writerDiagnostic), internalRejectionAudit(manifest, candidate));
+  } catch (error) {
+    return failure(
+      'validator_exception',
+      undefined,
+      diagnosticEvidence(
+        candidate,
+        undefined,
+        writerDiagnostic,
+        unavailableEnhanceEvaluatorMetadata(),
+        error instanceof ExperienceV3EnhanceProviderTransportError
+          ? error.evidence
+          : classifyExperienceV3EnhanceProviderFailure(error),
+      ),
+      internalRejectionAudit(manifest, candidate),
+    );
   }
   const evaluatorResult = parseExperienceV3EnhanceEvaluatorToolResponse(evaluatorResponse, manifest);
   if (!evaluatorResult.ok) return failure(
