@@ -11,6 +11,17 @@ import { createExperienceFactManifest } from './experience-manifest';
 import { immutableCopy } from './immutability';
 import { createSourceAuthoritySnapshot } from './source-authority';
 import type { AggregateValidationResult } from './validators';
+import {
+  EXPERIENCE_V3_TERMINAL_DIAGNOSTIC_MARKER,
+  EXPERIENCE_V3_TERMINAL_DIAGNOSTIC_REVISION,
+  parseExperienceV3DiagnosticEvidence,
+  parseExperienceV3InternalRejectionAudit,
+  unavailableExperienceV3DiagnosticEvidence,
+  type ExperienceV3AdapterResult,
+  type ExperienceV3DiagnosticAttempt,
+  type ExperienceV3InternalRejectionAudit,
+  type ExperienceV3TerminalDiagnostic,
+} from './experience-generate';
 
 export const EXPERIENCE_V3_ENHANCE_ACTION = 'experience_v3_enhance' as const;
 
@@ -58,6 +69,7 @@ export interface ExperienceV3EnhanceSuccessResponse {
   readonly candidate: AiCoreV3CandidateEnvelope;
   readonly validation: AggregateValidationResult;
   readonly materiality: ExperienceV3EnhanceMaterialityEvidence;
+  readonly diagnosticEvidence?: ReturnType<typeof unavailableExperienceV3DiagnosticEvidence>;
 }
 
 export interface ExperienceV3EnhanceFailureResponse {
@@ -65,6 +77,8 @@ export interface ExperienceV3EnhanceFailureResponse {
   readonly action: typeof EXPERIENCE_V3_ENHANCE_ACTION;
   readonly typedReason: string;
   readonly validation?: AggregateValidationResult;
+  readonly diagnosticEvidence?: ReturnType<typeof unavailableExperienceV3DiagnosticEvidence>;
+  readonly internalRejectionAudit?: ExperienceV3InternalRejectionAudit;
 }
 
 export type ExperienceV3EnhanceResponse =
@@ -144,7 +158,18 @@ export interface ExperienceV3EnhanceAdapterDependencies {
   readonly writeCv: (next: CVData) => void;
   readonly persistCv: (next: CVData) => boolean;
   readonly incrementUsage: () => void;
+  readonly getUsageCount?: () => number;
+  readonly getRouteHttpStatus?: () => number | null;
 }
+
+export type ExperienceV3EnhanceAdapterResult = Extract<ExperienceV3AdapterResult, { readonly kind: 'not_applicable' }>
+  | { readonly kind: 'handled_success'; readonly diagnostic: ExperienceV3TerminalDiagnostic }
+  | {
+    readonly kind: 'handled_failure';
+    readonly typedReason: string;
+    readonly diagnostic: ExperienceV3TerminalDiagnostic;
+    readonly internalRejectionAudit?: ExperienceV3InternalRejectionAudit;
+  };
 
 function normalizeLocale(value: string): string {
   return String(value || '').trim().replace(/_/g, '-').toLowerCase();
@@ -518,7 +543,7 @@ export function applyExperienceV3EnhanceTransaction(
   response: ExperienceV3EnhanceSuccessResponse,
   dependencies: Pick<ExperienceV3EnhanceAdapterDependencies,
     'getLiveState' | 'getActiveOperationId' | 'writeCv' | 'persistCv' | 'incrementUsage'>,
-): ExperienceV3EnhanceRoutingResult {
+): Exclude<ExperienceV3EnhanceRoutingResult, { kind: 'not_applicable' }> {
   const liveBefore = dependencies.getLiveState();
   if (dependencies.getActiveOperationId() !== snapshot.operationId) {
     return { kind: 'handled_failure', typedReason: 'operation_superseded' };
@@ -622,10 +647,123 @@ function failureReasonFromResponse(value: unknown): string {
     : 'invalid_v3_enhance_response';
 }
 
+function terminalReason(value: string): string {
+  return /^[a-z][a-z0-9_]{0,63}$/u.test(value) ? value : 'invalid_v3_enhance_response';
+}
+
+function responseValidation(value: unknown): AggregateValidationResult | null {
+  return isRecord(value) && isRecord(value.validation) && isRecord(value.validation.phases)
+    ? value.validation as unknown as AggregateValidationResult
+    : null;
+}
+
+function responseEvidence(value: unknown): ReturnType<typeof unavailableExperienceV3DiagnosticEvidence> {
+  return isRecord(value) ? parseExperienceV3DiagnosticEvidence(value.diagnosticEvidence)
+    ?? unavailableExperienceV3DiagnosticEvidence()
+    : unavailableExperienceV3DiagnosticEvidence();
+}
+
+function m3Attempts(reason: string, accepted: boolean): {
+  writer: ExperienceV3DiagnosticAttempt; evaluator: ExperienceV3DiagnosticAttempt;
+} {
+  const none: ExperienceV3DiagnosticAttempt = { attempted: false, result: 'not_attempted' };
+  const ok: ExperienceV3DiagnosticAttempt = { attempted: true, result: 'succeeded' };
+  if (accepted || ['candidate_or_validation_mismatch', 'operation_superseded', 'stale_snapshot', 'target_entry_deleted', 'state_write_failed', 'visible_readback_failed', 'rollback_failed', 'persistence_failed', 'usage_increment_failed', 'client_verification_exception'].includes(reason)) return { writer: ok, evaluator: ok };
+  if (reason === 'provider_request_failed') return { writer: { attempted: true, result: 'failed' }, evaluator: none };
+  if (reason === 'provider_output_malformed') return { writer: { attempted: true, result: 'malformed' }, evaluator: none };
+  if (reason === 'structural_validation_failed') return { writer: ok, evaluator: none };
+  if (reason === 'validator_exception') return { writer: ok, evaluator: { attempted: true, result: 'failed' } };
+  if (reason === 'evaluator_output_malformed') return { writer: ok, evaluator: { attempted: true, result: 'malformed' } };
+  if (['validation_rejected', 'materiality_degraded', 'no_material_improvement'].includes(reason)) return { writer: ok, evaluator: ok };
+  return { writer: { attempted: null, result: 'unknown' }, evaluator: { attempted: null, result: 'unknown' } };
+}
+
+function buildM3TerminalDiagnostic(
+  input: ExperienceV3EnhanceAdapterInput,
+  dependencies: ExperienceV3EnhanceAdapterDependencies,
+  result: Exclude<ExperienceV3EnhanceRoutingResult, { kind: 'not_applicable' }>,
+  rawResponse: unknown,
+): ExperienceV3TerminalDiagnostic {
+  const accepted = result.kind === 'handled_success';
+  const reason = terminalReason(accepted ? 'none' : result.typedReason);
+  const evidence = responseEvidence(rawResponse);
+  const validation = responseValidation(rawResponse);
+  const snapshot = (() => { try { return captureExperienceV3EnhanceOperationSnapshot(input); } catch { return null; } })();
+  const entry = input.cv.experience.find((item) => item.id === input.entryId);
+  const routeHttpStatus = (() => { try { const status = dependencies.getRouteHttpStatus?.(); return typeof status === 'number' && Number.isInteger(status) && status >= 100 && status <= 599 ? status : null; } catch { return null; } })();
+  const usageAfter = (() => { try { const count = dependencies.getUsageCount?.(); return Number.isFinite(count) ? Number(count) : input.usageCountBefore + (accepted ? 1 : 0); } catch { return input.usageCountBefore + (accepted ? 1 : 0); } })();
+  const transportFailure = reason === 'provider_request_failed' || reason === 'validator_exception'
+    || (routeHttpStatus !== null && routeHttpStatus >= 500);
+  const materiality = isRecord(rawResponse) && isRecord(rawResponse.materiality) ? rawResponse.materiality : null;
+  const attempts = m3Attempts(reason, accepted);
+  return immutableCopy({
+    schemaVersion: 1 as const,
+    marker: EXPERIENCE_V3_TERMINAL_DIAGNOSTIC_MARKER,
+    revision: EXPERIENCE_V3_TERMINAL_DIAGNOSTIC_REVISION,
+    capturedAt: new Date().toISOString(),
+    operation: EXPERIENCE_V3_ENHANCE_ACTION,
+    requestIdHash: hashExperienceV3EnhanceValue(input.requestId),
+    operationIdHash: hashExperienceV3EnhanceValue(input.operationId),
+    stableEntryIdHash: hashExperienceV3EnhanceValue(input.entryId),
+    requestedLocale: normalizeLocale(input.requestedLocale),
+    uiLocale: normalizeLocale(input.uiLocale),
+    contentLocale: normalizeLocale(input.storedContentLocale),
+    sourceWasEmpty: false,
+    normalizedIndustry: String(input.industry || '').trim().toLowerCase() || 'unknown',
+    normalizedLevel: String(input.level || '').trim().toLowerCase() || 'unknown',
+    employmentState: entry ? (entry.isPresent ? 'present' as const : 'completed' as const) : 'unknown' as const,
+    ownershipResult: 'owned' as const,
+    routeHttpStatus,
+    writer: attempts.writer,
+    evaluator: attempts.evaluator,
+    phases: {
+      structural: validation?.phases.structural?.status ?? 'not_evaluated',
+      semantic: validation?.phases.semantic?.status ?? 'not_evaluated',
+      language_quality: validation?.phases.language_quality?.status ?? 'not_evaluated',
+    },
+    rejectionReasonCodes: accepted ? [] : [reason as ExperienceV3TerminalDiagnostic['rejectionReasonCodes'][number]],
+    finalDecision: accepted ? 'accept' as const : transportFailure ? 'transport_failure' as const : 'reject' as const,
+    applyAuthorized: accepted,
+    applyAttempted: accepted,
+    applyCommitted: accepted,
+    v2FallthroughCount: 0 as const,
+    usageBefore: input.usageCountBefore,
+    usageAfter,
+    usageDelta: usageAfter - input.usageCountBefore,
+    raceGuardResult: ['operation_superseded', 'stale_snapshot', 'target_entry_deleted'].includes(reason) ? 'failed' as const : accepted ? 'passed' as const : 'not_evaluated' as const,
+    sourceCommitMarker: /^[0-9a-f]{7,40}$/u.test(String(process.env.NEXT_PUBLIC_SOURCE_COMMIT_SHORT || '')) ? String(process.env.NEXT_PUBLIC_SOURCE_COMMIT_SHORT).slice(0, 7) : null,
+    buildChannel: String(process.env.NEXT_PUBLIC_BUILD_CHANNEL || '').trim() || null,
+    ...evidence,
+    sourceHash: snapshot?.rawSourceHash ?? hashExperienceV3EnhanceValue(input.exactVisibleDescription),
+    sourceUnitCount: snapshot?.sourceUnits.length ?? extractExperienceV3EnhanceSourceUnits(input.exactVisibleDescription).length,
+    sourceUnitHashes: snapshot?.sourceUnitHashes ?? extractExperienceV3EnhanceSourceUnits(input.exactVisibleDescription).map(hashExperienceV3EnhanceValue),
+    sourceUnitLengths: snapshot?.sourceUnits.map((unit) => unit.length) ?? extractExperienceV3EnhanceSourceUnits(input.exactVisibleDescription).map((unit) => unit.length),
+    materialityStatus: materiality?.status === 'material' || materiality?.status === 'no_op' || materiality?.status === 'degraded' ? materiality.status : 'unknown',
+    materialityKind: typeof materiality?.kind === 'string' ? materiality.kind : null,
+    degradationResult: typeof materiality?.degradationDetected === 'boolean' ? materiality.degradationDetected : null,
+    persistenceResult: accepted ? 'succeeded' as const : 'not_attempted' as const,
+  }) as ExperienceV3TerminalDiagnostic;
+}
+
+function withM3TerminalDiagnostic(
+  input: ExperienceV3EnhanceAdapterInput,
+  dependencies: ExperienceV3EnhanceAdapterDependencies,
+  result: Exclude<ExperienceV3EnhanceRoutingResult, { kind: 'not_applicable' }>,
+  rawResponse: unknown,
+): ExperienceV3EnhanceAdapterResult {
+  const diagnostic = buildM3TerminalDiagnostic(input, dependencies, result, rawResponse);
+  const internalRejectionAudit = result.kind === 'handled_failure' && isRecord(rawResponse)
+    ? parseExperienceV3InternalRejectionAudit(rawResponse.internalRejectionAudit)
+    : null;
+  return result.kind === 'handled_success'
+    ? { kind: 'handled_success', diagnostic }
+    : { kind: 'handled_failure', typedReason: result.typedReason, diagnostic, ...(internalRejectionAudit ? { internalRejectionAudit } : {}) };
+}
+
 export async function runExperienceV3EnhanceAdapter(
   input: ExperienceV3EnhanceAdapterInput,
   dependencies: ExperienceV3EnhanceAdapterDependencies,
-): Promise<ExperienceV3EnhanceRoutingResult> {
+): Promise<ExperienceV3EnhanceAdapterResult> {
   if (classifyExperienceV3EnhanceRouting(input) === 'not_applicable') {
     return { kind: 'not_applicable' };
   }
@@ -633,7 +771,7 @@ export async function runExperienceV3EnhanceAdapter(
   try {
     snapshot = captureExperienceV3EnhanceOperationSnapshot(input);
   } catch (error) {
-    return { kind: 'handled_failure', typedReason: error instanceof Error ? error.message : 'snapshot_capture_failed' };
+    return withM3TerminalDiagnostic(input, dependencies, { kind: 'handled_failure', typedReason: error instanceof Error ? error.message : 'snapshot_capture_failed' }, undefined);
   }
   let rawResponse: unknown;
   try {
@@ -642,19 +780,19 @@ export async function runExperienceV3EnhanceAdapter(
       manifest: snapshot.manifest,
     });
   } catch (error) {
-    return {
+    return withM3TerminalDiagnostic(input, dependencies, {
       kind: 'handled_failure',
       typedReason: error instanceof Error && error.message ? error.message : 'provider_request_failed',
-    };
+    }, undefined);
   }
   const response = parseExperienceV3EnhanceSuccessResponse(rawResponse);
-  if (!response) return { kind: 'handled_failure', typedReason: failureReasonFromResponse(rawResponse) };
+  if (!response) return withM3TerminalDiagnostic(input, dependencies, { kind: 'handled_failure', typedReason: failureReasonFromResponse(rawResponse) }, rawResponse);
   try {
     if (!responseMatchesExperienceV3EnhanceSnapshot(response, snapshot)) {
-      return { kind: 'handled_failure', typedReason: 'candidate_or_validation_mismatch' };
+      return withM3TerminalDiagnostic(input, dependencies, { kind: 'handled_failure', typedReason: 'candidate_or_validation_mismatch' }, rawResponse);
     }
-    return applyExperienceV3EnhanceTransaction(snapshot, response, dependencies);
+    return withM3TerminalDiagnostic(input, dependencies, applyExperienceV3EnhanceTransaction(snapshot, response, dependencies), rawResponse);
   } catch {
-    return { kind: 'handled_failure', typedReason: 'client_verification_exception' };
+    return withM3TerminalDiagnostic(input, dependencies, { kind: 'handled_failure', typedReason: 'client_verification_exception' }, rawResponse);
   }
 }

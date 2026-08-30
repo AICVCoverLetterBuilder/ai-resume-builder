@@ -11,6 +11,12 @@ import {
   type ExperienceV3EnhanceResponse,
 } from './experience-enhance';
 import { immutableCopy } from './immutability';
+import { INTERNAL_AI_RESET_ENABLED } from '../build-channel';
+import {
+  unavailableExperienceV3DiagnosticEvidence,
+  type ExperienceV3DiagnosticEvidence,
+  type ExperienceV3InternalRejectionAudit,
+} from './experience-generate';
 import {
   runAiCoreV3Validation,
   validateStructuralPhase,
@@ -61,13 +67,89 @@ function exactKeys(value: Record<string, unknown>, required: readonly string[], 
 function failure(
   typedReason: string,
   validation?: AggregateValidationResult,
+  diagnosticEvidence: ExperienceV3DiagnosticEvidence = unavailableExperienceV3DiagnosticEvidence(),
+  internalRejectionAudit?: ExperienceV3InternalRejectionAudit,
 ): ExperienceV3EnhanceResponse {
   return immutableCopy({
     ok: false as const,
     action: EXPERIENCE_V3_ENHANCE_ACTION,
     typedReason,
     ...(validation ? { validation } : {}),
+    diagnosticEvidence,
+    ...(internalRejectionAudit ? { internalRejectionAudit } : {}),
   }) as ExperienceV3EnhanceResponse;
+}
+
+function diagnosticEvidence(
+  candidate: AiCoreV3CandidateEnvelope | null,
+  validation?: AggregateValidationResult,
+): ExperienceV3DiagnosticEvidence {
+  const semantic = validation?.phases.semantic?.violations ?? [];
+  const language = validation?.phases.language_quality?.violations ?? [];
+  const hashIds = (items: readonly AiCoreV3Violation[], key: 'factIds' | 'entryIds') => Object.fromEntries(
+    items.map((item) => [item.code, (item[key] ?? []).map(hashExperienceV3EnhanceValue)]),
+  );
+  const units = candidate?.units ?? [];
+  return immutableCopy({
+    candidatePresent: candidate !== null,
+    candidateHash: candidate ? hashExperienceV3EnhanceValue(candidate.text) : null,
+    candidateUnitCount: candidate ? units.length : null,
+    candidateUnitHashes: candidate ? units.map((unit) => hashExperienceV3EnhanceValue(unit.text)) : [],
+    candidateUnitLengths: candidate ? units.map((unit) => unit.text.length) : [],
+    evaluatorStopReason: null,
+    evaluatorContentBlockCount: null,
+    evaluatorTextBlockCount: null,
+    evaluatorToolBlockCount: null,
+    evaluatorExpectedToolCount: null,
+    evaluatorToolNameMatched: null,
+    evaluatorToolInputObject: null,
+    evaluatorToolInputSchemaPassed: null,
+    evaluatorIdentityPassed: null,
+    semanticViolationCount: validation ? semantic.length : null,
+    semanticViolationCodes: semantic.map((item) => item.code),
+    languageQualityViolationCount: validation ? language.length : null,
+    languageQualityViolationCodes: language.map((item) => item.code),
+    violationFactIdHashesByCode: hashIds([...semantic, ...language], 'factIds'),
+    violationEntryIdHashesByCode: hashIds([...semantic, ...language], 'entryIds'),
+    primaryValidationRejectionCode: semantic[0]?.code ?? language[0]?.code ?? null,
+  }) as ExperienceV3DiagnosticEvidence;
+}
+
+function internalRejectionAudit(
+  manifest: ExperienceFactManifest,
+  candidate: AiCoreV3CandidateEnvelope,
+  validation?: AggregateValidationResult,
+): ExperienceV3InternalRejectionAudit | undefined {
+  if (!INTERNAL_AI_RESET_ENABLED) return undefined;
+  return immutableCopy({
+    operationId: manifest.operationId,
+    entryId: manifest.entryId,
+    snapshotHash: manifest.snapshotHash,
+    locale: manifest.locale,
+    sourceUnits: manifest.facts.map((fact) => fact.text),
+    candidate: {
+      candidateId: candidate.candidateId,
+      units: (candidate.units ?? []).map((unit) => ({ unitId: unit.unitId, entryId: unit.entryId, text: unit.text })),
+    },
+    phases: {
+      structural: validation?.phases.structural?.status ?? 'not_evaluated',
+      semantic: validation?.phases.semantic?.status ?? 'not_evaluated',
+      language_quality: validation?.phases.language_quality?.status ?? 'not_evaluated',
+    },
+    evaluator: {
+      evaluatorStopReason: null,
+      evaluatorContentBlockCount: null,
+      evaluatorTextBlockCount: null,
+      evaluatorToolBlockCount: null,
+      evaluatorExpectedToolCount: null,
+      evaluatorToolNameMatched: null,
+      evaluatorToolInputObject: null,
+      evaluatorToolInputSchemaPassed: null,
+      evaluatorIdentityPassed: null,
+      semanticViolations: validation?.phases.semantic?.violations ?? [],
+      languageQualityViolations: validation?.phases.language_quality?.violations ?? [],
+    },
+  }) as ExperienceV3InternalRejectionAudit;
 }
 
 function parseDate(value: unknown): { readonly year: number; readonly month?: number; readonly day?: number } | null {
@@ -427,36 +509,39 @@ export async function executeExperienceV3EnhanceServer(
       status: 'not_evaluated',
       violations: [],
     });
-    return failure('structural_validation_failed', aggregate(
+    const validation = aggregate(
       manifest,
       candidate,
       structural,
       notEvaluated('semantic'),
       notEvaluated('language_quality'),
-    ));
+    );
+    return failure('structural_validation_failed', validation, diagnosticEvidence(candidate, validation), internalRejectionAudit(manifest, candidate, validation));
   }
   let evaluatorRaw: string;
   try {
     evaluatorRaw = await transports.evaluate(buildExperienceV3EnhanceEvaluatorPrompt(manifest, candidate));
   } catch {
-    return failure('validator_exception');
+    return failure('validator_exception', undefined, diagnosticEvidence(candidate), internalRejectionAudit(manifest, candidate));
   }
   const evaluator = parseExperienceV3EnhanceEvaluatorOutput(evaluatorRaw, manifest);
-  if (!evaluator) return failure('evaluator_output_malformed');
+  if (!evaluator) return failure('evaluator_output_malformed', undefined, diagnosticEvidence(candidate), internalRejectionAudit(manifest, candidate));
   const semantic = immutableCopy({ category: 'semantic' as const, ...evaluator.phases.semantic }) as ValidationPhaseResult;
   const languageQuality = immutableCopy({
     category: 'language_quality' as const,
     ...evaluator.phases.language_quality,
   }) as ValidationPhaseResult;
   const validation = aggregate(manifest, candidate, structural, semantic, languageQuality);
-  if (validation.decision !== 'accept') return failure('validation_rejected', validation);
+  const evidence = diagnosticEvidence(candidate, validation);
+  const audit = internalRejectionAudit(manifest, candidate, validation);
+  if (validation.decision !== 'accept') return failure('validation_rejected', validation, evidence, audit);
   if (evaluator.materiality.status === 'degraded' || evaluator.materiality.degradationDetected) {
-    return failure('materiality_degraded', validation);
+    return failure('materiality_degraded', validation, evidence, audit);
   }
   if (evaluator.materiality.status !== 'material'
     || evaluator.materiality.sourceEquivalent
     || materialityIsCosmeticOnly(manifest, providerOutput, evaluator.materiality)) {
-    return failure('no_material_improvement', validation);
+    return failure('no_material_improvement', validation, evidence, audit);
   }
   const materiality = immutableCopy({
     status: 'material' as const,
@@ -471,5 +556,6 @@ export async function executeExperienceV3EnhanceServer(
     candidate,
     validation,
     materiality,
+    diagnosticEvidence: evidence,
   }) as ExperienceV3EnhanceResponse;
 }

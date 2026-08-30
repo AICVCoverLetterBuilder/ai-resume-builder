@@ -2010,6 +2010,7 @@ export default function CVBuilderPage() {
     // M3: non-empty, same-locale Experience Enhance is a separate owned V3
     // operation. Disabled, empty, or cross-locale requests remain on their
     // existing M2/V2 paths. An owned failure is terminal and never invokes V2.
+    let experienceV3EnhanceRouteHttpStatus: number | null = null;
     const experienceV3EnhanceResult = experienceV3Enabled
       ? await runExperienceV3EnhanceAdapter({
         enabled: true,
@@ -2032,7 +2033,7 @@ export default function CVBuilderPage() {
         usageCountBefore: countBefore,
       }, {
         request: async ({ manifest }) => {
-          const { data } = await apiFetch<unknown>('/api/generate', {
+          const { data, response } = await apiFetch<unknown>('/api/generate', {
             body: {
               action: EXPERIENCE_V3_ENHANCE_ACTION,
               proToken,
@@ -2041,6 +2042,7 @@ export default function CVBuilderPage() {
             },
             signal: controller.signal,
           });
+          experienceV3EnhanceRouteHttpStatus = response.status;
           return data;
         },
         getLiveState: () => ({
@@ -2062,6 +2064,8 @@ export default function CVBuilderPage() {
         },
         persistCv: persistCurrentCvTransactionally,
         incrementUsage: recordProAiSuccess,
+        getUsageCount: getProAiUsageCount,
+        getRouteHttpStatus: () => experienceV3EnhanceRouteHttpStatus,
       })
       : { kind: 'not_applicable' as const };
     if (experienceV3EnhanceResult.kind !== 'not_applicable') {
@@ -2078,14 +2082,15 @@ export default function CVBuilderPage() {
         responseSource: experienceV3EnhanceResult.kind === 'handled_success' ? 'provider' : 'blocked',
       });
       setGeneratingBulletsId(null);
-      if (experienceV3EnhanceResult.kind === 'handled_success') {
-        toast.success(t.cv.bulletsSuccess);
-      } else {
-        if (process.env.NODE_ENV !== 'production') {
-          console.info('[ExperienceV3EnhanceRejected]', experienceV3EnhanceResult.typedReason);
-        }
-        toast.error(aiErrorMessage('generation_validation_failed', locale));
-      }
+      routeExperienceV3PageTerminal(experienceV3EnhanceResult, {
+        onSuccess: () => toast.success(t.cv.bulletsSuccess),
+        onFailure: (typedReason) => {
+          if (process.env.NODE_ENV !== 'production') {
+            console.info('[ExperienceV3EnhanceRejected]', typedReason);
+          }
+          toast.error(aiErrorMessage('generation_validation_failed', locale));
+        },
+      });
       return;
     }
 

@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "marker": "M3_AAB536_TERMINAL_OBSERVATION",
+  "deploymentId": "dpl_AznHBbdPiDui55naEBC6SmrsS8G2",
+  "sourceCommitMarker": "fc0ac6b",
+  "observedAtUtcWindow": "2026-08-30T09:46:00Z/2026-08-30T09:50:59Z",
+  "operation": "experience_v3_enhance",
+  "requestedLocale": "de",
+  "sourceWasEmpty": false,
+  "sourceUnitCount": 3,
+  "routePath": "/api/generate",
+  "routeHttpStatus": 502,
+  "visibleSourceChanged": false,
+  "usageDelta": 0,
+  "diagnosticRecordPresent": false,
+  "classification": "m3_owned_no_terminal_diagnostic_producer"
+}

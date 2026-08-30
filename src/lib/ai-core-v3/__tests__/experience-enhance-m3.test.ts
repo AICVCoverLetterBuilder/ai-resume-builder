@@ -652,4 +652,66 @@ describe('M3 E. race, apply, rollback, and usage', () => {
   });
 });
 
+describe('M3 terminal observability', () => {
+  it('publishes a safe terminal diagnostic for an owned transport failure', async () => {
+    const run = await runHarness({ server: { writerThrows: true } });
+    expect(run.result.kind).toBe('handled_failure');
+    if (run.result.kind === 'handled_failure') {
+      expect(run.result.diagnostic).toMatchObject({
+        operation: 'experience_v3_enhance',
+        sourceWasEmpty: false,
+        routeHttpStatus: null,
+        writer: { attempted: true, result: 'failed' },
+        evaluator: { attempted: false, result: 'not_attempted' },
+        applyAuthorized: false,
+        applyCommitted: false,
+        usageBefore: 9,
+        usageAfter: 9,
+        usageDelta: 0,
+        v2FallthroughCount: 0,
+        sourceUnitCount: 2,
+      });
+      expect(JSON.stringify(run.result.diagnostic)).not.toContain(SOURCE);
+    }
+  });
+
+  it('publishes authoritative post-increment usage before reporting M3 success', async () => {
+    const run = await runHarness();
+    expect(run.result.kind).toBe('handled_success');
+    if (run.result.kind === 'handled_success') {
+      expect(run.result.diagnostic).toMatchObject({
+        operation: 'experience_v3_enhance',
+        usageBefore: 9,
+        usageAfter: 10,
+        usageDelta: 1,
+        applyAuthorized: true,
+        applyCommitted: true,
+        persistenceResult: 'succeeded',
+        v2FallthroughCount: 0,
+      });
+    }
+  });
+
+  it('persists the M3 terminal record before the failure callback and keeps CV text out of generic diagnostics', async () => {
+    const diagnostics = await import('../../cv-experience-ai-diagnostics');
+    diagnostics.clearExperienceAiDiagnosticsForTests();
+    const run = await runHarness({ server: { writerThrows: true } });
+    expect(run.result.kind).toBe('handled_failure');
+    const callbacks: string[] = [];
+    diagnostics.routeExperienceV3PageTerminal(run.result, {
+      onSuccess: () => callbacks.push('success'),
+      onFailure: () => {
+        callbacks.push('failure');
+        expect(diagnostics.getLatestExperienceAiDiagnosticRecord()?.operation).toBe('experience_v3_enhance');
+      },
+    });
+    const copied = diagnostics.formatExperienceAiDiagnosticForCopy(
+      diagnostics.getLatestExperienceAiDiagnosticRecord()!,
+    );
+    expect(callbacks).toEqual(['failure']);
+    expect(copied).not.toContain(SOURCE);
+    diagnostics.clearExperienceAiDiagnosticsForTests();
+  });
+});
+
 expect(EXPERIENCE_V3_ENHANCE_ACTION).toBe('experience_v3_enhance');

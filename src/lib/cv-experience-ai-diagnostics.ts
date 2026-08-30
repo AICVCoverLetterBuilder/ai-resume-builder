@@ -13,6 +13,7 @@ import type {
   ExperienceV3InternalRejectionAudit,
   ExperienceV3TerminalDiagnostic,
 } from './ai-core-v3/experience-generate';
+import type { ExperienceV3EnhanceAdapterResult } from './ai-core-v3/experience-enhance';
 import { fingerprintText, resolveAppVersionInfo, resolveNextBuildId } from './cv-export-diagnostics';
 import { extractSourceDutyUnits, sourceFactIdentitiesFromDescription } from './cv-source-fact-identity';
 import { splitExperienceBullets } from './cv-canonical-facts';
@@ -3774,7 +3775,7 @@ export function isExperienceV3TerminalDiagnostic(
   return record.schemaVersion === 1
     && record.marker === 'EXPERIENCE_V3_TERMINAL_DIAGNOSTIC'
     && record.revision === 'experience-v3-terminal-diagnostic-v1'
-    && record.operation === 'experience_v3_generate'
+    && (record.operation === 'experience_v3_generate' || record.operation === 'experience_v3_enhance')
     && typeof record.capturedAt === 'string'
     && typeof record.requestIdHash === 'string'
     && typeof record.stableEntryIdHash === 'string'
@@ -3919,7 +3920,7 @@ export async function copyExperienceV3InternalRejectionAuditToClipboard(
 
 /** Actual page-terminal seam: persist first, then emit exactly one terminal toast callback. */
 export function routeExperienceV3PageTerminal(
-  result: ExperienceV3AdapterResult,
+  result: ExperienceV3AdapterResult | ExperienceV3EnhanceAdapterResult,
   callbacks: {
     readonly onSuccess: () => void;
     readonly onFailure: (typedReason: string) => void;

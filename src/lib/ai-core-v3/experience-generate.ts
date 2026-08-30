@@ -52,6 +52,12 @@ export const EXPERIENCE_V3_TERMINAL_REASON_CODES = [
   'usage_increment_failed',
   'client_verification_exception',
   'transport_or_request_failure',
+  'invalid_v3_enhance_response',
+  'validator_exception',
+  'materiality_degraded',
+  'no_material_improvement',
+  'state_write_failed',
+  'operation_superseded',
 ] as const;
 
 export type ExperienceV3TerminalReasonCode = (typeof EXPERIENCE_V3_TERMINAL_REASON_CODES)[number];
@@ -103,6 +109,8 @@ export interface ExperienceV3InternalRejectionAudit {
   readonly entryId: string;
   readonly snapshotHash: string;
   readonly locale: string;
+  /** Present for M3 only; remains session-memory-only and is never persisted. */
+  readonly sourceUnits?: readonly string[];
   readonly candidate: Readonly<{
     readonly candidateId: string;
     readonly units: readonly Readonly<{
@@ -123,7 +131,7 @@ export interface ExperienceV3TerminalDiagnostic {
   readonly marker: typeof EXPERIENCE_V3_TERMINAL_DIAGNOSTIC_MARKER;
   readonly revision: typeof EXPERIENCE_V3_TERMINAL_DIAGNOSTIC_REVISION;
   readonly capturedAt: string;
-  readonly operation: typeof EXPERIENCE_V3_GENERATE_ACTION;
+  readonly operation: typeof EXPERIENCE_V3_GENERATE_ACTION | 'experience_v3_enhance';
   readonly requestIdHash: string;
   readonly operationIdHash: string;
   readonly stableEntryIdHash: string;
@@ -172,6 +180,15 @@ export interface ExperienceV3TerminalDiagnostic {
   readonly violationFactIdHashesByCode: Readonly<Record<string, readonly string[]>>;
   readonly violationEntryIdHashesByCode: Readonly<Record<string, readonly string[]>>;
   readonly primaryValidationRejectionCode: string | null;
+  /** M3-only source-safe terminal metadata. */
+  readonly sourceHash?: string;
+  readonly sourceUnitCount?: number;
+  readonly sourceUnitHashes?: readonly string[];
+  readonly sourceUnitLengths?: readonly number[];
+  readonly materialityStatus?: 'material' | 'no_op' | 'degraded' | 'unknown';
+  readonly materialityKind?: string | null;
+  readonly degradationResult?: boolean | null;
+  readonly persistenceResult?: 'succeeded' | 'failed' | 'not_attempted' | 'unknown';
 }
 
 export type ExperienceV3RoutingResult =
@@ -467,7 +484,7 @@ function isFiniteDiagnosticCount(value: unknown): value is number {
 }
 
 function isDiagnosticHash(value: unknown): value is string {
-  return typeof value === 'string' && /^v3-[0-9a-f]{8}$/u.test(value);
+  return typeof value === 'string' && /^v3e?-[0-9a-f]{8}$/u.test(value);
 }
 
 function isSafeDiagnosticCode(value: unknown): value is string {
@@ -675,6 +692,11 @@ export function parseExperienceV3InternalRejectionAudit(
       || typeof unit.text !== 'string') return null;
     return immutableCopy({ unitId: unit.unitId, entryId: unit.entryId, text: unit.text });
   });
+  const sourceUnits = value.sourceUnits === undefined
+    ? undefined
+    : Array.isArray(value.sourceUnits) && value.sourceUnits.every((unit) => typeof unit === 'string')
+      ? value.sourceUnits as string[]
+      : null;
   const structural = parseInternalPhaseStatus(value.phases.structural);
   const semantic = parseInternalPhaseStatus(value.phases.semantic);
   const languageQuality = parseInternalPhaseStatus(value.phases.language_quality);
@@ -710,12 +732,14 @@ export function parseExperienceV3InternalRejectionAudit(
     || !languageQualityViolations
     || languageQualityViolations.some((violation) => violation === null)
     || !evaluatorMetadata
+    || sourceUnits === null
   ) return null;
   return immutableCopy({
     operationId: value.operationId,
     entryId: value.entryId,
     snapshotHash: value.snapshotHash,
     locale: value.locale,
+    ...(sourceUnits ? { sourceUnits } : {}),
     candidate: {
       candidateId: value.candidate.candidateId,
       units,
