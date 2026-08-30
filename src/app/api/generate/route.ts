@@ -86,6 +86,7 @@ import {
   executeExperienceV3EnhanceServer,
   executeExperienceV3GenerateServer,
   executeSummaryV3GenerateServer,
+  createExperienceV3EnhanceWriterTransportError,
   isAiCoreV3Enabled,
 } from '@/lib/ai-core-v3';
 import type { ExperienceV3GenerateFailureResponse } from '@/lib/ai-core-v3/experience-generate';
@@ -2555,15 +2556,41 @@ ${sourceFactsText || '(none)'}`
         }, { status: 409 });
       }
       const result = await executeExperienceV3EnhanceServer(params, {
-        generate: async (prompt) => getForcedToolResponse(await callWithRetry({
-          model: MODEL,
-          max_tokens: 1200,
-          temperature: 0,
-          system: 'You are the single AI Core V3 Experience Enhance prose writer. Invoke only the submit_experience_enhancement tool and preserve every required fact.',
-          tools: [EXPERIENCE_V3_ENHANCE_WRITER_TOOL],
-          tool_choice: { type: 'tool', name: EXPERIENCE_V3_ENHANCE_WRITER_TOOL_NAME, disable_parallel_tool_use: true },
-          messages: [{ role: 'user', content: prompt }],
-        }, deadlineAt, undefined, AI_PROVIDER_CALL_TIMEOUT_MS, 'provider', undefined, false)),
+        generate: async (prompt) => {
+          let request: Parameters<Anthropic['messages']['create']>[0];
+          try {
+            request = {
+              model: MODEL,
+              max_tokens: 1200,
+              temperature: 0,
+              system: 'You are the single AI Core V3 Experience Enhance prose writer. Invoke only the submit_experience_enhancement tool and preserve every required fact.',
+              tools: [EXPERIENCE_V3_ENHANCE_WRITER_TOOL],
+              tool_choice: { type: 'tool', name: EXPERIENCE_V3_ENHANCE_WRITER_TOOL_NAME, disable_parallel_tool_use: true },
+              messages: [{ role: 'user', content: prompt }],
+            };
+          } catch (error) {
+            throw createExperienceV3EnhanceWriterTransportError(error, 'request_construction');
+          }
+          let response: Anthropic.Messages.Message;
+          try {
+            response = await callWithRetry(
+              request,
+              deadlineAt,
+              undefined,
+              AI_PROVIDER_CALL_TIMEOUT_MS,
+              'provider',
+              undefined,
+              false,
+            );
+          } catch (error) {
+            throw createExperienceV3EnhanceWriterTransportError(error);
+          }
+          try {
+            return getForcedToolResponse(response);
+          } catch (error) {
+            throw createExperienceV3EnhanceWriterTransportError(error, 'response_extraction');
+          }
+        },
         evaluate: async (prompt) => getForcedEvaluatorResponse(await callWithRetry({
           model: MODEL,
           max_tokens: 1200,

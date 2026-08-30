@@ -76,6 +76,53 @@ export type ExperienceV3DiagnosticAttempt = {
 };
 
 /**
+ * Finite, release-safe metadata for an M3 writer transport failure. These
+ * fields are observational only: they never participate in routing, apply,
+ * persistence, usage, or rollback decisions.
+ */
+export type ExperienceV3ProviderFailureStage =
+  | 'request_construction'
+  | 'sdk_request'
+  | 'provider_response'
+  | 'response_extraction'
+  | 'unknown';
+
+export type ExperienceV3ProviderErrorType =
+  | 'invalid_request'
+  | 'authentication'
+  | 'permission'
+  | 'rate_limit'
+  | 'provider_5xx'
+  | 'timeout'
+  | 'connection/network'
+  | 'response_extraction'
+  | 'unknown';
+
+export type ExperienceV3ProviderErrorClass =
+  | 'APIError'
+  | 'APIUserAbortError'
+  | 'APIConnectionError'
+  | 'APIConnectionTimeoutError'
+  | 'BadRequestError'
+  | 'AuthenticationError'
+  | 'PermissionDeniedError'
+  | 'RateLimitError'
+  | 'InternalServerError'
+  | 'Error';
+
+export interface ExperienceV3ProviderFailureEvidence {
+  readonly providerFailureStage: ExperienceV3ProviderFailureStage;
+  readonly providerErrorClass: ExperienceV3ProviderErrorClass | null;
+  readonly providerHttpStatus: number | null;
+  readonly providerErrorType: ExperienceV3ProviderErrorType | null;
+  readonly providerErrorCode: string | null;
+  readonly providerRequestIdHash: string | null;
+  readonly providerRetryable: boolean | null;
+  readonly providerMessageFingerprint: string | null;
+  readonly providerStructuralFieldPath: string | null;
+}
+
+/**
  * Transport facts that are safe to retain in the normal non-PII terminal
  * record. They deliberately exclude tool input, provider output, and prose.
  */
@@ -115,6 +162,16 @@ export interface ExperienceV3DiagnosticEvidence extends ExperienceV3EvaluatorDia
   readonly writerToolInputObject?: boolean | null;
   readonly writerToolInputSchemaPassed?: boolean | null;
   readonly writerIdentityPassed?: boolean | null;
+  /** M3 writer transport-failure metadata; absent on success and legacy M2 responses. */
+  readonly providerFailureStage?: ExperienceV3ProviderFailureStage;
+  readonly providerErrorClass?: ExperienceV3ProviderErrorClass | null;
+  readonly providerHttpStatus?: number | null;
+  readonly providerErrorType?: ExperienceV3ProviderErrorType | null;
+  readonly providerErrorCode?: string | null;
+  readonly providerRequestIdHash?: string | null;
+  readonly providerRetryable?: boolean | null;
+  readonly providerMessageFingerprint?: string | null;
+  readonly providerStructuralFieldPath?: string | null;
 }
 
 /**
@@ -200,6 +257,15 @@ export interface ExperienceV3TerminalDiagnostic {
   readonly writerToolInputObject?: boolean | null;
   readonly writerToolInputSchemaPassed?: boolean | null;
   readonly writerIdentityPassed?: boolean | null;
+  readonly providerFailureStage?: ExperienceV3ProviderFailureStage;
+  readonly providerErrorClass?: ExperienceV3ProviderErrorClass | null;
+  readonly providerHttpStatus?: number | null;
+  readonly providerErrorType?: ExperienceV3ProviderErrorType | null;
+  readonly providerErrorCode?: string | null;
+  readonly providerRequestIdHash?: string | null;
+  readonly providerRetryable?: boolean | null;
+  readonly providerMessageFingerprint?: string | null;
+  readonly providerStructuralFieldPath?: string | null;
   readonly semanticViolationCount: number | null;
   readonly semanticViolationCodes: readonly string[];
   readonly languageQualityViolationCount: number | null;
@@ -578,6 +644,47 @@ function parseNullableString(value: unknown): string | null | undefined {
     : undefined;
 }
 
+const EXPERIENCE_V3_PROVIDER_FAILURE_STAGES: readonly ExperienceV3ProviderFailureStage[] = [
+  'request_construction', 'sdk_request', 'provider_response', 'response_extraction', 'unknown',
+];
+
+const EXPERIENCE_V3_PROVIDER_ERROR_TYPES: readonly ExperienceV3ProviderErrorType[] = [
+  'invalid_request', 'authentication', 'permission', 'rate_limit', 'provider_5xx',
+  'timeout', 'connection/network', 'response_extraction', 'unknown',
+];
+
+const EXPERIENCE_V3_PROVIDER_ERROR_CLASSES: readonly ExperienceV3ProviderErrorClass[] = [
+  'APIError', 'APIUserAbortError', 'APIConnectionError', 'APIConnectionTimeoutError',
+  'BadRequestError', 'AuthenticationError', 'PermissionDeniedError', 'RateLimitError',
+  'InternalServerError', 'Error',
+];
+
+function parseProviderFailureStage(value: unknown): ExperienceV3ProviderFailureStage | undefined {
+  return typeof value === 'string' && EXPERIENCE_V3_PROVIDER_FAILURE_STAGES.includes(value as ExperienceV3ProviderFailureStage)
+    ? value as ExperienceV3ProviderFailureStage
+    : undefined;
+}
+
+function parseProviderErrorType(value: unknown): ExperienceV3ProviderErrorType | null | undefined {
+  return value === null
+    || (typeof value === 'string' && EXPERIENCE_V3_PROVIDER_ERROR_TYPES.includes(value as ExperienceV3ProviderErrorType))
+    ? value as ExperienceV3ProviderErrorType | null
+    : undefined;
+}
+
+function parseProviderErrorClass(value: unknown): ExperienceV3ProviderErrorClass | null | undefined {
+  return value === null
+    || (typeof value === 'string' && EXPERIENCE_V3_PROVIDER_ERROR_CLASSES.includes(value as ExperienceV3ProviderErrorClass))
+    ? value as ExperienceV3ProviderErrorClass | null
+    : undefined;
+}
+
+function parseProviderErrorCode(value: unknown): string | null | undefined {
+  return value === null || (typeof value === 'string' && /^[a-z][a-z0-9_.-]{0,63}$/u.test(value))
+    ? value
+    : undefined;
+}
+
 /** Reject malformed diagnostic evidence instead of allowing it to alter a terminal trace. */
 export function parseExperienceV3DiagnosticEvidence(
   value: unknown,
@@ -610,6 +717,36 @@ export function parseExperienceV3DiagnosticEvidence(
     'writerStopReason', 'writerContentBlockCount', 'writerTextBlockCount', 'writerToolBlockCount',
     'writerExpectedToolCount', 'writerToolNameMatched', 'writerToolInputObject',
     'writerToolInputSchemaPassed', 'writerIdentityPassed',
+  ].some((key) => Object.prototype.hasOwnProperty.call(value, key));
+  const providerFailureStage = value.providerFailureStage === undefined ? undefined : parseProviderFailureStage(value.providerFailureStage);
+  const providerErrorClass = value.providerErrorClass === undefined ? null : parseProviderErrorClass(value.providerErrorClass);
+  const providerHttpStatus = value.providerHttpStatus === undefined
+    ? null
+    : value.providerHttpStatus === null || (Number.isInteger(value.providerHttpStatus) && Number(value.providerHttpStatus) >= 100 && Number(value.providerHttpStatus) <= 599)
+      ? value.providerHttpStatus as number | null
+      : undefined;
+  const providerErrorType = value.providerErrorType === undefined ? null : parseProviderErrorType(value.providerErrorType);
+  const providerErrorCode = value.providerErrorCode === undefined ? null : parseProviderErrorCode(value.providerErrorCode);
+  const providerRequestIdHash = value.providerRequestIdHash === undefined
+    ? null
+    : value.providerRequestIdHash === null || isDiagnosticHash(value.providerRequestIdHash)
+      ? value.providerRequestIdHash as string | null
+      : undefined;
+  const providerRetryable = value.providerRetryable === undefined ? null : parseNullableBoolean(value.providerRetryable);
+  const providerMessageFingerprint = value.providerMessageFingerprint === undefined
+    ? null
+    : value.providerMessageFingerprint === null || isDiagnosticHash(value.providerMessageFingerprint)
+      ? value.providerMessageFingerprint as string | null
+      : undefined;
+  const providerStructuralFieldPath = value.providerStructuralFieldPath === undefined
+    ? null
+    : value.providerStructuralFieldPath === null || (typeof value.providerStructuralFieldPath === 'string' && /^[a-z][a-z0-9_.-]{0,127}$/u.test(value.providerStructuralFieldPath))
+      ? value.providerStructuralFieldPath as string | null
+      : undefined;
+  const providerFailureMetadataPresent = [
+    'providerFailureStage', 'providerErrorClass', 'providerHttpStatus', 'providerErrorType',
+    'providerErrorCode', 'providerRequestIdHash', 'providerRetryable',
+    'providerMessageFingerprint', 'providerStructuralFieldPath',
   ].some((key) => Object.prototype.hasOwnProperty.call(value, key));
   const semanticViolationCount = parseNullableCount(value.semanticViolationCount);
   const semanticViolationCodes = parseSafeDiagnosticCodeArray(value.semanticViolationCodes);
@@ -647,6 +784,17 @@ export function parseExperienceV3DiagnosticEvidence(
     || writerToolInputObject === undefined
     || writerToolInputSchemaPassed === undefined
     || writerIdentityPassed === undefined
+    || (providerFailureMetadataPresent && (
+      providerFailureStage === undefined
+      || providerErrorClass === undefined
+      || providerHttpStatus === undefined
+      || providerErrorType === undefined
+      || providerErrorCode === undefined
+      || providerRequestIdHash === undefined
+      || providerRetryable === undefined
+      || providerMessageFingerprint === undefined
+      || providerStructuralFieldPath === undefined
+    ))
     || semanticViolationCount === undefined
     || !semanticViolationCodes
     || languageQualityViolationCount === undefined
@@ -695,6 +843,17 @@ export function parseExperienceV3DiagnosticEvidence(
       writerToolInputObject,
       writerToolInputSchemaPassed,
       writerIdentityPassed,
+    } : {}),
+    ...(providerFailureMetadataPresent ? {
+      providerFailureStage,
+      providerErrorClass,
+      providerHttpStatus,
+      providerErrorType,
+      providerErrorCode,
+      providerRequestIdHash,
+      providerRetryable,
+      providerMessageFingerprint,
+      providerStructuralFieldPath,
     } : {}),
     semanticViolationCount,
     semanticViolationCodes,

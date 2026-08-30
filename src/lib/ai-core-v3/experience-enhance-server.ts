@@ -15,6 +15,10 @@ import { immutableCopy } from './immutability';
 import { INTERNAL_AI_RESET_ENABLED } from '../build-channel';
 import {
   unavailableExperienceV3DiagnosticEvidence,
+  type ExperienceV3ProviderErrorClass,
+  type ExperienceV3ProviderErrorType,
+  type ExperienceV3ProviderFailureEvidence,
+  type ExperienceV3ProviderFailureStage,
   type ExperienceV3DiagnosticEvidence,
   type ExperienceV3InternalRejectionAudit,
 } from './experience-generate';
@@ -29,6 +33,136 @@ import {
 export interface ExperienceV3EnhanceTransportSet {
   readonly generate: (prompt: string) => Promise<ExperienceV3EnhanceWriterResponse>;
   readonly evaluate: (prompt: string) => Promise<ExperienceV3EnhanceEvaluatorResponse>;
+}
+
+const SAFE_PROVIDER_ERROR_CODES = new Set([
+  'invalid_request', 'invalid_request_error', 'invalid_param', 'invalid_api_key',
+  'authentication_error', 'permission_denied', 'permission_error', 'rate_limit',
+  'rate_limit_error', 'overloaded', 'overloaded_error', 'internal_server_error',
+  'model_not_found', 'billing_error', 'quota_exceeded', 'timeout', 'connection_error',
+]);
+
+function safeProviderErrorCode(value: unknown): string | null {
+  return typeof value === 'string'
+    && /^[a-z][a-z0-9_.-]{0,63}$/u.test(value)
+    && SAFE_PROVIDER_ERROR_CODES.has(value)
+    ? value
+    : null;
+}
+
+function providerErrorClass(error: unknown): ExperienceV3ProviderErrorClass | null {
+  const className = error && typeof error === 'object' && error.constructor && typeof error.constructor === 'function'
+    ? error.constructor.name
+    : error instanceof Error ? 'Error' : null;
+  if (className === 'APIConnectionTimeoutError') return 'APIConnectionTimeoutError';
+  if (className === 'APIUserAbortError') return 'APIUserAbortError';
+  if (className === 'APIConnectionError') return 'APIConnectionError';
+  if (className === 'BadRequestError') return 'BadRequestError';
+  if (className === 'AuthenticationError') return 'AuthenticationError';
+  if (className === 'PermissionDeniedError') return 'PermissionDeniedError';
+  if (className === 'RateLimitError') return 'RateLimitError';
+  if (className === 'InternalServerError') return 'InternalServerError';
+  if (className === 'APIError') return 'APIError';
+  if (className === 'Error') return 'Error';
+  return null;
+}
+
+function providerStatus(error: unknown): number | null {
+  if (!error || typeof error !== 'object') return null;
+  const status = (error as Record<string, unknown>).status;
+  return Number.isInteger(status) && Number(status) >= 100 && Number(status) <= 599
+    ? Number(status)
+    : null;
+}
+
+function errorClassName(error: unknown): string | null {
+  return error && typeof error === 'object' && error.constructor && typeof error.constructor === 'function'
+    ? error.constructor.name
+    : error instanceof Error ? 'Error' : null;
+}
+
+function providerType(
+  error: unknown,
+  status: number | null,
+  stage: ExperienceV3ProviderFailureStage,
+): ExperienceV3ProviderErrorType {
+  if (stage === 'response_extraction') return 'response_extraction';
+  if (status === 400) return 'invalid_request';
+  if (status === 401) return 'authentication';
+  if (status === 403) return 'permission';
+  if (status === 429) return 'rate_limit';
+  if (status !== null && status >= 500) return 'provider_5xx';
+  if (errorClassName(error) === 'APIConnectionTimeoutError' || errorClassName(error) === 'APIUserAbortError') return 'timeout';
+  if (errorClassName(error) === 'APIConnectionError') return 'connection/network';
+  return 'unknown';
+}
+
+function derivedFailureStage(error: unknown, status: number | null): ExperienceV3ProviderFailureStage {
+  if (status !== null) return 'provider_response';
+  if (errorClassName(error) === 'APIConnectionError'
+    || errorClassName(error) === 'APIConnectionTimeoutError'
+    || errorClassName(error) === 'APIUserAbortError') return 'sdk_request';
+  return 'unknown';
+}
+
+function retryableForType(type: ExperienceV3ProviderErrorType): boolean | null {
+  if (type === 'rate_limit' || type === 'provider_5xx' || type === 'connection/network') return true;
+  if (type === 'invalid_request' || type === 'authentication' || type === 'permission'
+    || type === 'timeout' || type === 'response_extraction') return false;
+  return null;
+}
+
+function structuralPath(value: string | null | undefined): string | null {
+  return typeof value === 'string' && /^[a-z][a-z0-9_.-]{0,127}$/u.test(value) ? value : null;
+}
+
+/** Build finite, non-PII writer-failure metadata without changing failure control flow. */
+export function classifyExperienceV3EnhanceWriterFailure(
+  error: unknown,
+  stage?: ExperienceV3ProviderFailureStage,
+  fieldPath?: string | null,
+): ExperienceV3ProviderFailureEvidence {
+  const status = providerStatus(error);
+  const resolvedStage = stage ?? derivedFailureStage(error, status);
+  const type = providerType(error, status, resolvedStage);
+  const record = error && typeof error === 'object' ? error as Record<string, unknown> : null;
+  const providerBody = record?.error && typeof record.error === 'object'
+    ? record.error as Record<string, unknown>
+    : null;
+  const rawRequestId = record?.requestID;
+  const message = error instanceof Error && error.message.trim() ? error.message : null;
+  return {
+    providerFailureStage: resolvedStage,
+    providerErrorClass: providerErrorClass(error),
+    providerHttpStatus: status,
+    providerErrorType: type === 'unknown' ? null : type,
+    providerErrorCode: safeProviderErrorCode(providerBody?.code),
+    providerRequestIdHash: typeof rawRequestId === 'string' && rawRequestId.length > 0
+      ? hashExperienceV3EnhanceValue(rawRequestId)
+      : null,
+    providerRetryable: retryableForType(type),
+    providerMessageFingerprint: message ? hashExperienceV3EnhanceValue(message) : null,
+    providerStructuralFieldPath: structuralPath(fieldPath),
+  };
+}
+
+/** Transport wrapper carrying only pre-sanitized writer failure evidence. */
+export class ExperienceV3EnhanceWriterTransportError extends Error {
+  readonly evidence: ExperienceV3ProviderFailureEvidence;
+
+  constructor(evidence: ExperienceV3ProviderFailureEvidence) {
+    super('M3 writer transport failure');
+    this.name = 'ExperienceV3EnhanceWriterTransportError';
+    this.evidence = immutableCopy(evidence);
+  }
+}
+
+export function createExperienceV3EnhanceWriterTransportError(
+  error: unknown,
+  stage?: ExperienceV3ProviderFailureStage,
+  fieldPath?: string | null,
+): ExperienceV3EnhanceWriterTransportError {
+  return new ExperienceV3EnhanceWriterTransportError(classifyExperienceV3EnhanceWriterFailure(error, stage, fieldPath));
 }
 
 export const EXPERIENCE_V3_ENHANCE_WRITER_TOOL_NAME = 'submit_experience_enhancement' as const;
@@ -248,6 +382,7 @@ function diagnosticEvidence(
   validation?: AggregateValidationResult,
   writer: ExperienceV3EnhanceWriterDiagnosticMetadata = unavailableEnhanceWriterMetadata(),
   evaluator: ExperienceV3EnhanceEvaluatorDiagnosticMetadata = unavailableEnhanceEvaluatorMetadata(),
+  writerFailure?: ExperienceV3ProviderFailureEvidence,
 ): ExperienceV3DiagnosticEvidence {
   const semantic = validation?.phases.semantic?.violations ?? [];
   const language = validation?.phases.language_quality?.violations ?? [];
@@ -263,6 +398,7 @@ function diagnosticEvidence(
     candidateUnitLengths: candidate ? units.map((unit) => unit.text.length) : [],
     ...writer,
     ...evaluator,
+    ...(writerFailure ?? {}),
     semanticViolationCount: validation ? semantic.length : null,
     semanticViolationCodes: semantic.map((item) => item.code),
     languageQualityViolationCount: validation ? language.length : null,
@@ -786,8 +922,15 @@ export async function executeExperienceV3EnhanceServer(
   let writerResponse: ExperienceV3EnhanceWriterResponse;
   try {
     writerResponse = await transports.generate(buildExperienceV3EnhanceWriterPrompt(manifest));
-  } catch {
-    return failure('writer_request_failed');
+  } catch (error) {
+    const writerFailure = error instanceof ExperienceV3EnhanceWriterTransportError
+      ? error.evidence
+      : classifyExperienceV3EnhanceWriterFailure(error);
+    return failure(
+      'writer_request_failed',
+      undefined,
+      diagnosticEvidence(null, undefined, unavailableEnhanceWriterMetadata(), unavailableEnhanceEvaluatorMetadata(), writerFailure),
+    );
   }
   const writerResult = parseExperienceV3EnhanceWriterToolResponse(writerResponse, manifest);
   if (!writerResult.ok) return failure(

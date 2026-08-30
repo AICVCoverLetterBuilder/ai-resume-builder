@@ -1,4 +1,13 @@
 import { describe, expect, it } from 'vitest';
+import {
+  APIConnectionError,
+  APIConnectionTimeoutError,
+  AuthenticationError,
+  BadRequestError,
+  InternalServerError,
+  PermissionDeniedError,
+  RateLimitError,
+} from '@anthropic-ai/sdk';
 import type { CVData } from '../../types';
 import {
   EXPERIENCE_V3_ENHANCE_ACTION,
@@ -13,6 +22,7 @@ import {
 } from '..';
 import {
   executeExperienceV3EnhanceServer,
+  createExperienceV3EnhanceWriterTransportError,
   EXPERIENCE_V3_ENHANCE_EVALUATOR_TOOL_NAME,
   EXPERIENCE_V3_ENHANCE_WRITER_TOOL_NAME,
   type ExperienceV3EnhanceEvaluatorResponse,
@@ -140,6 +150,7 @@ function evaluatorJson(
 
 interface ServerOptions {
   writerThrows?: boolean;
+  writerError?: unknown;
   evaluatorThrows?: boolean;
   writerRaw?: string;
   evaluatorRaw?: string;
@@ -177,6 +188,7 @@ async function serverResponse(
     generate: async () => {
       counts.writer += 1;
       if (options.writerThrows) throw new Error('writer timeout');
+      if (options.writerError) throw options.writerError;
       return options.writerResponse ?? toolResponse(options.writerRaw ?? writerJson(snapshot, { units: options.writerUnits }), EXPERIENCE_V3_ENHANCE_WRITER_TOOL_NAME);
     },
     evaluate: async () => {
@@ -828,6 +840,165 @@ describe('M3 terminal observability', () => {
     expect(callbacks).toEqual(['failure']);
     expect(copied).not.toContain(SOURCE);
     diagnostics.clearExperienceAiDiagnosticsForTests();
+  });
+});
+
+describe('M3 writer provider-failure observability', () => {
+  const privateMessage = 'Synthetic private CV text must never persist.';
+
+  function headers(requestId: string): Headers {
+    return new Headers({ 'request-id': requestId });
+  }
+
+  it('retains safe invalid-request evidence without changing failure behavior', async () => {
+    const rawRequestId = 'req-invalid-request-private';
+    const error = new BadRequestError(
+      400,
+      { type: 'invalid_request_error', code: 'invalid_request', message: privateMessage },
+      privateMessage,
+      headers(rawRequestId),
+    );
+    const run = await runHarness({ server: { writerError: error } });
+    expect(run.result.kind).toBe('handled_failure');
+    expect([run.writerCount, run.evaluatorCount, run.writeCount, run.persistCount, run.usageCallCount, run.usage])
+      .toEqual([1, 0, 0, 0, 0, 9]);
+    if (run.result.kind === 'handled_failure') {
+      expect(run.result.typedReason).toBe('writer_request_failed');
+      expect(run.result.diagnostic).toMatchObject({
+        providerFailureStage: 'provider_response',
+        providerErrorClass: 'BadRequestError',
+        providerHttpStatus: 400,
+        providerErrorType: 'invalid_request',
+        providerErrorCode: 'invalid_request',
+        providerRetryable: false,
+        applyAuthorized: false,
+        applyAttempted: false,
+        applyCommitted: false,
+        v2FallthroughCount: 0,
+        usageDelta: 0,
+      });
+      expect(run.result.diagnostic.providerRequestIdHash).toMatch(/^v3e-[0-9a-f]{8}$/u);
+      expect(run.result.diagnostic.providerMessageFingerprint).toMatch(/^v3e-[0-9a-f]{8}$/u);
+      expect(run.result.diagnostic.providerRequestIdHash).not.toContain(rawRequestId);
+      expect(JSON.stringify(run.result.diagnostic)).not.toContain(privateMessage);
+      const diagnostics = await import('../../cv-experience-ai-diagnostics');
+      diagnostics.clearExperienceAiDiagnosticsForTests();
+      diagnostics.routeExperienceV3PageTerminal(run.result, { onSuccess: () => undefined, onFailure: () => undefined });
+      const copied = diagnostics.formatExperienceAiDiagnosticForCopy(
+        diagnostics.getLatestExperienceAiDiagnosticRecord()!,
+      );
+      expect(copied).toContain('providerErrorType');
+      expect(copied).not.toContain(privateMessage);
+      diagnostics.clearExperienceAiDiagnosticsForTests();
+    }
+  });
+
+  it.each([
+    ['authentication', new AuthenticationError(401, { type: 'authentication_error', code: 'invalid_api_key', message: privateMessage }, privateMessage, headers('req-auth'))],
+    ['permission', new PermissionDeniedError(403, { type: 'permission_error', code: 'permission_denied', message: privateMessage }, privateMessage, headers('req-permission'))],
+  ] as const)('classifies %s without changing the fail-closed path', async (expectedType, error) => {
+    const run = await runHarness({ server: { writerError: error } });
+    expect(run.result.kind).toBe('handled_failure');
+    if (run.result.kind === 'handled_failure') {
+      expect(run.result.diagnostic).toMatchObject({
+        providerFailureStage: 'provider_response',
+        providerHttpStatus: expectedType === 'authentication' ? 401 : 403,
+        providerErrorType: expectedType,
+        providerRetryable: false,
+        applyAuthorized: false,
+        usageDelta: 0,
+      });
+      expect(JSON.stringify(run.result.diagnostic)).not.toContain(privateMessage);
+    }
+    expect([run.evaluatorCount, run.writeCount, run.persistCount, run.usageCallCount]).toEqual([0, 0, 0, 0]);
+  });
+
+  it('records rate-limit retryability but never retries the writer', async () => {
+    const error = new RateLimitError(
+      429,
+      { type: 'rate_limit_error', code: 'rate_limit', message: privateMessage },
+      privateMessage,
+      headers('req-rate-limit'),
+    );
+    const run = await runHarness({ server: { writerError: error } });
+    expect([run.writerCount, run.evaluatorCount, run.usageCallCount]).toEqual([1, 0, 0]);
+    if (run.result.kind === 'handled_failure') {
+      expect(run.result.diagnostic).toMatchObject({
+        providerFailureStage: 'provider_response', providerHttpStatus: 429,
+        providerErrorType: 'rate_limit', providerRetryable: true,
+      });
+    }
+  });
+
+  it('classifies provider 5xx without retrying', async () => {
+    const error = new InternalServerError(
+      500,
+      { type: 'internal_server_error', code: 'internal_server_error', message: privateMessage },
+      privateMessage,
+      headers('req-provider-5xx'),
+    );
+    const run = await runHarness({ server: { writerError: error } });
+    expect([run.writerCount, run.evaluatorCount, run.usageCallCount]).toEqual([1, 0, 0]);
+    if (run.result.kind === 'handled_failure') {
+      expect(run.result.diagnostic).toMatchObject({
+        providerFailureStage: 'provider_response', providerHttpStatus: 500,
+        providerErrorType: 'provider_5xx', providerRetryable: true,
+      });
+    }
+  });
+
+  it.each([
+    ['timeout', new APIConnectionTimeoutError({ message: privateMessage })],
+    ['connection/network', new APIConnectionError({ message: privateMessage })],
+  ] as const)('classifies %s SDK failures without provider prose', async (expectedType, error) => {
+    const run = await runHarness({ server: { writerError: error } });
+    expect([run.writerCount, run.evaluatorCount, run.writeCount, run.usageCallCount]).toEqual([1, 0, 0, 0]);
+    if (run.result.kind === 'handled_failure') {
+      expect(run.result.diagnostic).toMatchObject({
+        providerFailureStage: 'sdk_request', providerHttpStatus: null,
+        providerErrorType: expectedType, providerRetryable: expectedType === 'connection/network' ? true : false,
+      });
+      expect(JSON.stringify(run.result.diagnostic)).not.toContain(privateMessage);
+    }
+  });
+
+  it('marks response-extraction failures separately', async () => {
+    const error = createExperienceV3EnhanceWriterTransportError(new Error(privateMessage), 'response_extraction');
+    const run = await runHarness({ server: { writerError: error } });
+    expect([run.writerCount, run.evaluatorCount, run.usageCallCount]).toEqual([1, 0, 0]);
+    if (run.result.kind === 'handled_failure') {
+      expect(run.result.diagnostic).toMatchObject({
+        providerFailureStage: 'response_extraction',
+        providerErrorType: 'response_extraction',
+        providerHttpStatus: null,
+        providerRetryable: false,
+      });
+      expect(JSON.stringify(run.result.diagnostic)).not.toContain(privateMessage);
+    }
+  });
+
+  it('keeps an ordinary unknown Error unknown and fail closed', async () => {
+    const run = await runHarness({ server: { writerError: new Error(privateMessage) } });
+    expect([run.writerCount, run.evaluatorCount, run.writeCount, run.persistCount, run.usageCallCount]).toEqual([1, 0, 0, 0, 0]);
+    if (run.result.kind === 'handled_failure') {
+      expect(run.result.diagnostic).toMatchObject({
+        providerFailureStage: 'unknown', providerErrorClass: 'Error', providerHttpStatus: null,
+        providerErrorType: null, providerErrorCode: null, providerRequestIdHash: null,
+        providerRetryable: null, providerStructuralFieldPath: null,
+        applyAuthorized: false, applyCommitted: false, v2FallthroughCount: 0, usageDelta: 0,
+      });
+      expect(JSON.stringify(run.result.diagnostic)).not.toContain(privateMessage);
+    }
+  });
+
+  it('does not add provider-failure fields to a successful operation', async () => {
+    const run = await runHarness();
+    expect(run.result.kind).toBe('handled_success');
+    if (run.result.kind === 'handled_success') {
+      expect(run.result.diagnostic).not.toHaveProperty('providerFailureStage');
+      expect(run.result.diagnostic).not.toHaveProperty('providerErrorType');
+      expect(run.result.diagnostic.usageDelta).toBe(1);
+    }
   });
 });
 
