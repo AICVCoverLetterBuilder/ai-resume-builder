@@ -10,6 +10,7 @@
 import type { WorkExperience } from './types';
 import type {
   ExperienceV3AdapterResult,
+  ExperienceV3InternalRejectionAudit,
   ExperienceV3TerminalDiagnostic,
 } from './ai-core-v3/experience-generate';
 import { fingerprintText, resolveAppVersionInfo, resolveNextBuildId } from './cv-export-diagnostics';
@@ -93,6 +94,7 @@ import {
   appendCvAiDiagnosticHistory,
   assertCvAiDiagnosticPrivacy,
   buildCvAiDiagnosticBuildIdentity,
+  clearCvAiDiagnosticHistory,
   checkExperienceDiagnosticCompleteness,
   checkExperienceDiagnosticInvariants,
   classifyApiHostClass,
@@ -684,6 +686,8 @@ export type ExperienceAiDiagnosticTrace = {
 
 let latestTrace: ExperienceAiDiagnosticTrace | null = null;
 let latestV3TerminalTrace: ExperienceV3TerminalDiagnostic | null = null;
+/** Sensitive rejection evidence is intentionally session-memory-only. */
+let latestV3InternalRejectionAudit: ExperienceV3InternalRejectionAudit | null = null;
 
 export function hashRequestId(requestId: string): string {
   return fingerprintText(requestId || '');
@@ -3836,6 +3840,83 @@ export function recordExperienceV3TerminalDiagnostic(
   return trace;
 }
 
+/**
+ * Keeps explicitly requested CV-text rejection evidence only in the current
+ * internal page session. This deliberately has no storage/history side effect.
+ */
+export function recordExperienceV3InternalRejectionAudit(
+  audit: ExperienceV3InternalRejectionAudit,
+): ExperienceV3InternalRejectionAudit | null {
+  if (!INTERNAL_AI_RESET_ENABLED) return null;
+  latestV3InternalRejectionAudit = audit;
+  try {
+    emitCvAiDiagnosticsChanged({ kind: 'experience', action: 'commit' });
+  } catch {
+    /* ignore */
+  }
+  return audit;
+}
+
+export function getLatestExperienceV3InternalRejectionAudit(): ExperienceV3InternalRejectionAudit | null {
+  return INTERNAL_AI_RESET_ENABLED ? latestV3InternalRejectionAudit : null;
+}
+
+/** Clears the memory-only audit without touching diagnostics persistence or usage. */
+export function clearExperienceAiRejectionAudit(): void {
+  const hadAudit = latestV3InternalRejectionAudit !== null;
+  latestV3InternalRejectionAudit = null;
+  if (hadAudit) {
+    try {
+      emitCvAiDiagnosticsChanged({ kind: 'experience', action: 'clear_latest' });
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+/** Clear the Experience history control and the sensitive session audit together. */
+export function clearExperienceAiDiagnosticHistory(): void {
+  clearExperienceAiRejectionAudit();
+  clearCvAiDiagnosticHistory('experience');
+}
+
+export function formatExperienceV3InternalRejectionAuditForCopy(
+  audit: ExperienceV3InternalRejectionAudit,
+  warning: string,
+): string {
+  return `${warning}\n\n${JSON.stringify(audit, null, 2)}\n`;
+}
+
+export async function copyExperienceV3InternalRejectionAuditToClipboard(
+  warning: string,
+): Promise<boolean> {
+  const audit = getLatestExperienceV3InternalRejectionAudit();
+  if (!audit) return false;
+  const text = formatExperienceV3InternalRejectionAuditForCopy(audit, warning);
+  try {
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    /* fall through */
+  }
+  try {
+    if (typeof document === 'undefined') return false;
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.left = '-9999px';
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
 /** Actual page-terminal seam: persist first, then emit exactly one terminal toast callback. */
 export function routeExperienceV3PageTerminal(
   result: ExperienceV3AdapterResult,
@@ -3846,6 +3927,9 @@ export function routeExperienceV3PageTerminal(
 ): boolean {
   if (result.kind === 'not_applicable') return false;
   recordExperienceV3TerminalDiagnostic(result.diagnostic);
+  if (result.kind === 'handled_failure' && result.internalRejectionAudit) {
+    recordExperienceV3InternalRejectionAudit(result.internalRejectionAudit);
+  }
   if (result.kind === 'handled_success') callbacks.onSuccess();
   else callbacks.onFailure(result.typedReason);
   return true;
@@ -3914,6 +3998,7 @@ export async function copyExperienceAiDiagnosticsToClipboard(): Promise<boolean>
 export function clearExperienceAiDiagnosticsForTests(): void {
   latestTrace = null;
   latestV3TerminalTrace = null;
+  clearExperienceAiRejectionAudit();
   if (typeof localStorage === 'undefined') return;
   try {
     localStorage.removeItem(EXPERIENCE_AI_DIAG_STORAGE_KEY);

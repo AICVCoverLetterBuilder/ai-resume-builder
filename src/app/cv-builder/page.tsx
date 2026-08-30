@@ -47,6 +47,7 @@ import {
   resolveNextBuildId,
 } from '@/lib/cv-export-diagnostics';
 import {
+  clearExperienceAiRejectionAudit,
   copyExperienceAiDiagnosticsToClipboard,
   ExperienceAiDiagnosticSession,
   routeExperienceV3PageTerminal,
@@ -1840,6 +1841,9 @@ export default function CVBuilderPage() {
   };
 
   const handleGenBullets = async (expId: string) => {
+    // A rejection audit is session-memory-only and must never outlive a new
+    // Experience AI attempt, including an attempt that remains on legacy V2.
+    clearExperienceAiRejectionAudit();
     // Snapshot the clicked stable entry ID immediately — never re-bind to
     // array index 0 or the globally current role while the request runs.
     const clickedExperienceEntryId = String(expId || '').trim();

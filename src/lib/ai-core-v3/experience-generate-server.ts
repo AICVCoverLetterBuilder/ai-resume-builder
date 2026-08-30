@@ -5,11 +5,16 @@ import { createExperienceFactManifest } from './experience-manifest';
 import {
   EXPERIENCE_V3_GENERATE_ACTION,
   hashExperienceV3Value,
+  unavailableExperienceV3DiagnosticEvidence,
+  type ExperienceV3DiagnosticEvidence,
+  type ExperienceV3EvaluatorDiagnosticMetadata,
   type ExperienceV3GenerateFailureResponse,
   type ExperienceV3GenerateResponse,
+  type ExperienceV3InternalRejectionAudit,
   type ExperienceV3ProviderOutput,
 } from './experience-generate';
 import { immutableCopy } from './immutability';
+import { INTERNAL_AI_RESET_ENABLED } from '../build-channel';
 import {
   runAiCoreV3Validation,
   validateStructuralPhase,
@@ -121,15 +126,65 @@ function parseStrictJson(raw: string): unknown {
   }
 }
 
+function unavailableEvaluatorDiagnosticMetadata(): ExperienceV3EvaluatorDiagnosticMetadata {
+  return immutableCopy({
+    evaluatorStopReason: null,
+    evaluatorContentBlockCount: null,
+    evaluatorTextBlockCount: null,
+    evaluatorToolBlockCount: null,
+    evaluatorExpectedToolCount: null,
+    evaluatorToolNameMatched: null,
+    evaluatorToolInputObject: null,
+    evaluatorToolInputSchemaPassed: null,
+    evaluatorIdentityPassed: null,
+  }) as ExperienceV3EvaluatorDiagnosticMetadata;
+}
+
+function evaluatorDiagnosticMetadata(
+  response: ExperienceV3EvaluatorResponse | null | undefined,
+): ExperienceV3EvaluatorDiagnosticMetadata {
+  if (!response || typeof response !== 'object' || !Array.isArray(response.content)) {
+    return unavailableEvaluatorDiagnosticMetadata();
+  }
+  const toolBlocks = response.content.filter((block): block is Extract<ExperienceV3EvaluatorContentBlock, { type: 'tool_use' }> => (
+    block.type === 'tool_use'
+  ));
+  const expectedTool = toolBlocks.length === 1 ? toolBlocks[0] : null;
+  return immutableCopy({
+    evaluatorStopReason: typeof response.stopReason === 'string' ? response.stopReason : null,
+    evaluatorContentBlockCount: response.content.length,
+    evaluatorTextBlockCount: response.content.filter((block) => block.type === 'text').length,
+    evaluatorToolBlockCount: toolBlocks.length,
+    evaluatorExpectedToolCount: 1,
+    evaluatorToolNameMatched: expectedTool
+      ? expectedTool.name === EXPERIENCE_V3_EVALUATOR_TOOL_NAME
+      : null,
+    evaluatorToolInputObject: expectedTool ? isRecord(expectedTool.input) : null,
+    evaluatorToolInputSchemaPassed: null,
+    evaluatorIdentityPassed: null,
+  }) as ExperienceV3EvaluatorDiagnosticMetadata;
+}
+
+function withEvaluatorDiagnosticMetadata(
+  metadata: ExperienceV3EvaluatorDiagnosticMetadata,
+  update: Partial<ExperienceV3EvaluatorDiagnosticMetadata>,
+): ExperienceV3EvaluatorDiagnosticMetadata {
+  return immutableCopy({ ...metadata, ...update }) as ExperienceV3EvaluatorDiagnosticMetadata;
+}
+
 function failure(
   typedReason: string,
   validation?: AggregateValidationResult,
+  diagnosticEvidence: ExperienceV3DiagnosticEvidence = unavailableExperienceV3DiagnosticEvidence(),
+  internalRejectionAudit?: ExperienceV3InternalRejectionAudit,
 ): ExperienceV3GenerateFailureResponse {
   return immutableCopy({
     ok: false as const,
     action: EXPERIENCE_V3_GENERATE_ACTION,
     typedReason,
     ...(validation ? { validation } : {}),
+    diagnosticEvidence,
+    ...(internalRejectionAudit ? { internalRejectionAudit } : {}),
   }) as ExperienceV3GenerateFailureResponse;
 }
 
@@ -356,64 +411,104 @@ type EvaluatorToolRejectionReason =
   | 'evaluator_output_malformed';
 
 export type ExperienceV3EvaluatorToolParseResult =
-  | { readonly ok: true; readonly value: EvaluatorPayload }
-  | { readonly ok: false; readonly typedReason: EvaluatorToolRejectionReason };
+  | {
+    readonly ok: true;
+    readonly value: EvaluatorPayload;
+    readonly diagnosticMetadata: ExperienceV3EvaluatorDiagnosticMetadata;
+  }
+  | {
+    readonly ok: false;
+    readonly typedReason: EvaluatorToolRejectionReason;
+    readonly diagnosticMetadata: ExperienceV3EvaluatorDiagnosticMetadata;
+  };
 
-function rejectEvaluatorTool(typedReason: EvaluatorToolRejectionReason): ExperienceV3EvaluatorToolParseResult {
-  return immutableCopy({ ok: false as const, typedReason }) as ExperienceV3EvaluatorToolParseResult;
+function rejectEvaluatorTool(
+  typedReason: EvaluatorToolRejectionReason,
+  diagnosticMetadata: ExperienceV3EvaluatorDiagnosticMetadata,
+): ExperienceV3EvaluatorToolParseResult {
+  return immutableCopy({ ok: false as const, typedReason, diagnosticMetadata }) as ExperienceV3EvaluatorToolParseResult;
 }
 
 function parseExperienceV3EvaluatorToolInput(
   value: unknown,
   manifest: ExperienceFactManifest,
+  baseMetadata: ExperienceV3EvaluatorDiagnosticMetadata,
 ): ExperienceV3EvaluatorToolParseResult {
-  if (!isRecord(value) || !exactKeys(
+  const inputObject = isRecord(value);
+  const inputMetadata = withEvaluatorDiagnosticMetadata(baseMetadata, {
+    evaluatorToolInputObject: inputObject,
+  });
+  if (!inputObject || !exactKeys(
     value,
     ['operationId', 'entryId', 'snapshotHash', 'locale', 'phases'],
-  )) return rejectEvaluatorTool('evaluator_tool_input_malformed');
+  )) return rejectEvaluatorTool('evaluator_tool_input_malformed', withEvaluatorDiagnosticMetadata(inputMetadata, {
+    evaluatorToolInputSchemaPassed: false,
+    evaluatorIdentityPassed: null,
+  }));
+  if (!isRecord(value.phases) || !exactKeys(value.phases, ['semantic', 'language_quality'])) {
+    return rejectEvaluatorTool('evaluator_tool_input_malformed', withEvaluatorDiagnosticMetadata(inputMetadata, {
+      evaluatorToolInputSchemaPassed: false,
+      evaluatorIdentityPassed: null,
+    }));
+  }
+  const semantic = parseEvaluatorPhase(value.phases.semantic, 'semantic');
+  const languageQuality = parseEvaluatorPhase(value.phases.language_quality, 'language_quality');
+  if (
+    typeof value.operationId !== 'string'
+    || typeof value.entryId !== 'string'
+    || typeof value.snapshotHash !== 'string'
+    || typeof value.locale !== 'string'
+    || !semantic
+    || !languageQuality
+  ) return rejectEvaluatorTool('evaluator_tool_input_malformed', withEvaluatorDiagnosticMetadata(inputMetadata, {
+    evaluatorToolInputSchemaPassed: false,
+    evaluatorIdentityPassed: null,
+  }));
+  const schemaMetadata = withEvaluatorDiagnosticMetadata(inputMetadata, {
+    evaluatorToolInputSchemaPassed: true,
+  });
   if (
     value.operationId !== manifest.operationId
     || value.entryId !== manifest.entryId
     || value.snapshotHash !== manifest.snapshotHash
     || value.locale !== manifest.locale
-  ) return rejectEvaluatorTool('evaluator_identity_mismatch');
-  if (!isRecord(value.phases) || !exactKeys(value.phases, ['semantic', 'language_quality'])) {
-    return rejectEvaluatorTool('evaluator_tool_input_malformed');
-  }
-  const semantic = parseEvaluatorPhase(value.phases.semantic, 'semantic');
-  const languageQuality = parseEvaluatorPhase(value.phases.language_quality, 'language_quality');
-  if (!semantic || !languageQuality) return rejectEvaluatorTool('evaluator_tool_input_malformed');
+  ) return rejectEvaluatorTool('evaluator_identity_mismatch', withEvaluatorDiagnosticMetadata(schemaMetadata, {
+    evaluatorIdentityPassed: false,
+  }));
   return immutableCopy({ ok: true as const, value: {
     operationId: manifest.operationId,
     entryId: manifest.entryId,
     snapshotHash: manifest.snapshotHash,
     locale: manifest.locale,
     phases: { semantic, language_quality: languageQuality },
-  } }) as ExperienceV3EvaluatorToolParseResult;
+  }, diagnosticMetadata: withEvaluatorDiagnosticMetadata(schemaMetadata, {
+    evaluatorIdentityPassed: true,
+  }) }) as ExperienceV3EvaluatorToolParseResult;
 }
 
 export function parseExperienceV3EvaluatorToolResponse(
   response: ExperienceV3EvaluatorResponse,
   manifest: ExperienceFactManifest,
 ): ExperienceV3EvaluatorToolParseResult {
+  const diagnosticMetadata = evaluatorDiagnosticMetadata(response);
   if (!response || typeof response !== 'object' || !Array.isArray(response.content)) {
-    return rejectEvaluatorTool('evaluator_output_malformed');
+    return rejectEvaluatorTool('evaluator_output_malformed', diagnosticMetadata);
   }
-  if (response.stopReason === 'max_tokens') return rejectEvaluatorTool('evaluator_max_tokens');
-  if (response.stopReason !== 'tool_use') return rejectEvaluatorTool('evaluator_output_malformed');
+  if (response.stopReason === 'max_tokens') return rejectEvaluatorTool('evaluator_max_tokens', diagnosticMetadata);
+  if (response.stopReason !== 'tool_use') return rejectEvaluatorTool('evaluator_output_malformed', diagnosticMetadata);
 
   const unexpected = response.content.find((block) => block.type !== 'tool_use');
-  if (unexpected?.type === 'text') return rejectEvaluatorTool('evaluator_unexpected_text_block');
-  if (unexpected) return rejectEvaluatorTool('evaluator_output_malformed');
+  if (unexpected?.type === 'text') return rejectEvaluatorTool('evaluator_unexpected_text_block', diagnosticMetadata);
+  if (unexpected) return rejectEvaluatorTool('evaluator_output_malformed', diagnosticMetadata);
 
   const toolBlocks = response.content.filter((block): block is Extract<ExperienceV3EvaluatorContentBlock, { type: 'tool_use' }> => (
     block.type === 'tool_use'
   ));
-  if (toolBlocks.length === 0) return rejectEvaluatorTool('evaluator_tool_missing');
-  if (toolBlocks.length !== 1) return rejectEvaluatorTool('evaluator_multiple_tools');
+  if (toolBlocks.length === 0) return rejectEvaluatorTool('evaluator_tool_missing', diagnosticMetadata);
+  if (toolBlocks.length !== 1) return rejectEvaluatorTool('evaluator_multiple_tools', diagnosticMetadata);
   const [tool] = toolBlocks;
-  if (tool.name !== EXPERIENCE_V3_EVALUATOR_TOOL_NAME) return rejectEvaluatorTool('evaluator_wrong_tool');
-  return parseExperienceV3EvaluatorToolInput(tool.input, manifest);
+  if (tool.name !== EXPERIENCE_V3_EVALUATOR_TOOL_NAME) return rejectEvaluatorTool('evaluator_wrong_tool', diagnosticMetadata);
+  return parseExperienceV3EvaluatorToolInput(tool.input, manifest, diagnosticMetadata);
 }
 
 function aggregateWithPhases(
@@ -448,6 +543,105 @@ function candidateFromOutput(
       text: bullet,
     })),
   });
+}
+
+function safeDiagnosticCode(value: string): string | null {
+  return /^[a-z][a-z0-9_]{0,63}$/u.test(value) ? value : null;
+}
+
+function phaseViolationCodes(
+  validation: AggregateValidationResult | undefined,
+  category: EvaluatedCategory,
+): { count: number | null; codes: readonly string[]; violations: readonly AiCoreV3Violation[] } {
+  const phase = validation?.phases[category];
+  if (!phase || phase.status === 'not_evaluated') return { count: null, codes: [], violations: [] };
+  return {
+    count: phase.violations.length,
+    codes: phase.violations
+      .map((violation) => safeDiagnosticCode(violation.code))
+      .filter((code): code is string => code !== null),
+    violations: phase.violations,
+  };
+}
+
+function violationIdentityHashesByCode(
+  violations: readonly AiCoreV3Violation[],
+  identity: 'factIds' | 'entryIds',
+): Readonly<Record<string, readonly string[]>> {
+  const result: Record<string, readonly string[]> = {};
+  for (const violation of violations) {
+    const code = safeDiagnosticCode(violation.code);
+    if (!code) continue;
+    const rawIds = violation[identity] || [];
+    const hashes = rawIds.map((id) => hashExperienceV3Value(id));
+    if (hashes.length === 0) continue;
+    const prior = result[code] || [];
+    result[code] = [...new Set([...prior, ...hashes])];
+  }
+  return immutableCopy(result) as Readonly<Record<string, readonly string[]>>;
+}
+
+function buildExperienceV3DiagnosticEvidence(
+  candidate: AiCoreV3CandidateEnvelope | null,
+  evaluatorMetadata: ExperienceV3EvaluatorDiagnosticMetadata = unavailableEvaluatorDiagnosticMetadata(),
+  validation?: AggregateValidationResult,
+): ExperienceV3DiagnosticEvidence {
+  const semantic = phaseViolationCodes(validation, 'semantic');
+  const languageQuality = phaseViolationCodes(validation, 'language_quality');
+  const violations = [...semantic.violations, ...languageQuality.violations];
+  const primaryValidationRejectionCode = validation?.decision === 'reject'
+    ? [...semantic.violations, ...languageQuality.violations]
+      .map((violation) => safeDiagnosticCode(violation.code))
+      .find((code): code is string => code !== null) || null
+    : null;
+  return immutableCopy({
+    candidatePresent: Boolean(candidate),
+    candidateHash: candidate ? hashExperienceV3Value(candidate.text) : null,
+    candidateUnitCount: candidate ? candidate.units?.length || 0 : null,
+    candidateUnitHashes: candidate ? (candidate.units || []).map((unit) => hashExperienceV3Value(unit.text)) : [],
+    candidateUnitLengths: candidate ? (candidate.units || []).map((unit) => unit.text.length) : [],
+    ...evaluatorMetadata,
+    semanticViolationCount: semantic.count,
+    semanticViolationCodes: semantic.codes,
+    languageQualityViolationCount: languageQuality.count,
+    languageQualityViolationCodes: languageQuality.codes,
+    violationFactIdHashesByCode: violationIdentityHashesByCode(violations, 'factIds'),
+    violationEntryIdHashesByCode: violationIdentityHashesByCode(violations, 'entryIds'),
+    primaryValidationRejectionCode,
+  }) as ExperienceV3DiagnosticEvidence;
+}
+
+function buildExperienceV3InternalRejectionAudit(
+  manifest: ExperienceFactManifest,
+  candidate: AiCoreV3CandidateEnvelope,
+  evaluatorMetadata: ExperienceV3EvaluatorDiagnosticMetadata,
+  validation: AggregateValidationResult,
+): ExperienceV3InternalRejectionAudit | undefined {
+  if (!INTERNAL_AI_RESET_ENABLED || validation.decision !== 'reject') return undefined;
+  return immutableCopy({
+    operationId: manifest.operationId,
+    entryId: manifest.entryId,
+    snapshotHash: manifest.snapshotHash,
+    locale: manifest.locale,
+    candidate: {
+      candidateId: candidate.candidateId,
+      units: (candidate.units || []).map((unit) => ({
+        unitId: unit.unitId,
+        entryId: unit.entryId,
+        text: unit.text,
+      })),
+    },
+    phases: {
+      structural: validation.phases.structural.status,
+      semantic: validation.phases.semantic.status,
+      language_quality: validation.phases.language_quality.status,
+    },
+    evaluator: {
+      ...evaluatorMetadata,
+      semanticViolations: validation.phases.semantic.violations,
+      languageQualityViolations: validation.phases.language_quality.violations,
+    },
+  }) as ExperienceV3InternalRejectionAudit;
 }
 
 export function buildExperienceV3WriterPrompt(manifest: ExperienceFactManifest): string {
@@ -508,7 +702,11 @@ export async function executeExperienceV3GenerateServer(
       notEvaluatedPhase('semantic'),
       notEvaluatedPhase('language_quality'),
     );
-    return failure('structural_validation_failed', validation);
+    return failure(
+      'structural_validation_failed',
+      validation,
+      buildExperienceV3DiagnosticEvidence(candidate, unavailableEvaluatorDiagnosticMetadata(), validation),
+    );
   }
 
   let evaluatorResponse: ExperienceV3EvaluatorResponse;
@@ -522,7 +720,11 @@ export async function executeExperienceV3GenerateServer(
       notEvaluatedPhase('semantic'),
       notEvaluatedPhase('language_quality'),
     );
-    return failure('evaluator_request_failed', validation);
+    return failure(
+      'evaluator_request_failed',
+      validation,
+      buildExperienceV3DiagnosticEvidence(candidate, unavailableEvaluatorDiagnosticMetadata(), validation),
+    );
   }
   const evaluatorResult = parseExperienceV3EvaluatorToolResponse(evaluatorResponse, manifest);
   if (!evaluatorResult.ok) {
@@ -533,7 +735,11 @@ export async function executeExperienceV3GenerateServer(
       notEvaluatedPhase('semantic'),
       notEvaluatedPhase('language_quality'),
     );
-    return failure(evaluatorResult.typedReason, validation);
+    return failure(
+      evaluatorResult.typedReason,
+      validation,
+      buildExperienceV3DiagnosticEvidence(candidate, evaluatorResult.diagnosticMetadata, validation),
+    );
   }
   const evaluator = evaluatorResult.value;
 
@@ -548,7 +754,22 @@ export async function executeExperienceV3GenerateServer(
     violations: evaluator.phases.language_quality.violations,
   }) as ValidationPhaseResult;
   const validation = aggregateWithPhases(manifest, candidate, structural, semantic, languageQuality);
-  if (validation.decision !== 'accept') return failure('validation_rejected', validation);
+  const diagnosticEvidence = buildExperienceV3DiagnosticEvidence(
+    candidate,
+    evaluatorResult.diagnosticMetadata,
+    validation,
+  );
+  if (validation.decision !== 'accept') return failure(
+    'validation_rejected',
+    validation,
+    diagnosticEvidence,
+    buildExperienceV3InternalRejectionAudit(
+      manifest,
+      candidate,
+      evaluatorResult.diagnosticMetadata,
+      validation,
+    ),
+  );
 
   return immutableCopy({
     ok: true as const,
@@ -556,5 +777,6 @@ export async function executeExperienceV3GenerateServer(
     providerOutput,
     candidate,
     validation,
+    diagnosticEvidence,
   }) as ExperienceV3GenerateResponse;
 }

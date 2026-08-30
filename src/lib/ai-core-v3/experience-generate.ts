@@ -9,7 +9,12 @@ import type {
 import { createExperienceFactManifest } from './experience-manifest';
 import { immutableCopy } from './immutability';
 import { createSourceAuthoritySnapshot } from './source-authority';
-import type { AggregateValidationResult } from './validators';
+import { INTERNAL_AI_RESET_ENABLED } from '../build-channel';
+import type {
+  AggregateValidationResult,
+  AiCoreV3Violation,
+  ValidationPhaseStatus,
+} from './validators';
 
 export const EXPERIENCE_V3_GENERATE_ACTION = 'experience_v3_generate' as const;
 export const EXPERIENCE_V3_TERMINAL_DIAGNOSTIC_MARKER = 'EXPERIENCE_V3_TERMINAL_DIAGNOSTIC' as const;
@@ -56,6 +61,63 @@ export type ExperienceV3DiagnosticAttempt = {
   readonly result: 'succeeded' | 'failed' | 'malformed' | 'not_attempted' | 'unknown';
 };
 
+/**
+ * Transport facts that are safe to retain in the normal non-PII terminal
+ * record. They deliberately exclude tool input, provider output, and prose.
+ */
+export interface ExperienceV3EvaluatorDiagnosticMetadata {
+  readonly evaluatorStopReason: string | null;
+  readonly evaluatorContentBlockCount: number | null;
+  readonly evaluatorTextBlockCount: number | null;
+  readonly evaluatorToolBlockCount: number | null;
+  readonly evaluatorExpectedToolCount: number | null;
+  readonly evaluatorToolNameMatched: boolean | null;
+  readonly evaluatorToolInputObject: boolean | null;
+  readonly evaluatorToolInputSchemaPassed: boolean | null;
+  readonly evaluatorIdentityPassed: boolean | null;
+}
+
+/** Non-PII evidence propagated from the M2 server to the terminal record. */
+export interface ExperienceV3DiagnosticEvidence extends ExperienceV3EvaluatorDiagnosticMetadata {
+  readonly candidatePresent: boolean;
+  readonly candidateHash: string | null;
+  readonly candidateUnitCount: number | null;
+  readonly candidateUnitHashes: readonly string[];
+  readonly candidateUnitLengths: readonly number[];
+  readonly semanticViolationCount: number | null;
+  readonly semanticViolationCodes: readonly string[];
+  readonly languageQualityViolationCount: number | null;
+  readonly languageQualityViolationCodes: readonly string[];
+  readonly violationFactIdHashesByCode: Readonly<Record<string, readonly string[]>>;
+  readonly violationEntryIdHashesByCode: Readonly<Record<string, readonly string[]>>;
+  readonly primaryValidationRejectionCode: string | null;
+}
+
+/**
+ * Explicitly sensitive, memory-only rejection evidence. This type is only
+ * accepted when the established internal diagnostics build gate is compiled
+ * on; it is never persisted or included in generic diagnostics copy.
+ */
+export interface ExperienceV3InternalRejectionAudit {
+  readonly operationId: string;
+  readonly entryId: string;
+  readonly snapshotHash: string;
+  readonly locale: string;
+  readonly candidate: Readonly<{
+    readonly candidateId: string;
+    readonly units: readonly Readonly<{
+      readonly unitId: string;
+      readonly entryId: string;
+      readonly text: string;
+    }>[];
+  }>;
+  readonly phases: Readonly<Record<'structural' | 'semantic' | 'language_quality', ValidationPhaseStatus>>;
+  readonly evaluator: ExperienceV3EvaluatorDiagnosticMetadata & Readonly<{
+    readonly semanticViolations: readonly AiCoreV3Violation[];
+    readonly languageQualityViolations: readonly AiCoreV3Violation[];
+  }>;
+}
+
 export interface ExperienceV3TerminalDiagnostic {
   readonly schemaVersion: 1;
   readonly marker: typeof EXPERIENCE_V3_TERMINAL_DIAGNOSTIC_MARKER;
@@ -89,6 +151,27 @@ export interface ExperienceV3TerminalDiagnostic {
   readonly raceGuardResult: 'passed' | 'failed' | 'not_evaluated';
   readonly sourceCommitMarker: string | null;
   readonly buildChannel: string | null;
+  readonly candidatePresent: boolean;
+  readonly candidateHash: string | null;
+  readonly candidateUnitCount: number | null;
+  readonly candidateUnitHashes: readonly string[];
+  readonly candidateUnitLengths: readonly number[];
+  readonly evaluatorStopReason: string | null;
+  readonly evaluatorContentBlockCount: number | null;
+  readonly evaluatorTextBlockCount: number | null;
+  readonly evaluatorToolBlockCount: number | null;
+  readonly evaluatorExpectedToolCount: number | null;
+  readonly evaluatorToolNameMatched: boolean | null;
+  readonly evaluatorToolInputObject: boolean | null;
+  readonly evaluatorToolInputSchemaPassed: boolean | null;
+  readonly evaluatorIdentityPassed: boolean | null;
+  readonly semanticViolationCount: number | null;
+  readonly semanticViolationCodes: readonly string[];
+  readonly languageQualityViolationCount: number | null;
+  readonly languageQualityViolationCodes: readonly string[];
+  readonly violationFactIdHashesByCode: Readonly<Record<string, readonly string[]>>;
+  readonly violationEntryIdHashesByCode: Readonly<Record<string, readonly string[]>>;
+  readonly primaryValidationRejectionCode: string | null;
 }
 
 export type ExperienceV3RoutingResult =
@@ -103,6 +186,7 @@ export type ExperienceV3AdapterResult =
     readonly kind: 'handled_failure';
     readonly typedReason: string;
     readonly diagnostic: ExperienceV3TerminalDiagnostic;
+    readonly internalRejectionAudit?: ExperienceV3InternalRejectionAudit;
   };
 
 export interface ExperienceV3ProviderOutput {
@@ -119,6 +203,7 @@ export interface ExperienceV3GenerateSuccessResponse {
   readonly providerOutput: ExperienceV3ProviderOutput;
   readonly candidate: AiCoreV3CandidateEnvelope;
   readonly validation: AggregateValidationResult;
+  readonly diagnosticEvidence: ExperienceV3DiagnosticEvidence;
 }
 
 export interface ExperienceV3GenerateFailureResponse {
@@ -126,6 +211,9 @@ export interface ExperienceV3GenerateFailureResponse {
   readonly action: typeof EXPERIENCE_V3_GENERATE_ACTION;
   readonly typedReason: string;
   readonly validation?: AggregateValidationResult;
+  readonly diagnosticEvidence: ExperienceV3DiagnosticEvidence;
+  /** Present only in a build compiled with the internal diagnostics authority. */
+  readonly internalRejectionAudit?: ExperienceV3InternalRejectionAudit;
 }
 
 export type ExperienceV3GenerateResponse =
@@ -374,6 +462,281 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
+function isFiniteDiagnosticCount(value: unknown): value is number {
+  return Number.isInteger(value) && Number(value) >= 0;
+}
+
+function isDiagnosticHash(value: unknown): value is string {
+  return typeof value === 'string' && /^v3-[0-9a-f]{8}$/u.test(value);
+}
+
+function isSafeDiagnosticCode(value: unknown): value is string {
+  return typeof value === 'string' && /^[a-z][a-z0-9_]{0,63}$/u.test(value);
+}
+
+function parseDiagnosticHashArray(value: unknown): readonly string[] | null {
+  return Array.isArray(value) && value.every(isDiagnosticHash) ? value : null;
+}
+
+function parseSafeDiagnosticCodeArray(value: unknown): readonly string[] | null {
+  return Array.isArray(value) && value.every(isSafeDiagnosticCode) ? value : null;
+}
+
+function parseDiagnosticHashMap(value: unknown): Readonly<Record<string, readonly string[]>> | null {
+  if (!isRecord(value)) return null;
+  const parsed: Record<string, readonly string[]> = {};
+  for (const [code, hashes] of Object.entries(value)) {
+    if (!isSafeDiagnosticCode(code)) return null;
+    const safeHashes = parseDiagnosticHashArray(hashes);
+    if (!safeHashes) return null;
+    parsed[code] = safeHashes;
+  }
+  return immutableCopy(parsed) as Readonly<Record<string, readonly string[]>>;
+}
+
+export function unavailableExperienceV3DiagnosticEvidence(): ExperienceV3DiagnosticEvidence {
+  return immutableCopy({
+    candidatePresent: false,
+    candidateHash: null,
+    candidateUnitCount: null,
+    candidateUnitHashes: [],
+    candidateUnitLengths: [],
+    evaluatorStopReason: null,
+    evaluatorContentBlockCount: null,
+    evaluatorTextBlockCount: null,
+    evaluatorToolBlockCount: null,
+    evaluatorExpectedToolCount: null,
+    evaluatorToolNameMatched: null,
+    evaluatorToolInputObject: null,
+    evaluatorToolInputSchemaPassed: null,
+    evaluatorIdentityPassed: null,
+    semanticViolationCount: null,
+    semanticViolationCodes: [],
+    languageQualityViolationCount: null,
+    languageQualityViolationCodes: [],
+    violationFactIdHashesByCode: {},
+    violationEntryIdHashesByCode: {},
+    primaryValidationRejectionCode: null,
+  }) as ExperienceV3DiagnosticEvidence;
+}
+
+function parseNullableBoolean(value: unknown): boolean | null | undefined {
+  return typeof value === 'boolean' || value === null ? value : undefined;
+}
+
+function parseNullableCount(value: unknown): number | null | undefined {
+  return value === null || isFiniteDiagnosticCount(value) ? value : undefined;
+}
+
+function parseNullableString(value: unknown): string | null | undefined {
+  return value === null || (typeof value === 'string' && /^[a-z][a-z0-9_-]{0,63}$/u.test(value))
+    ? value
+    : undefined;
+}
+
+/** Reject malformed diagnostic evidence instead of allowing it to alter a terminal trace. */
+export function parseExperienceV3DiagnosticEvidence(
+  value: unknown,
+): ExperienceV3DiagnosticEvidence | null {
+  if (!isRecord(value)) return null;
+  const candidatePresent = value.candidatePresent;
+  const candidateHash = value.candidateHash;
+  const candidateUnitCount = parseNullableCount(value.candidateUnitCount);
+  const candidateUnitHashes = parseDiagnosticHashArray(value.candidateUnitHashes);
+  const candidateUnitLengths = value.candidateUnitLengths;
+  const evaluatorStopReason = parseNullableString(value.evaluatorStopReason);
+  const evaluatorContentBlockCount = parseNullableCount(value.evaluatorContentBlockCount);
+  const evaluatorTextBlockCount = parseNullableCount(value.evaluatorTextBlockCount);
+  const evaluatorToolBlockCount = parseNullableCount(value.evaluatorToolBlockCount);
+  const evaluatorExpectedToolCount = parseNullableCount(value.evaluatorExpectedToolCount);
+  const evaluatorToolNameMatched = parseNullableBoolean(value.evaluatorToolNameMatched);
+  const evaluatorToolInputObject = parseNullableBoolean(value.evaluatorToolInputObject);
+  const evaluatorToolInputSchemaPassed = parseNullableBoolean(value.evaluatorToolInputSchemaPassed);
+  const evaluatorIdentityPassed = parseNullableBoolean(value.evaluatorIdentityPassed);
+  const semanticViolationCount = parseNullableCount(value.semanticViolationCount);
+  const semanticViolationCodes = parseSafeDiagnosticCodeArray(value.semanticViolationCodes);
+  const languageQualityViolationCount = parseNullableCount(value.languageQualityViolationCount);
+  const languageQualityViolationCodes = parseSafeDiagnosticCodeArray(value.languageQualityViolationCodes);
+  const violationFactIdHashesByCode = parseDiagnosticHashMap(value.violationFactIdHashesByCode);
+  const violationEntryIdHashesByCode = parseDiagnosticHashMap(value.violationEntryIdHashesByCode);
+  const primaryValidationRejectionCode = value.primaryValidationRejectionCode === null
+    ? null
+    : isSafeDiagnosticCode(value.primaryValidationRejectionCode)
+      ? value.primaryValidationRejectionCode
+      : undefined;
+  if (
+    typeof candidatePresent !== 'boolean'
+    || (candidateHash !== null && !isDiagnosticHash(candidateHash))
+    || candidateUnitCount === undefined
+    || !candidateUnitHashes
+    || !Array.isArray(candidateUnitLengths)
+    || candidateUnitLengths.some((length) => !isFiniteDiagnosticCount(length))
+    || evaluatorStopReason === undefined
+    || evaluatorContentBlockCount === undefined
+    || evaluatorTextBlockCount === undefined
+    || evaluatorToolBlockCount === undefined
+    || evaluatorExpectedToolCount === undefined
+    || evaluatorToolNameMatched === undefined
+    || evaluatorToolInputObject === undefined
+    || evaluatorToolInputSchemaPassed === undefined
+    || evaluatorIdentityPassed === undefined
+    || semanticViolationCount === undefined
+    || !semanticViolationCodes
+    || languageQualityViolationCount === undefined
+    || !languageQualityViolationCodes
+    || !violationFactIdHashesByCode
+    || !violationEntryIdHashesByCode
+    || primaryValidationRejectionCode === undefined
+  ) return null;
+  if (
+    candidatePresent
+      ? candidateHash === null
+        || candidateUnitCount === null
+        || candidateUnitCount !== candidateUnitHashes.length
+        || candidateUnitCount !== candidateUnitLengths.length
+      : candidateHash !== null
+        || candidateUnitCount !== null
+        || candidateUnitHashes.length !== 0
+        || candidateUnitLengths.length !== 0
+  ) return null;
+  if (
+    (semanticViolationCount !== null && semanticViolationCount < semanticViolationCodes.length)
+    || (languageQualityViolationCount !== null && languageQualityViolationCount < languageQualityViolationCodes.length)
+  ) return null;
+  return immutableCopy({
+    candidatePresent,
+    candidateHash,
+    candidateUnitCount,
+    candidateUnitHashes,
+    candidateUnitLengths,
+    evaluatorStopReason,
+    evaluatorContentBlockCount,
+    evaluatorTextBlockCount,
+    evaluatorToolBlockCount,
+    evaluatorExpectedToolCount,
+    evaluatorToolNameMatched,
+    evaluatorToolInputObject,
+    evaluatorToolInputSchemaPassed,
+    evaluatorIdentityPassed,
+    semanticViolationCount,
+    semanticViolationCodes,
+    languageQualityViolationCount,
+    languageQualityViolationCodes,
+    violationFactIdHashesByCode,
+    violationEntryIdHashesByCode,
+    primaryValidationRejectionCode,
+  }) as ExperienceV3DiagnosticEvidence;
+}
+
+function parseInternalViolation(value: unknown): AiCoreV3Violation | null {
+  if (!isRecord(value)
+    || typeof value.code !== 'string'
+    || typeof value.category !== 'string'
+    || typeof value.detail !== 'string'
+    || !['structural', 'semantic', 'language_quality'].includes(value.category)
+    || (value.factIds !== undefined && (!Array.isArray(value.factIds) || value.factIds.some((id) => typeof id !== 'string')))
+    || (value.entryIds !== undefined && (!Array.isArray(value.entryIds) || value.entryIds.some((id) => typeof id !== 'string')))
+  ) return null;
+  return immutableCopy({
+    code: value.code,
+    category: value.category,
+    detail: value.detail,
+    ...(value.factIds !== undefined ? { factIds: value.factIds } : {}),
+    ...(value.entryIds !== undefined ? { entryIds: value.entryIds } : {}),
+  }) as AiCoreV3Violation;
+}
+
+function parseInternalPhaseStatus(value: unknown): ValidationPhaseStatus | null {
+  return value === 'passed' || value === 'failed' || value === 'not_evaluated' ? value : null;
+}
+
+/**
+ * The client accepts this payload only under the compile-time internal build
+ * authority and keeps it outside all persisted diagnostics stores.
+ */
+export function parseExperienceV3InternalRejectionAudit(
+  value: unknown,
+): ExperienceV3InternalRejectionAudit | null {
+  if (!INTERNAL_AI_RESET_ENABLED || !isRecord(value)
+    || typeof value.operationId !== 'string'
+    || typeof value.entryId !== 'string'
+    || typeof value.snapshotHash !== 'string'
+    || typeof value.locale !== 'string'
+    || !isRecord(value.candidate)
+    || typeof value.candidate.candidateId !== 'string'
+    || !Array.isArray(value.candidate.units)
+    || !isRecord(value.phases)
+    || !isRecord(value.evaluator)
+  ) return null;
+  const units = value.candidate.units.map((unit) => {
+    if (!isRecord(unit)
+      || typeof unit.unitId !== 'string'
+      || typeof unit.entryId !== 'string'
+      || typeof unit.text !== 'string') return null;
+    return immutableCopy({ unitId: unit.unitId, entryId: unit.entryId, text: unit.text });
+  });
+  const structural = parseInternalPhaseStatus(value.phases.structural);
+  const semantic = parseInternalPhaseStatus(value.phases.semantic);
+  const languageQuality = parseInternalPhaseStatus(value.phases.language_quality);
+  const semanticViolations = Array.isArray(value.evaluator.semanticViolations)
+    ? value.evaluator.semanticViolations.map(parseInternalViolation)
+    : null;
+  const languageQualityViolations = Array.isArray(value.evaluator.languageQualityViolations)
+    ? value.evaluator.languageQualityViolations.map(parseInternalViolation)
+    : null;
+  const evaluatorMetadata = parseExperienceV3DiagnosticEvidence({
+    ...unavailableExperienceV3DiagnosticEvidence(),
+    ...value.evaluator,
+    candidatePresent: false,
+    candidateHash: null,
+    candidateUnitCount: null,
+    candidateUnitHashes: [],
+    candidateUnitLengths: [],
+    semanticViolationCount: null,
+    semanticViolationCodes: [],
+    languageQualityViolationCount: null,
+    languageQualityViolationCodes: [],
+    violationFactIdHashesByCode: {},
+    violationEntryIdHashesByCode: {},
+    primaryValidationRejectionCode: null,
+  });
+  if (
+    units.some((unit) => unit === null)
+    || !structural
+    || !semantic
+    || !languageQuality
+    || !semanticViolations
+    || semanticViolations.some((violation) => violation === null)
+    || !languageQualityViolations
+    || languageQualityViolations.some((violation) => violation === null)
+    || !evaluatorMetadata
+  ) return null;
+  return immutableCopy({
+    operationId: value.operationId,
+    entryId: value.entryId,
+    snapshotHash: value.snapshotHash,
+    locale: value.locale,
+    candidate: {
+      candidateId: value.candidate.candidateId,
+      units,
+    },
+    phases: { structural, semantic, language_quality: languageQuality },
+    evaluator: {
+      evaluatorStopReason: evaluatorMetadata.evaluatorStopReason,
+      evaluatorContentBlockCount: evaluatorMetadata.evaluatorContentBlockCount,
+      evaluatorTextBlockCount: evaluatorMetadata.evaluatorTextBlockCount,
+      evaluatorToolBlockCount: evaluatorMetadata.evaluatorToolBlockCount,
+      evaluatorExpectedToolCount: evaluatorMetadata.evaluatorExpectedToolCount,
+      evaluatorToolNameMatched: evaluatorMetadata.evaluatorToolNameMatched,
+      evaluatorToolInputObject: evaluatorMetadata.evaluatorToolInputObject,
+      evaluatorToolInputSchemaPassed: evaluatorMetadata.evaluatorToolInputSchemaPassed,
+      evaluatorIdentityPassed: evaluatorMetadata.evaluatorIdentityPassed,
+      semanticViolations,
+      languageQualityViolations,
+    },
+  }) as ExperienceV3InternalRejectionAudit;
+}
+
 function hasExplicitAccept(validation: AggregateValidationResult): boolean {
   return validation.decision === 'accept'
     && validation.phases.structural?.status === 'passed'
@@ -391,6 +754,8 @@ export function parseExperienceV3SuccessResponse(
   const providerOutput = value.providerOutput;
   const candidate = value.candidate;
   const validation = value.validation;
+  const diagnosticEvidence = parseExperienceV3DiagnosticEvidence(value.diagnosticEvidence)
+    ?? unavailableExperienceV3DiagnosticEvidence();
   if (!isRecord(providerOutput) || !isRecord(candidate) || !isRecord(validation)) return null;
   if (!Array.isArray(providerOutput.bullets) || providerOutput.bullets.some((item) => typeof item !== 'string')) return null;
   if (!isRecord(validation.phases)) return null;
@@ -402,6 +767,7 @@ export function parseExperienceV3SuccessResponse(
       providerOutput: providerOutput as unknown as ExperienceV3ProviderOutput,
       candidate: envelope,
       validation: validation as unknown as AggregateValidationResult,
+      diagnosticEvidence,
     }) as ExperienceV3GenerateSuccessResponse;
   } catch {
     return null;
@@ -657,6 +1023,17 @@ function responseValidation(value: unknown): AggregateValidationResult | null {
   return value.validation as unknown as AggregateValidationResult;
 }
 
+function responseDiagnosticEvidence(value: unknown): ExperienceV3DiagnosticEvidence {
+  if (!isRecord(value)) return unavailableExperienceV3DiagnosticEvidence();
+  return parseExperienceV3DiagnosticEvidence(value.diagnosticEvidence)
+    ?? unavailableExperienceV3DiagnosticEvidence();
+}
+
+function responseInternalRejectionAudit(value: unknown): ExperienceV3InternalRejectionAudit | null {
+  if (!isRecord(value)) return null;
+  return parseExperienceV3InternalRejectionAudit(value.internalRejectionAudit);
+}
+
 function diagnosticPhaseStatus(
   validation: AggregateValidationResult | null,
   phase: 'structural' | 'semantic' | 'language_quality',
@@ -740,6 +1117,7 @@ function buildExperienceV3TerminalDiagnostic(
   const reason = finiteTerminalReason(rawReason);
   const acceptedResponse = Boolean(parseExperienceV3SuccessResponse(rawResponse));
   const validation = responseValidation(rawResponse);
+  const evidence = responseDiagnosticEvidence(rawResponse);
   const routeHttpStatus = (() => {
     try {
       const value = dependencies.getRouteHttpStatus?.();
@@ -830,6 +1208,7 @@ function buildExperienceV3TerminalDiagnostic(
     raceGuardResult: raceFailure ? 'failed' as const : applyAuthorized ? 'passed' as const : 'not_evaluated' as const,
     sourceCommitMarker: diagnosticSourceMarker(process.env.NEXT_PUBLIC_SOURCE_COMMIT_SHORT),
     buildChannel: diagnosticEnvironmentValue(process.env.NEXT_PUBLIC_BUILD_CHANNEL),
+    ...evidence,
   }) as ExperienceV3TerminalDiagnostic;
 }
 
@@ -847,9 +1226,17 @@ function withTerminalDiagnostic(
     rawResponse,
     serverResponseReceived,
   );
+  const internalRejectionAudit = result.kind === 'handled_failure'
+    ? responseInternalRejectionAudit(rawResponse)
+    : null;
   return result.kind === 'handled_success'
     ? { kind: 'handled_success', diagnostic }
-    : { kind: 'handled_failure', typedReason: result.typedReason, diagnostic };
+    : {
+      kind: 'handled_failure',
+      typedReason: result.typedReason,
+      diagnostic,
+      ...(internalRejectionAudit ? { internalRejectionAudit } : {}),
+    };
 }
 
 export async function runExperienceV3GenerateAdapter(

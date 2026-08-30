@@ -84,6 +84,7 @@ import {
   executeSummaryV3GenerateServer,
   isAiCoreV3Enabled,
 } from '@/lib/ai-core-v3';
+import type { ExperienceV3GenerateFailureResponse } from '@/lib/ai-core-v3/experience-generate';
 
 /**
  * Explicit Vercel serverless function execution budget (seconds).
@@ -533,6 +534,45 @@ function parseCompactVerifierResponse(raw: string): CompactVerifierDecision[] | 
   }
 }
 
+/**
+ * The ordinary M2 failure response retains decision/phase truth and the safe
+ * diagnostic envelope, but never serializes evaluator detail or raw IDs. The
+ * separately gated internalRejectionAudit is the only CV-text evidence path.
+ */
+function redactExperienceV3FailureForRoute(result: ExperienceV3GenerateFailureResponse) {
+  const validation = result.validation;
+  return {
+    ok: false as const,
+    action: result.action,
+    typedReason: result.typedReason,
+    diagnosticEvidence: result.diagnosticEvidence,
+    ...(validation ? {
+      validation: {
+        decision: validation.decision,
+        phases: {
+          structural: {
+            category: validation.phases.structural.category,
+            status: validation.phases.structural.status,
+            violations: [],
+          },
+          semantic: {
+            category: validation.phases.semantic.category,
+            status: validation.phases.semantic.status,
+            violations: [],
+          },
+          language_quality: {
+            category: validation.phases.language_quality.category,
+            status: validation.phases.language_quality.status,
+            violations: [],
+          },
+        },
+        violations: [],
+      },
+    } : {}),
+    ...(result.internalRejectionAudit ? { internalRejectionAudit: result.internalRejectionAudit } : {}),
+  };
+}
+
 function deadlineOwnerOf(error: unknown): string | null {
   return error && typeof error === 'object' && 'deadlineOwner' in error
     ? String((error as { deadlineOwner?: unknown }).deadlineOwner || '') || null
@@ -719,7 +759,10 @@ export async function POST(req: NextRequest) {
           : result.typedReason.includes('provider') || result.typedReason.includes('evaluator')
             ? 502
             : 422;
-      return jsonResponse(result, { status });
+      return jsonResponse(
+        result.ok ? result : redactExperienceV3FailureForRoute(result),
+        { status },
+      );
     }
 
     if (action === 'cover-letter' || action === 'cover-letter-gen' || action === 'cover-letter-regen') {

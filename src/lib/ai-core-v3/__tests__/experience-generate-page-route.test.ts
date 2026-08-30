@@ -366,6 +366,149 @@ describe('M2 focused page and route integration', () => {
     }
   });
 
+  it('returns raw rejection evidence only when the compiled internal diagnostics gate is enabled', async () => {
+    const environmentKeys = [
+      'AI_CORE_V3_ENABLED',
+      'NEXT_PUBLIC_AI_CORE_V3_ENABLED',
+      'NEXT_PUBLIC_INTERNAL_AI_RESET_ENABLED',
+      'ANTHROPIC_API_KEY',
+      'ANTHROPIC_AUTH_TOKEN',
+    ] as const;
+    const originalEnvironment = Object.fromEntries(environmentKeys.map((key) => [key, {
+      present: Object.prototype.hasOwnProperty.call(process.env, key),
+      value: process.env[key],
+    }])) as Record<(typeof environmentKeys)[number], { present: boolean; value: string | undefined }>;
+    const manifest = {
+      operationId: 'semantic-route-operation',
+      operationKind: 'experience_generate' as const,
+      mode: 'generate' as const,
+      entryId: 'semantic-route-entry',
+      locale: 'de',
+      roleTitle: 'Synthetic Role',
+      company: 'Synthetic Company',
+      employmentState: 'present' as const,
+      dates: { start: { year: 2024, month: 1 }, end: null },
+      industry: 'engineering',
+      level: 'mid',
+      exactSourceText: '',
+      facts: [],
+      snapshotHash: 'semantic-route-snapshot',
+    };
+    const bullets = [
+      'Unterstützt routinemäßige technische Aufgaben.',
+      'Dokumentiert ausgeführte Arbeitsschritte.',
+      'Stimmt laufende Aufgaben mit Kolleginnen und Kollegen ab.',
+    ];
+    try {
+      for (const internalEnabled of [false, true]) {
+        const messagesCreateSpy = vi.fn(async (params: { system?: unknown }) => {
+          const system = String(params.system || '');
+          if (system.includes('single AI Core V3 Experience prose writer')) {
+            return { content: [{ type: 'text', text: JSON.stringify({
+              operationId: manifest.operationId,
+              entryId: manifest.entryId,
+              snapshotHash: manifest.snapshotHash,
+              locale: manifest.locale,
+              bullets,
+            }) }] };
+          }
+          if (system.includes('independent non-writing CV validator')) {
+            return {
+              stop_reason: 'tool_use',
+              content: [{
+                type: 'tool_use',
+                name: 'submit_experience_validation',
+                input: {
+                  operationId: manifest.operationId,
+                  entryId: manifest.entryId,
+                  snapshotHash: manifest.snapshotHash,
+                  locale: manifest.locale,
+                  phases: {
+                    semantic: {
+                      status: 'failed',
+                      violations: [{
+                        code: 'unsupported_claim',
+                        category: 'semantic',
+                        detail: 'Synthetic route evaluator detail.',
+                        entryIds: [manifest.entryId],
+                      }],
+                    },
+                    language_quality: { status: 'passed', violations: [] },
+                  },
+                },
+              }],
+            };
+          }
+          throw new Error('Unexpected route transport');
+        });
+        process.env.AI_CORE_V3_ENABLED = 'true';
+        process.env.NEXT_PUBLIC_AI_CORE_V3_ENABLED = 'true';
+        process.env.NEXT_PUBLIC_INTERNAL_AI_RESET_ENABLED = internalEnabled ? 'true' : 'false';
+        process.env.ANTHROPIC_API_KEY = 'semantic-route-test-key';
+        delete process.env.ANTHROPIC_AUTH_TOKEN;
+        vi.resetModules();
+        vi.doMock('@anthropic-ai/sdk', () => {
+          class MockAnthropic {
+            readonly messages = { create: messagesCreateSpy };
+          }
+          return { default: MockAnthropic };
+        });
+        vi.doMock('@/lib/pro-token', () => ({
+          verifyProToken: vi.fn(async () => ({ subject: 'semantic-route-test' })),
+        }));
+        const coreModule = await import('..');
+        coreModule.resetAiCoreV3TestOverride();
+        const { POST } = await import('@/app/api/generate/route');
+        const response = await POST(new Request('http://localhost/api/generate', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            action: coreModule.EXPERIENCE_V3_GENERATE_ACTION,
+            proToken: 'semantic-route-pro-token',
+            requestId: manifest.operationId,
+            manifest,
+          }),
+        }) as Parameters<typeof POST>[0]);
+        const body = await response.json();
+        expect(response.status).toBe(422);
+        expect(body).toMatchObject({
+          ok: false,
+          action: 'experience_v3_generate',
+          typedReason: 'validation_rejected',
+          diagnosticEvidence: {
+            semanticViolationCodes: ['unsupported_claim'],
+            primaryValidationRejectionCode: 'unsupported_claim',
+          },
+        });
+        expect(messagesCreateSpy).toHaveBeenCalledTimes(2);
+        if (internalEnabled) {
+          expect(body.internalRejectionAudit).toMatchObject({
+            candidate: { units: bullets.map((text) => ({ text })) },
+            evaluator: { semanticViolations: [{ detail: 'Synthetic route evaluator detail.' }] },
+          });
+        } else {
+          expect(body).not.toHaveProperty('internalRejectionAudit');
+          expect(JSON.stringify(body)).not.toContain(bullets[0]);
+          expect(JSON.stringify(body)).not.toContain('Synthetic route evaluator detail.');
+        }
+        coreModule.resetAiCoreV3TestOverride();
+        vi.restoreAllMocks();
+        vi.doUnmock('@anthropic-ai/sdk');
+        vi.doUnmock('@/lib/pro-token');
+      }
+    } finally {
+      vi.restoreAllMocks();
+      vi.doUnmock('@anthropic-ai/sdk');
+      vi.doUnmock('@/lib/pro-token');
+      vi.resetModules();
+      for (const key of environmentKeys) {
+        const original = originalEnvironment[key];
+        if (original.present) process.env[key] = original.value;
+        else delete process.env[key];
+      }
+    }
+  });
+
   it('has one V3 writer path and one evaluator path, both with provider retries disabled', () => {
     const branch = routeSource.slice(
       routeSource.indexOf('if (action === EXPERIENCE_V3_GENERATE_ACTION)'),

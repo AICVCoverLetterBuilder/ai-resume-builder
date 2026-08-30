@@ -38,3 +38,41 @@ export const M4_M2_EVALUATOR_MALFORMED_DEVICE_DIAGNOSTIC_FIXTURE = immutableCopy
   sourceCommitMarker: '6d02259',
   buildChannel: 'internal',
 });
+
+/**
+ * Immutable, non-PII AAB 535 device observation. It deliberately contains
+ * only the terminal metadata supplied by the tester before this fix, so the
+ * structured violation code remains unavailable rather than invented.
+ */
+export const M4_M2_SEMANTIC_REJECTION_OBSERVABILITY_DEVICE_FIXTURE = immutableCopy({
+  schemaVersion: 1,
+  marker: 'EXPERIENCE_V3_TERMINAL_DIAGNOSTIC',
+  revision: 'experience-v3-terminal-diagnostic-v1',
+  operation: 'experience_v3_generate',
+  requestedLocale: 'de',
+  uiLocale: 'de',
+  contentLocale: 'de',
+  sourceWasEmpty: true,
+  normalizedIndustry: 'engineering',
+  normalizedLevel: 'mid',
+  employmentState: 'present',
+  ownershipResult: 'owned',
+  routeHttpStatus: 422,
+  writer: { attempted: true, result: 'succeeded' },
+  evaluator: { attempted: true, result: 'succeeded' },
+  phases: {
+    structural: 'passed',
+    semantic: 'failed',
+    language_quality: 'passed',
+  },
+  rejectionReasonCodes: ['validation_rejected'],
+  finalDecision: 'reject',
+  applyAuthorized: false,
+  applyAttempted: false,
+  applyCommitted: false,
+  v2FallthroughCount: 0,
+  usageBefore: 0,
+  usageAfter: 0,
+  usageDelta: 0,
+  sourceCommitMarker: '81aec58',
+});

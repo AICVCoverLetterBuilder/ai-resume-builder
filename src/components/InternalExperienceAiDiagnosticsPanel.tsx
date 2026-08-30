@@ -5,17 +5,19 @@
  * compile-time enabled branch of CvExportDiagnosticsControls so production
  * DCE can drop this chunk (and its marker strings) from disabled builds.
  */
-import { useCallback, useMemo, useSyncExternalStore } from 'react';
+import { useCallback, useMemo, useState, useSyncExternalStore } from 'react';
 import { toast } from 'sonner';
 import {
+  clearExperienceAiDiagnosticHistory,
   clearExperienceAiDiagnostics,
   copyExperienceAiDiagnosticsToClipboard,
+  copyExperienceV3InternalRejectionAuditToClipboard,
   getLatestExperienceAiDiagnosticRecord,
+  getLatestExperienceV3InternalRejectionAudit,
   isExperienceV3TerminalDiagnostic,
   summarizeExperienceAiDiagnostic,
 } from '@/lib/cv-experience-ai-diagnostics';
 import {
-  clearCvAiDiagnosticHistory,
   getCvAiDiagnosticHistory,
 } from '@/lib/cv-ai-diagnostics-contract';
 import {
@@ -50,11 +52,15 @@ function getExperienceDiagnosticsRevision(): number {
   return getCvAiDiagnosticsLifecycleRevision();
 }
 
+const REJECTION_AUDIT_COPY_LABEL = 'Copy rejected AI audit — contains CV text';
+const REJECTION_AUDIT_COPY_WARNING = 'Warning: this copy contains CV text and must not be posted publicly.';
+
 export function InternalExperienceAiDiagnosticsPanel({
   refreshToken,
 }: {
   refreshToken: number;
 }) {
+  const [showRejectedAudit, setShowRejectedAudit] = useState(false);
   const rev = useSyncExternalStore(
     subscribeExperienceDiagnostics,
     getExperienceDiagnosticsRevision,
@@ -71,6 +77,11 @@ export function InternalExperienceAiDiagnosticsPanel({
     void refreshToken;
     return getCvAiDiagnosticHistory('experience');
   }, [rev, refreshToken]);
+  const rejectedAudit = useMemo(() => {
+    void rev;
+    void refreshToken;
+    return getLatestExperienceV3InternalRejectionAudit();
+  }, [rev, refreshToken]);
 
   const onCopy = useCallback(async () => {
     const ok = await copyExperienceAiDiagnosticsToClipboard();
@@ -85,8 +96,17 @@ export function InternalExperienceAiDiagnosticsPanel({
   }, []);
 
   const onClearHistory = useCallback(() => {
-    clearCvAiDiagnosticHistory('experience');
+    clearExperienceAiDiagnosticHistory();
     toast.success('Experience diagnostic history cleared');
+  }, []);
+
+  const onCopyRejectedAudit = useCallback(async () => {
+    const ok = await copyExperienceV3InternalRejectionAuditToClipboard(
+      REJECTION_AUDIT_COPY_WARNING,
+    );
+    toast[ok ? 'success' : 'error'](
+      ok ? 'Rejected AI audit copied' : 'Could not copy rejected AI audit',
+    );
   }, []);
 
   const warnings: string[] = [];
@@ -219,6 +239,39 @@ export function InternalExperienceAiDiagnosticsPanel({
         >
           {EXPERIENCE_AI_COPY_DIAGNOSTICS_LABEL}
         </button>
+      ) : null}
+      {rejectedAudit ? (
+        <div className="mt-3 rounded-md border border-amber-500/50 p-3" data-testid="experience-ai-rejected-audit">
+          <button
+            type="button"
+            data-testid="experience-ai-rejected-audit-toggle"
+            className="min-h-11 w-full rounded-md border border-border px-3 py-2 text-left text-xs font-medium pointer-events-auto"
+            onClick={() => setShowRejectedAudit((visible) => !visible)}
+          >
+            {showRejectedAudit ? 'Hide rejected AI audit' : 'Show rejected AI audit'}
+          </button>
+          {showRejectedAudit ? (
+            <div className="mt-3">
+              <p className="text-xs font-medium text-amber-800 dark:text-amber-300">
+                {REJECTION_AUDIT_COPY_WARNING}
+              </p>
+              <pre
+                className="mt-2 max-h-48 overflow-auto rounded-md bg-muted/40 p-2 text-[10px] leading-relaxed"
+                data-testid="experience-ai-rejected-audit-json"
+              >
+                {JSON.stringify(rejectedAudit, null, 2)}
+              </pre>
+              <button
+                type="button"
+                data-testid="experience-ai-rejected-audit-copy"
+                className="mt-2 min-h-11 w-full rounded-md border border-border px-3 py-2 text-left text-xs font-medium pointer-events-auto"
+                onClick={onCopyRejectedAudit}
+              >
+                {REJECTION_AUDIT_COPY_LABEL}
+              </button>
+            </div>
+          ) : null}
+        </div>
       ) : null}
       <button
         type="button"

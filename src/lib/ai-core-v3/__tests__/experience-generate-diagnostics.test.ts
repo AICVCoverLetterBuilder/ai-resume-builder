@@ -7,6 +7,7 @@ import {
   clearExperienceAiDiagnosticsForTests,
   copyExperienceAiDiagnosticsToClipboard,
   getLatestExperienceAiDiagnosticRecord,
+  getLatestExperienceV3InternalRejectionAudit,
   routeExperienceV3PageTerminal,
   summarizeExperienceAiDiagnostic,
 } from '../../cv-experience-ai-diagnostics';
@@ -21,6 +22,7 @@ import {
 import {
   EXPERIENCE_V3_TERMINAL_REASON_CODES,
   captureExperienceV3OperationSnapshot,
+  hashExperienceV3Value,
   runExperienceV3GenerateAdapter,
   type ExperienceV3AdapterInput,
   type ExperienceV3AdapterResult,
@@ -30,7 +32,10 @@ import {
   executeExperienceV3GenerateServer,
   type ExperienceV3EvaluatorResponse,
 } from '../experience-generate-server';
-import { M4_M2_EVALUATOR_MALFORMED_DEVICE_DIAGNOSTIC_FIXTURE } from '../fixtures/m4-m2-evaluator-malformed-device-diagnostic';
+import {
+  M4_M2_EVALUATOR_MALFORMED_DEVICE_DIAGNOSTIC_FIXTURE,
+  M4_M2_SEMANTIC_REJECTION_OBSERVABILITY_DEVICE_FIXTURE,
+} from '../fixtures/m4-m2-evaluator-malformed-device-diagnostic';
 
 const DEVICE_ROLE = 'Servicetechniker Elektrotechnik';
 const DEVICE_EMPLOYER = 'NordWerk Elektroservice Test';
@@ -136,6 +141,7 @@ function evaluatorJson(
           code: 'unsupported_claim',
           category: 'semantic',
           detail: 'Unsupported claim detected.',
+          factIds: ['synthetic-fact-id'],
           entryIds: [manifest.entryId],
         }],
       },
@@ -381,6 +387,52 @@ describe('M4 device-test-1 V3 Experience terminal diagnostics', () => {
     expect(getCvAiDiagnosticHistory('experience')).toEqual([]);
   });
 
+  it('18a. semantic rejection persists safe codes and hashes but never candidate or evaluator detail text', async () => {
+    const run = await runDeviceFixture('semantic_reject');
+    expect(run.result.kind).toBe('handled_failure');
+    if (run.result.kind !== 'handled_failure') return;
+    routeLikePage(run.result);
+    const trace = getLatestExperienceAiDiagnosticRecord();
+    expect(trace).toMatchObject({
+      candidatePresent: true,
+      candidateHash: hashExperienceV3Value(DE_BULLETS.map((bullet) => `• ${bullet}`).join('\n')),
+      candidateUnitCount: 3,
+      candidateUnitHashes: DE_BULLETS.map((bullet) => hashExperienceV3Value(bullet)),
+      candidateUnitLengths: DE_BULLETS.map((bullet) => bullet.length),
+      evaluatorStopReason: 'tool_use',
+      evaluatorContentBlockCount: 1,
+      evaluatorTextBlockCount: 0,
+      evaluatorToolBlockCount: 1,
+      evaluatorExpectedToolCount: 1,
+      evaluatorToolNameMatched: true,
+      evaluatorToolInputObject: true,
+      evaluatorToolInputSchemaPassed: true,
+      evaluatorIdentityPassed: true,
+      semanticViolationCount: 1,
+      semanticViolationCodes: ['unsupported_claim'],
+      languageQualityViolationCount: 0,
+      primaryValidationRejectionCode: 'unsupported_claim',
+    });
+    expect(trace?.violationFactIdHashesByCode).toEqual({
+      unsupported_claim: [hashExperienceV3Value('synthetic-fact-id')],
+    });
+    expect(trace?.violationEntryIdHashesByCode).toEqual({
+      unsupported_claim: [hashExperienceV3Value('device-entry-stable')],
+    });
+    const persisted = localStorage.setItem.mock.calls.find(
+      ([key]) => key === EXPERIENCE_V3_TERMINAL_DIAG_STORAGE_KEY,
+    )?.[1] || '';
+    for (const forbidden of [...DE_BULLETS, 'Unsupported claim detected.', 'synthetic-fact-id', 'device-entry-stable']) {
+      expect(persisted).not.toContain(forbidden);
+    }
+    expect(await copyExperienceAiDiagnosticsToClipboard()).toBe(true);
+    const genericCopy = vi.mocked(navigator.clipboard.writeText).mock.calls.at(-1)?.[0] || '';
+    expect(genericCopy).not.toContain(DE_BULLETS[0]);
+    expect(genericCopy).not.toContain('Unsupported claim detected.');
+    expect(genericCopy).not.toContain('internalRejectionAudit');
+    expect(getLatestExperienceV3InternalRejectionAudit()).toBeNull();
+  });
+
   it('19. operation race failure records +0, no apply, and a failed race guard', async () => {
     const run = await runDeviceFixture('race_failure');
     expect(run.result.kind).toBe('handled_failure');
@@ -446,5 +498,119 @@ describe('M4 device-test-1 V3 Experience terminal diagnostics', () => {
     }
     expect([run.writeCalls, run.persistCalls, run.usage]).toEqual([0, 0, 0]);
     expect(routeLikePage(run.result)).toBe(0);
+  });
+
+  it('22. freezes the AAB 535 semantic-rejection fixture as supplied non-PII terminal metadata only', () => {
+    const fixture = M4_M2_SEMANTIC_REJECTION_OBSERVABILITY_DEVICE_FIXTURE;
+    expect(Object.isFrozen(fixture)).toBe(true);
+    expect(Object.isFrozen(fixture.phases)).toBe(true);
+    expect(fixture).toMatchObject({
+      operation: 'experience_v3_generate',
+      requestedLocale: 'de',
+      sourceWasEmpty: true,
+      normalizedIndustry: 'engineering',
+      normalizedLevel: 'mid',
+      employmentState: 'present',
+      routeHttpStatus: 422,
+      writer: { attempted: true, result: 'succeeded' },
+      evaluator: { attempted: true, result: 'succeeded' },
+      phases: { structural: 'passed', semantic: 'failed', language_quality: 'passed' },
+      rejectionReasonCodes: ['validation_rejected'],
+      finalDecision: 'reject',
+      applyAuthorized: false,
+      applyAttempted: false,
+      applyCommitted: false,
+      usageBefore: 0,
+      usageAfter: 0,
+      usageDelta: 0,
+      sourceCommitMarker: '81aec58',
+    });
+    const serialized = JSON.stringify(fixture);
+    for (const forbidden of ['Servicetechniker', 'NordWerk', 'Private Device Candidate', 'Unsupported claim detected.']) {
+      expect(serialized).not.toContain(forbidden);
+    }
+  });
+});
+
+describe('M4 M2 internal semantic-rejection audit gate', () => {
+  it('23. stores exact rejected candidate and violations only in an internal in-memory audit', async () => {
+    const gateKey = 'NEXT_PUBLIC_INTERNAL_AI_RESET_ENABLED';
+    const hadGate = Object.prototype.hasOwnProperty.call(process.env, gateKey);
+    const originalGate = process.env[gateKey];
+    vi.stubGlobal('localStorage', makeStorage());
+    vi.stubGlobal('navigator', { clipboard: { writeText: vi.fn(async () => undefined) } });
+    try {
+      process.env[gateKey] = 'true';
+      vi.resetModules();
+      const core = await import('../experience-generate');
+      const server = await import('../experience-generate-server');
+      const diagnostics = await import('../../cv-experience-ai-diagnostics');
+      const input = makeDeviceInput();
+      let cv = input.cv;
+      let usage = 0;
+      const result = await core.runExperienceV3GenerateAdapter(input, {
+        request: async ({ manifest }) => server.executeExperienceV3GenerateServer({ manifest }, {
+          generate: async () => writerJson(manifest),
+          evaluate: async () => evaluatorToolResponse(manifest, 'failed'),
+        }),
+        getLiveState: () => ({
+          cv,
+          requestedLocale: 'de',
+          uiLocale: 'de',
+          storedContentLocale: 'de',
+          exactVisibleDescription: '',
+          industry: 'engineering',
+          level: 'mid',
+        }),
+        writeCv: (next) => { cv = next; },
+        persistCv: () => true,
+        incrementUsage: () => { usage += 1; },
+        getUsageCount: () => usage,
+        getRouteHttpStatus: () => 422,
+      });
+      expect(result).toMatchObject({ kind: 'handled_failure', typedReason: 'validation_rejected' });
+      if (result.kind !== 'handled_failure') return;
+      expect(result.internalRejectionAudit?.candidate.units.map((unit) => unit.text)).toEqual(DE_BULLETS);
+      expect(result.internalRejectionAudit?.evaluator.semanticViolations).toEqual([{
+        code: 'unsupported_claim',
+        category: 'semantic',
+        detail: 'Unsupported claim detected.',
+        factIds: ['synthetic-fact-id'],
+        entryIds: ['device-entry-stable'],
+      }]);
+      diagnostics.routeExperienceV3PageTerminal(result, { onSuccess: vi.fn(), onFailure: vi.fn() });
+      const audit = diagnostics.getLatestExperienceV3InternalRejectionAudit();
+      expect(audit?.candidate.units.map((unit) => unit.text)).toEqual(DE_BULLETS);
+      expect(audit?.evaluator.semanticViolations).toHaveLength(1);
+      const generic = diagnostics.formatExperienceAiDiagnosticForCopy(
+        diagnostics.getLatestExperienceAiDiagnosticRecord()!,
+      );
+      expect(generic).not.toContain(DE_BULLETS[0]);
+      expect(generic).not.toContain('Unsupported claim detected.');
+      const warning = 'Warning: this copy contains CV text and must not be posted publicly.';
+      expect(diagnostics.formatExperienceV3InternalRejectionAuditForCopy(audit!, warning))
+        .toContain(warning);
+      expect(await diagnostics.copyExperienceV3InternalRejectionAuditToClipboard(warning)).toBe(true);
+      const dedicatedCopy = vi.mocked(navigator.clipboard.writeText).mock.calls.at(-1)?.[0] || '';
+      expect(dedicatedCopy).toContain(DE_BULLETS[0]);
+      expect(dedicatedCopy).toContain('Unsupported claim detected.');
+      expect(dedicatedCopy).toContain(warning);
+      expect([usage, cv.experience[0].description]).toEqual([0, '']);
+      diagnostics.clearExperienceAiDiagnostics();
+      expect(diagnostics.getLatestExperienceV3InternalRejectionAudit()).toBeNull();
+      diagnostics.routeExperienceV3PageTerminal(result, { onSuccess: vi.fn(), onFailure: vi.fn() });
+      expect(diagnostics.getLatestExperienceV3InternalRejectionAudit()).not.toBeNull();
+      diagnostics.clearExperienceAiDiagnosticHistory();
+      expect(diagnostics.getLatestExperienceV3InternalRejectionAudit()).toBeNull();
+      expect((await import('../../cv-ai-diagnostics-contract')).getCvAiDiagnosticHistory('experience')).toEqual([]);
+      vi.resetModules();
+      const reloadedDiagnostics = await import('../../cv-experience-ai-diagnostics');
+      expect(reloadedDiagnostics.getLatestExperienceV3InternalRejectionAudit()).toBeNull();
+    } finally {
+      if (hadGate) process.env[gateKey] = originalGate;
+      else delete process.env[gateKey];
+      vi.unstubAllGlobals();
+      vi.resetModules();
+    }
   });
 });
