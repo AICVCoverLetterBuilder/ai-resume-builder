@@ -4040,14 +4040,19 @@ export function summarizeExperienceAiDiagnostic(
 } | null {
   if (!trace) return null;
   if (isExperienceV3TerminalDiagnostic(trace)) {
+    const isM3Enhance = trace.operation === 'experience_v3_enhance';
     const passedPhases = Object.values(trace.phases).filter((status) => status === 'passed').length;
     return {
       timestamp: trace.capturedAt,
       locale: trace.requestedLocale,
       finalStage: trace.finalDecision,
       typedFailureReason: trace.rejectionReasonCodes[0] || 'none',
-      sourceUnitCount: 0,
-      requiredCovered: `${passedPhases}/3`,
+      sourceUnitCount: isM3Enhance ? (trace.sourceUnitCount ?? 0) : 0,
+      requiredCovered: isM3Enhance
+        ? (trace.sourceUnitCount == null || trace.phases.semantic !== 'passed'
+          ? 'n/a'
+          : `${trace.sourceUnitCount}/${trace.sourceUnitCount}`)
+        : `${passedPhases}/3`,
       providerFallbackCounts: `${trace.writer.result}/${trace.evaluator.result}`,
       finalScripts: 'none',
       countedAsSuccess: trace.finalDecision === 'accept',

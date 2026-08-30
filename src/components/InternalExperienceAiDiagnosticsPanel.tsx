@@ -186,7 +186,11 @@ export function InternalExperienceAiDiagnosticsPanel({
             <dd className="inline">{summary.requiredCovered}</dd>
           </div>
           <div>
-            <dt className="inline font-medium text-foreground">provider/fallback bullets: </dt>
+            <dt className="inline font-medium text-foreground">
+              {full && isExperienceV3TerminalDiagnostic(full) && full.operation === 'experience_v3_enhance'
+                ? 'Writer / Evaluator: '
+                : 'provider/fallback bullets: '}
+            </dt>
             <dd className="inline">{summary.providerFallbackCounts}</dd>
           </div>
           <div>

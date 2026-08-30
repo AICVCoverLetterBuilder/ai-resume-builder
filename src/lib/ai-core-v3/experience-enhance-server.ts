@@ -444,6 +444,7 @@ function internalRejectionAudit(
   manifest: ExperienceFactManifest,
   candidate: AiCoreV3CandidateEnvelope,
   validation?: AggregateValidationResult,
+  evaluatorMetadata: ExperienceV3EnhanceEvaluatorDiagnosticMetadata = unavailableEnhanceEvaluatorMetadata(),
 ): ExperienceV3InternalRejectionAudit | undefined {
   if (!INTERNAL_AI_RESET_ENABLED) return undefined;
   return immutableCopy({
@@ -462,15 +463,7 @@ function internalRejectionAudit(
       language_quality: validation?.phases.language_quality?.status ?? 'not_evaluated',
     },
     evaluator: {
-      evaluatorStopReason: null,
-      evaluatorContentBlockCount: null,
-      evaluatorTextBlockCount: null,
-      evaluatorToolBlockCount: null,
-      evaluatorExpectedToolCount: null,
-      evaluatorToolNameMatched: null,
-      evaluatorToolInputObject: null,
-      evaluatorToolInputSchemaPassed: null,
-      evaluatorIdentityPassed: null,
+      ...evaluatorMetadata,
       semanticViolations: validation?.phases.semantic?.violations ?? [],
       languageQualityViolations: validation?.phases.language_quality?.violations ?? [],
     },
@@ -1012,7 +1005,7 @@ export async function executeExperienceV3EnhanceServer(
     evaluatorResult.typedReason,
     undefined,
     diagnosticEvidence(candidate, undefined, writerDiagnostic, evaluatorResult.diagnosticMetadata),
-    internalRejectionAudit(manifest, candidate),
+    internalRejectionAudit(manifest, candidate, undefined, evaluatorResult.diagnosticMetadata),
   );
   const evaluator = evaluatorResult.value;
   const evaluatorDiagnostic = evaluatorResult.diagnosticMetadata;
@@ -1023,7 +1016,7 @@ export async function executeExperienceV3EnhanceServer(
   }) as ValidationPhaseResult;
   const validation = aggregate(manifest, candidate, structural, semantic, languageQuality);
   const evidence = diagnosticEvidence(candidate, validation, writerDiagnostic, evaluatorDiagnostic);
-  const audit = internalRejectionAudit(manifest, candidate, validation);
+  const audit = internalRejectionAudit(manifest, candidate, validation, evaluatorDiagnostic);
   if (validation.decision !== 'accept') return failure('validation_rejected', validation, evidence, audit);
   if (evaluator.materiality.status === 'degraded' || evaluator.materiality.degradationDetected) {
     return failure('materiality_degraded', validation, evidence, audit);

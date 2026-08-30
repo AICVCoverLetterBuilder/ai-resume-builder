@@ -805,6 +805,60 @@ describe('M4 M3 forced-tool transport closure', () => {
 });
 
 describe('M3 terminal observability', () => {
+  it('preserves language rejection evidence and the internal audit across server, adapter, and terminal seams', async () => {
+    if (process.env.NEXT_PUBLIC_INTERNAL_AI_RESET_ENABLED !== 'true') return;
+    const diagnostics = await import('../../cv-experience-ai-diagnostics');
+    const storage = new Map<string, string>();
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => { storage.set(key, value); },
+      removeItem: (key: string) => { storage.delete(key); },
+    });
+    diagnostics.clearExperienceAiDiagnosticsForTests();
+    const run = await runHarness({
+      server: { evaluator: { languageStatus: 'failed', code: 'malformed_german_surface' } },
+    });
+    expect(run.result.kind).toBe('handled_failure');
+    if (run.result.kind !== 'handled_failure') return;
+    expect(run.result.diagnostic).toMatchObject({
+      candidatePresent: true,
+      candidateUnitCount: 2,
+      evaluatorStopReason: 'tool_use',
+      evaluatorContentBlockCount: 1,
+      evaluatorToolBlockCount: 1,
+      evaluatorToolNameMatched: true,
+      evaluatorToolInputSchemaPassed: true,
+      evaluatorIdentityPassed: true,
+      semanticViolationCount: 0,
+      languageQualityViolationCount: 1,
+      languageQualityViolationCodes: ['malformed_german_surface'],
+      primaryValidationRejectionCode: 'malformed_german_surface',
+      applyAuthorized: false,
+      applyAttempted: false,
+      applyCommitted: false,
+      usageDelta: 0,
+      v2FallthroughCount: 0,
+      persistenceResult: 'not_attempted',
+    });
+    expect(run.result.internalRejectionAudit?.sourceUnits).toEqual(SOURCE.split('\n'));
+    expect(run.result.internalRejectionAudit?.candidate.units.map((unit) => unit.text)).toEqual([...IMPROVED]);
+    expect(run.result.internalRejectionAudit?.evaluator.evaluatorStopReason).toBe('tool_use');
+    expect(run.result.internalRejectionAudit?.evaluator.languageQualityViolations.map((violation) => violation.code))
+      .toEqual(['malformed_german_surface']);
+    diagnostics.routeExperienceV3PageTerminal(run.result, { onSuccess: vi.fn(), onFailure: vi.fn() });
+    expect(diagnostics.getLatestExperienceAiDiagnosticRecord()).toMatchObject({
+      candidatePresent: true,
+      languageQualityViolationCodes: ['malformed_german_surface'],
+    });
+    expect(diagnostics.getLatestExperienceV3InternalRejectionAudit()?.candidate.units.map((unit) => unit.text))
+      .toEqual([...IMPROVED]);
+    const stored = storage.get('cvpro-experience-v3-terminal-diagnostic-v1') || '';
+    expect(stored).not.toContain(IMPROVED[0]);
+    expect(stored).not.toContain('Independent evaluator rejected');
+    diagnostics.clearExperienceAiDiagnosticsForTests();
+    vi.unstubAllGlobals();
+  });
+
   it('publishes a safe terminal diagnostic for an owned transport failure', async () => {
     const run = await runHarness({ server: { writerThrows: true } });
     expect(run.result.kind).toBe('handled_failure');

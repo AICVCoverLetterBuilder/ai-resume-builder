@@ -91,6 +91,7 @@ import {
   isAiCoreV3Enabled,
 } from '@/lib/ai-core-v3';
 import type { ExperienceV3GenerateFailureResponse } from '@/lib/ai-core-v3/experience-generate';
+import type { ExperienceV3EnhanceResponse } from '@/lib/ai-core-v3/experience-enhance';
 import type {
   ExperienceV3EnhanceEvaluatorResponse,
   ExperienceV3EnhanceWriterResponse,
@@ -568,6 +569,41 @@ function getForcedEvaluatorResponse(response: Anthropic.Messages.Message): Exper
  * separately gated internalRejectionAudit is the only CV-text evidence path.
  */
 function redactExperienceV3FailureForRoute(result: ExperienceV3GenerateFailureResponse) {
+  const validation = result.validation;
+  return {
+    ok: false as const,
+    action: result.action,
+    typedReason: result.typedReason,
+    diagnosticEvidence: result.diagnosticEvidence,
+    ...(validation ? {
+      validation: {
+        decision: validation.decision,
+        phases: {
+          structural: {
+            category: validation.phases.structural.category,
+            status: validation.phases.structural.status,
+            violations: [],
+          },
+          semantic: {
+            category: validation.phases.semantic.category,
+            status: validation.phases.semantic.status,
+            violations: [],
+          },
+          language_quality: {
+            category: validation.phases.language_quality.category,
+            status: validation.phases.language_quality.status,
+            violations: [],
+          },
+        },
+        violations: [],
+      },
+    } : {}),
+    ...(result.internalRejectionAudit ? { internalRejectionAudit: result.internalRejectionAudit } : {}),
+  };
+}
+
+/** Keep M3 rejection phases observable while excluding evaluator prose and IDs. */
+function redactExperienceV3EnhanceFailureForRoute(result: Extract<ExperienceV3EnhanceResponse, { ok: false }>) {
   const validation = result.validation;
   return {
     ok: false as const,
@@ -2638,7 +2674,10 @@ ${sourceFactsText || '(none)'}`
             || result.typedReason === 'validator_exception'
             ? 502
             : 422;
-      return jsonResponse(result, { status });
+      return jsonResponse(
+        result.ok ? result : redactExperienceV3EnhanceFailureForRoute(result),
+        { status },
+      );
     }
 
     if (action === 'bullets') {
