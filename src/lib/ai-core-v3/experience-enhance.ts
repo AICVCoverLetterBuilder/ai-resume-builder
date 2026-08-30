@@ -669,11 +669,19 @@ function m3Attempts(reason: string, accepted: boolean): {
   const none: ExperienceV3DiagnosticAttempt = { attempted: false, result: 'not_attempted' };
   const ok: ExperienceV3DiagnosticAttempt = { attempted: true, result: 'succeeded' };
   if (accepted || ['candidate_or_validation_mismatch', 'operation_superseded', 'stale_snapshot', 'target_entry_deleted', 'state_write_failed', 'visible_readback_failed', 'rollback_failed', 'persistence_failed', 'usage_increment_failed', 'client_verification_exception'].includes(reason)) return { writer: ok, evaluator: ok };
-  if (reason === 'provider_request_failed') return { writer: { attempted: true, result: 'failed' }, evaluator: none };
-  if (reason === 'provider_output_malformed') return { writer: { attempted: true, result: 'malformed' }, evaluator: none };
+  if (reason === 'provider_request_failed' || reason === 'writer_request_failed') return { writer: { attempted: true, result: 'failed' }, evaluator: none };
+  if (reason === 'provider_output_malformed' || [
+    'writer_max_tokens',
+    'writer_tool_missing',
+    'writer_multiple_tools',
+    'writer_wrong_tool',
+    'writer_unexpected_text_block',
+    'writer_tool_input_malformed',
+    'writer_identity_mismatch',
+  ].includes(reason)) return { writer: { attempted: true, result: 'malformed' }, evaluator: none };
   if (reason === 'structural_validation_failed') return { writer: ok, evaluator: none };
   if (reason === 'validator_exception') return { writer: ok, evaluator: { attempted: true, result: 'failed' } };
-  if (reason === 'evaluator_output_malformed') return { writer: ok, evaluator: { attempted: true, result: 'malformed' } };
+  if (['evaluator_max_tokens', 'evaluator_tool_missing', 'evaluator_multiple_tools', 'evaluator_wrong_tool', 'evaluator_unexpected_text_block', 'evaluator_tool_input_malformed', 'evaluator_identity_mismatch', 'evaluator_output_malformed'].includes(reason)) return { writer: ok, evaluator: { attempted: true, result: 'malformed' } };
   if (['validation_rejected', 'materiality_degraded', 'no_material_improvement'].includes(reason)) return { writer: ok, evaluator: ok };
   return { writer: { attempted: null, result: 'unknown' }, evaluator: { attempted: null, result: 'unknown' } };
 }

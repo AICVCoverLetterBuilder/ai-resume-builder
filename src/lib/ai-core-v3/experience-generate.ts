@@ -30,7 +30,15 @@ export const EXPERIENCE_V3_TERMINAL_REASON_CODES = [
   'invalid_request_contract',
   'v3_feature_disabled',
   'provider_request_failed',
+  'writer_request_failed',
   'provider_output_malformed',
+  'writer_max_tokens',
+  'writer_tool_missing',
+  'writer_multiple_tools',
+  'writer_wrong_tool',
+  'writer_unexpected_text_block',
+  'writer_tool_input_malformed',
+  'writer_identity_mismatch',
   'structural_validation_failed',
   'evaluator_request_failed',
   'evaluator_max_tokens',
@@ -97,6 +105,16 @@ export interface ExperienceV3DiagnosticEvidence extends ExperienceV3EvaluatorDia
   readonly violationFactIdHashesByCode: Readonly<Record<string, readonly string[]>>;
   readonly violationEntryIdHashesByCode: Readonly<Record<string, readonly string[]>>;
   readonly primaryValidationRejectionCode: string | null;
+  /** M3 forced-tool transport facts; absent on legacy M2 responses. */
+  readonly writerStopReason?: string | null;
+  readonly writerContentBlockCount?: number | null;
+  readonly writerTextBlockCount?: number | null;
+  readonly writerToolBlockCount?: number | null;
+  readonly writerExpectedToolCount?: number | null;
+  readonly writerToolNameMatched?: boolean | null;
+  readonly writerToolInputObject?: boolean | null;
+  readonly writerToolInputSchemaPassed?: boolean | null;
+  readonly writerIdentityPassed?: boolean | null;
 }
 
 /**
@@ -173,6 +191,15 @@ export interface ExperienceV3TerminalDiagnostic {
   readonly evaluatorToolInputObject: boolean | null;
   readonly evaluatorToolInputSchemaPassed: boolean | null;
   readonly evaluatorIdentityPassed: boolean | null;
+  readonly writerStopReason?: string | null;
+  readonly writerContentBlockCount?: number | null;
+  readonly writerTextBlockCount?: number | null;
+  readonly writerToolBlockCount?: number | null;
+  readonly writerExpectedToolCount?: number | null;
+  readonly writerToolNameMatched?: boolean | null;
+  readonly writerToolInputObject?: boolean | null;
+  readonly writerToolInputSchemaPassed?: boolean | null;
+  readonly writerIdentityPassed?: boolean | null;
   readonly semanticViolationCount: number | null;
   readonly semanticViolationCodes: readonly string[];
   readonly languageQualityViolationCount: number | null;
@@ -570,6 +597,20 @@ export function parseExperienceV3DiagnosticEvidence(
   const evaluatorToolInputObject = parseNullableBoolean(value.evaluatorToolInputObject);
   const evaluatorToolInputSchemaPassed = parseNullableBoolean(value.evaluatorToolInputSchemaPassed);
   const evaluatorIdentityPassed = parseNullableBoolean(value.evaluatorIdentityPassed);
+  const writerStopReason = value.writerStopReason === undefined ? null : parseNullableString(value.writerStopReason);
+  const writerContentBlockCount = value.writerContentBlockCount === undefined ? null : parseNullableCount(value.writerContentBlockCount);
+  const writerTextBlockCount = value.writerTextBlockCount === undefined ? null : parseNullableCount(value.writerTextBlockCount);
+  const writerToolBlockCount = value.writerToolBlockCount === undefined ? null : parseNullableCount(value.writerToolBlockCount);
+  const writerExpectedToolCount = value.writerExpectedToolCount === undefined ? null : parseNullableCount(value.writerExpectedToolCount);
+  const writerToolNameMatched = value.writerToolNameMatched === undefined ? null : parseNullableBoolean(value.writerToolNameMatched);
+  const writerToolInputObject = value.writerToolInputObject === undefined ? null : parseNullableBoolean(value.writerToolInputObject);
+  const writerToolInputSchemaPassed = value.writerToolInputSchemaPassed === undefined ? null : parseNullableBoolean(value.writerToolInputSchemaPassed);
+  const writerIdentityPassed = value.writerIdentityPassed === undefined ? null : parseNullableBoolean(value.writerIdentityPassed);
+  const writerMetadataPresent = [
+    'writerStopReason', 'writerContentBlockCount', 'writerTextBlockCount', 'writerToolBlockCount',
+    'writerExpectedToolCount', 'writerToolNameMatched', 'writerToolInputObject',
+    'writerToolInputSchemaPassed', 'writerIdentityPassed',
+  ].some((key) => Object.prototype.hasOwnProperty.call(value, key));
   const semanticViolationCount = parseNullableCount(value.semanticViolationCount);
   const semanticViolationCodes = parseSafeDiagnosticCodeArray(value.semanticViolationCodes);
   const languageQualityViolationCount = parseNullableCount(value.languageQualityViolationCount);
@@ -597,6 +638,15 @@ export function parseExperienceV3DiagnosticEvidence(
     || evaluatorToolInputObject === undefined
     || evaluatorToolInputSchemaPassed === undefined
     || evaluatorIdentityPassed === undefined
+    || writerStopReason === undefined
+    || writerContentBlockCount === undefined
+    || writerTextBlockCount === undefined
+    || writerToolBlockCount === undefined
+    || writerExpectedToolCount === undefined
+    || writerToolNameMatched === undefined
+    || writerToolInputObject === undefined
+    || writerToolInputSchemaPassed === undefined
+    || writerIdentityPassed === undefined
     || semanticViolationCount === undefined
     || !semanticViolationCodes
     || languageQualityViolationCount === undefined
@@ -635,6 +685,17 @@ export function parseExperienceV3DiagnosticEvidence(
     evaluatorToolInputObject,
     evaluatorToolInputSchemaPassed,
     evaluatorIdentityPassed,
+    ...(writerMetadataPresent ? {
+      writerStopReason,
+      writerContentBlockCount,
+      writerTextBlockCount,
+      writerToolBlockCount,
+      writerExpectedToolCount,
+      writerToolNameMatched,
+      writerToolInputObject,
+      writerToolInputSchemaPassed,
+      writerIdentityPassed,
+    } : {}),
     semanticViolationCount,
     semanticViolationCodes,
     languageQualityViolationCount,
@@ -1090,7 +1151,21 @@ function diagnosticAttempts(
   if (reason === 'provider_request_failed') {
     return { writer: { attempted: true, result: 'failed' }, evaluator: notAttempted };
   }
+  if (reason === 'writer_request_failed') {
+    return { writer: { attempted: true, result: 'failed' }, evaluator: notAttempted };
+  }
   if (reason === 'provider_output_malformed') {
+    return { writer: { attempted: true, result: 'malformed' }, evaluator: notAttempted };
+  }
+  if ([
+    'writer_max_tokens',
+    'writer_tool_missing',
+    'writer_multiple_tools',
+    'writer_wrong_tool',
+    'writer_unexpected_text_block',
+    'writer_tool_input_malformed',
+    'writer_identity_mismatch',
+  ].includes(reason)) {
     return { writer: { attempted: true, result: 'malformed' }, evaluator: notAttempted };
   }
   if (reason === 'structural_validation_failed') {

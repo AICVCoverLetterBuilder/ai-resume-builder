@@ -1,4 +1,5 @@
 import { createCandidateEnvelope } from './candidate-envelope';
+import type Anthropic from '@anthropic-ai/sdk';
 import type { AiCoreV3CandidateEnvelope, ExperienceFactManifest } from './contracts';
 import { createExperienceFactManifest } from './experience-manifest';
 import {
@@ -26,8 +27,118 @@ import {
 } from './validators';
 
 export interface ExperienceV3EnhanceTransportSet {
-  readonly generate: (prompt: string) => Promise<string>;
-  readonly evaluate: (prompt: string) => Promise<string>;
+  readonly generate: (prompt: string) => Promise<ExperienceV3EnhanceWriterResponse>;
+  readonly evaluate: (prompt: string) => Promise<ExperienceV3EnhanceEvaluatorResponse>;
+}
+
+export const EXPERIENCE_V3_ENHANCE_WRITER_TOOL_NAME = 'submit_experience_enhancement' as const;
+export const EXPERIENCE_V3_ENHANCE_EVALUATOR_TOOL_NAME = 'submit_experience_enhancement_validation' as const;
+
+function enhancementUnitSchema() {
+  return {
+    type: 'object',
+    additionalProperties: false,
+    required: ['factId', 'text'],
+    properties: {
+      factId: { type: 'string' },
+      text: { type: 'string' },
+    },
+  } as const;
+}
+
+function evaluatorPhaseSchema(category: EvaluatedCategory) {
+  return {
+    type: 'object',
+    additionalProperties: false,
+    required: ['status', 'violations'],
+    properties: {
+      status: { type: 'string', enum: ['passed', 'failed'] },
+      violations: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['code', 'category', 'detail'],
+          properties: {
+            code: { type: 'string' },
+            category: { type: 'string', const: category },
+            detail: { type: 'string' },
+            factIds: { type: 'array', items: { type: 'string' } },
+            entryIds: { type: 'array', items: { type: 'string' } },
+          },
+        },
+      },
+    },
+  } as const;
+}
+
+export const EXPERIENCE_V3_ENHANCE_WRITER_TOOL: Anthropic.Tool = {
+  name: EXPERIENCE_V3_ENHANCE_WRITER_TOOL_NAME,
+  description: 'Submit only the fact-locked Experience enhancement units. This tool cannot authorize validation, apply, persistence, usage, or repair.',
+  strict: true,
+  input_schema: {
+    type: 'object' as const,
+    additionalProperties: false,
+    required: ['operationId', 'entryId', 'snapshotHash', 'locale', 'units'],
+    properties: {
+      operationId: { type: 'string' },
+      entryId: { type: 'string' },
+      snapshotHash: { type: 'string' },
+      locale: { type: 'string' },
+      units: { type: 'array', items: enhancementUnitSchema() },
+    },
+  },
+};
+
+export const EXPERIENCE_V3_ENHANCE_EVALUATOR_TOOL: Anthropic.Tool = {
+  name: EXPERIENCE_V3_ENHANCE_EVALUATOR_TOOL_NAME,
+  description: 'Submit only independent Experience enhancement validation evidence. This tool cannot rewrite or authorize apply, persistence, usage, or repair.',
+  strict: true,
+  input_schema: {
+    type: 'object' as const,
+    additionalProperties: false,
+    required: ['operationId', 'entryId', 'snapshotHash', 'locale', 'phases', 'materiality'],
+    properties: {
+      operationId: { type: 'string' },
+      entryId: { type: 'string' },
+      snapshotHash: { type: 'string' },
+      locale: { type: 'string' },
+      phases: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['semantic', 'language_quality'],
+        properties: {
+          semantic: evaluatorPhaseSchema('semantic'),
+          language_quality: evaluatorPhaseSchema('language_quality'),
+        },
+      },
+      materiality: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['status', 'kind', 'sourceEquivalent', 'degradationDetected'],
+        properties: {
+          status: { type: 'string', enum: ['material', 'no_op', 'degraded'] },
+          kind: { anyOf: [{ type: 'string', enum: [...EXPERIENCE_V3_ENHANCE_MATERIALITY_KINDS] }, { type: 'null' }] },
+          sourceEquivalent: { type: 'boolean' },
+          degradationDetected: { type: 'boolean' },
+        },
+      },
+    },
+  },
+};
+
+export type ExperienceV3EnhanceContentBlock =
+  | { readonly type: 'tool_use'; readonly name: string; readonly input: unknown }
+  | { readonly type: string; readonly text?: string };
+
+export interface ExperienceV3EnhanceWriterResponse {
+  readonly stopReason: string | null;
+  readonly content: readonly ExperienceV3EnhanceContentBlock[];
+}
+
+export interface ExperienceV3EnhanceEvaluatorResponse {
+  readonly stopReason: string | null;
+  readonly content: readonly ExperienceV3EnhanceContentBlock[];
 }
 
 type EvaluatedCategory = 'semantic' | 'language_quality';
@@ -52,6 +163,58 @@ type EvaluatorPayload = {
   };
   readonly materiality: EvaluatorMaterialityPayload;
 };
+
+export type ExperienceV3EnhanceWriterDiagnosticMetadata = {
+  readonly writerStopReason: string | null;
+  readonly writerContentBlockCount: number | null;
+  readonly writerTextBlockCount: number | null;
+  readonly writerToolBlockCount: number | null;
+  readonly writerExpectedToolCount: number | null;
+  readonly writerToolNameMatched: boolean | null;
+  readonly writerToolInputObject: boolean | null;
+  readonly writerToolInputSchemaPassed: boolean | null;
+  readonly writerIdentityPassed: boolean | null;
+};
+
+export type ExperienceV3EnhanceEvaluatorDiagnosticMetadata = {
+  readonly evaluatorStopReason: string | null;
+  readonly evaluatorContentBlockCount: number | null;
+  readonly evaluatorTextBlockCount: number | null;
+  readonly evaluatorToolBlockCount: number | null;
+  readonly evaluatorExpectedToolCount: number | null;
+  readonly evaluatorToolNameMatched: boolean | null;
+  readonly evaluatorToolInputObject: boolean | null;
+  readonly evaluatorToolInputSchemaPassed: boolean | null;
+  readonly evaluatorIdentityPassed: boolean | null;
+};
+
+type WriterToolRejectionReason =
+  | 'writer_max_tokens'
+  | 'writer_tool_missing'
+  | 'writer_multiple_tools'
+  | 'writer_wrong_tool'
+  | 'writer_unexpected_text_block'
+  | 'writer_tool_input_malformed'
+  | 'writer_identity_mismatch'
+  | 'provider_output_malformed';
+
+type EvaluatorToolRejectionReason =
+  | 'evaluator_max_tokens'
+  | 'evaluator_tool_missing'
+  | 'evaluator_multiple_tools'
+  | 'evaluator_wrong_tool'
+  | 'evaluator_unexpected_text_block'
+  | 'evaluator_tool_input_malformed'
+  | 'evaluator_identity_mismatch'
+  | 'evaluator_output_malformed';
+
+export type ExperienceV3EnhanceWriterToolParseResult =
+  | { readonly ok: true; readonly value: ExperienceV3EnhanceProviderOutput; readonly diagnosticMetadata: ExperienceV3EnhanceWriterDiagnosticMetadata }
+  | { readonly ok: false; readonly typedReason: WriterToolRejectionReason; readonly diagnosticMetadata: ExperienceV3EnhanceWriterDiagnosticMetadata };
+
+export type ExperienceV3EnhanceEvaluatorToolParseResult =
+  | { readonly ok: true; readonly value: EvaluatorPayload; readonly diagnosticMetadata: ExperienceV3EnhanceEvaluatorDiagnosticMetadata }
+  | { readonly ok: false; readonly typedReason: EvaluatorToolRejectionReason; readonly diagnosticMetadata: ExperienceV3EnhanceEvaluatorDiagnosticMetadata };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -83,6 +246,8 @@ function failure(
 function diagnosticEvidence(
   candidate: AiCoreV3CandidateEnvelope | null,
   validation?: AggregateValidationResult,
+  writer: ExperienceV3EnhanceWriterDiagnosticMetadata = unavailableEnhanceWriterMetadata(),
+  evaluator: ExperienceV3EnhanceEvaluatorDiagnosticMetadata = unavailableEnhanceEvaluatorMetadata(),
 ): ExperienceV3DiagnosticEvidence {
   const semantic = validation?.phases.semantic?.violations ?? [];
   const language = validation?.phases.language_quality?.violations ?? [];
@@ -96,15 +261,8 @@ function diagnosticEvidence(
     candidateUnitCount: candidate ? units.length : null,
     candidateUnitHashes: candidate ? units.map((unit) => hashExperienceV3EnhanceValue(unit.text)) : [],
     candidateUnitLengths: candidate ? units.map((unit) => unit.text.length) : [],
-    evaluatorStopReason: null,
-    evaluatorContentBlockCount: null,
-    evaluatorTextBlockCount: null,
-    evaluatorToolBlockCount: null,
-    evaluatorExpectedToolCount: null,
-    evaluatorToolNameMatched: null,
-    evaluatorToolInputObject: null,
-    evaluatorToolInputSchemaPassed: null,
-    evaluatorIdentityPassed: null,
+    ...writer,
+    ...evaluator,
     semanticViolationCount: validation ? semantic.length : null,
     semanticViolationCodes: semantic.map((item) => item.code),
     languageQualityViolationCount: validation ? language.length : null,
@@ -231,16 +389,6 @@ export function parseExperienceV3EnhanceRequest(value: unknown): ExperienceFactM
   }
 }
 
-function parseStrictJson(raw: string): unknown {
-  const trimmed = String(raw || '').trim();
-  if (!trimmed || trimmed.startsWith('```') || trimmed.endsWith('```')) return null;
-  try {
-    return JSON.parse(trimmed) as unknown;
-  } catch {
-    return null;
-  }
-}
-
 function unitTextIsStructurallySafe(text: string): boolean {
   const trimmed = text.trim();
   return Boolean(trimmed)
@@ -262,11 +410,10 @@ function unitsHaveNearDuplicate(units: readonly string[]): boolean {
   return new Set(normalized).size !== normalized.length;
 }
 
-export function parseExperienceV3EnhanceProviderOutput(
-  raw: string,
+function parseExperienceV3EnhanceProviderValue(
+  value: unknown,
   manifest: ExperienceFactManifest,
 ): ExperienceV3EnhanceProviderOutput | null {
-  const value = parseStrictJson(raw);
   if (!isRecord(value) || !exactKeys(value, ['operationId', 'entryId', 'snapshotHash', 'locale', 'units'])) return null;
   if (
     value.operationId !== manifest.operationId
@@ -371,11 +518,10 @@ function parseEvaluatorPhase(value: unknown, category: EvaluatedCategory): Evalu
   return immutableCopy({ status: value.status, violations }) as EvaluatorPhasePayload;
 }
 
-export function parseExperienceV3EnhanceEvaluatorOutput(
-  raw: string,
+function parseExperienceV3EnhanceEvaluatorValue(
+  value: unknown,
   manifest: ExperienceFactManifest,
 ): EvaluatorPayload | null {
-  const value = parseStrictJson(raw);
   if (!isRecord(value) || !exactKeys(value, [
     'operationId', 'entryId', 'snapshotHash', 'locale', 'phases', 'materiality',
   ])) return null;
@@ -415,6 +561,148 @@ export function parseExperienceV3EnhanceEvaluatorOutput(
       degradationDetected: value.materiality.degradationDetected,
     },
   }) as EvaluatorPayload;
+}
+
+function unavailableEnhanceWriterMetadata(): ExperienceV3EnhanceWriterDiagnosticMetadata {
+  return immutableCopy({
+    writerStopReason: null,
+    writerContentBlockCount: null,
+    writerTextBlockCount: null,
+    writerToolBlockCount: null,
+    writerExpectedToolCount: null,
+    writerToolNameMatched: null,
+    writerToolInputObject: null,
+    writerToolInputSchemaPassed: null,
+    writerIdentityPassed: null,
+  }) as ExperienceV3EnhanceWriterDiagnosticMetadata;
+}
+
+function unavailableEnhanceEvaluatorMetadata(): ExperienceV3EnhanceEvaluatorDiagnosticMetadata {
+  return immutableCopy({
+    evaluatorStopReason: null,
+    evaluatorContentBlockCount: null,
+    evaluatorTextBlockCount: null,
+    evaluatorToolBlockCount: null,
+    evaluatorExpectedToolCount: null,
+    evaluatorToolNameMatched: null,
+    evaluatorToolInputObject: null,
+    evaluatorToolInputSchemaPassed: null,
+    evaluatorIdentityPassed: null,
+  }) as ExperienceV3EnhanceEvaluatorDiagnosticMetadata;
+}
+
+function writerMetadata(response: ExperienceV3EnhanceWriterResponse | null | undefined): ExperienceV3EnhanceWriterDiagnosticMetadata {
+  if (!response || typeof response !== 'object' || !Array.isArray(response.content)) return unavailableEnhanceWriterMetadata();
+  const tools = response.content.filter((block): block is Extract<ExperienceV3EnhanceContentBlock, { type: 'tool_use' }> => block.type === 'tool_use');
+  const expected = tools.length === 1 ? tools[0] : null;
+  return immutableCopy({
+    writerStopReason: typeof response.stopReason === 'string' ? response.stopReason : null,
+    writerContentBlockCount: response.content.length,
+    writerTextBlockCount: response.content.filter((block) => block.type === 'text').length,
+    writerToolBlockCount: tools.length,
+    writerExpectedToolCount: 1,
+    writerToolNameMatched: expected ? expected.name === EXPERIENCE_V3_ENHANCE_WRITER_TOOL_NAME : null,
+    writerToolInputObject: expected ? isRecord(expected.input) : null,
+    writerToolInputSchemaPassed: null,
+    writerIdentityPassed: null,
+  }) as ExperienceV3EnhanceWriterDiagnosticMetadata;
+}
+
+function evaluatorMetadata(response: ExperienceV3EnhanceEvaluatorResponse | null | undefined): ExperienceV3EnhanceEvaluatorDiagnosticMetadata {
+  if (!response || typeof response !== 'object' || !Array.isArray(response.content)) return unavailableEnhanceEvaluatorMetadata();
+  const tools = response.content.filter((block): block is Extract<ExperienceV3EnhanceContentBlock, { type: 'tool_use' }> => block.type === 'tool_use');
+  const expected = tools.length === 1 ? tools[0] : null;
+  return immutableCopy({
+    evaluatorStopReason: typeof response.stopReason === 'string' ? response.stopReason : null,
+    evaluatorContentBlockCount: response.content.length,
+    evaluatorTextBlockCount: response.content.filter((block) => block.type === 'text').length,
+    evaluatorToolBlockCount: tools.length,
+    evaluatorExpectedToolCount: 1,
+    evaluatorToolNameMatched: expected ? expected.name === EXPERIENCE_V3_ENHANCE_EVALUATOR_TOOL_NAME : null,
+    evaluatorToolInputObject: expected ? isRecord(expected.input) : null,
+    evaluatorToolInputSchemaPassed: null,
+    evaluatorIdentityPassed: null,
+  }) as ExperienceV3EnhanceEvaluatorDiagnosticMetadata;
+}
+
+function writerReject(
+  typedReason: WriterToolRejectionReason,
+  diagnosticMetadata: ExperienceV3EnhanceWriterDiagnosticMetadata,
+): ExperienceV3EnhanceWriterToolParseResult {
+  return immutableCopy({ ok: false as const, typedReason, diagnosticMetadata }) as ExperienceV3EnhanceWriterToolParseResult;
+}
+
+function evaluatorReject(
+  typedReason: EvaluatorToolRejectionReason,
+  diagnosticMetadata: ExperienceV3EnhanceEvaluatorDiagnosticMetadata,
+): ExperienceV3EnhanceEvaluatorToolParseResult {
+  return immutableCopy({ ok: false as const, typedReason, diagnosticMetadata }) as ExperienceV3EnhanceEvaluatorToolParseResult;
+}
+
+export function parseExperienceV3EnhanceWriterToolResponse(
+  response: ExperienceV3EnhanceWriterResponse,
+  manifest: ExperienceFactManifest,
+): ExperienceV3EnhanceWriterToolParseResult {
+  const metadata = writerMetadata(response);
+  if (!response || typeof response !== 'object' || !Array.isArray(response.content)) return writerReject('provider_output_malformed', metadata);
+  if (response.stopReason === 'max_tokens') return writerReject('writer_max_tokens', metadata);
+  if (response.stopReason !== 'tool_use') return writerReject('provider_output_malformed', metadata);
+  const unexpected = response.content.find((block) => block.type !== 'tool_use');
+  if (unexpected?.type === 'text') return writerReject('writer_unexpected_text_block', metadata);
+  if (unexpected) return writerReject('provider_output_malformed', metadata);
+  const tools = response.content.filter((block): block is Extract<ExperienceV3EnhanceContentBlock, { type: 'tool_use' }> => block.type === 'tool_use');
+  if (tools.length === 0) return writerReject('writer_tool_missing', metadata);
+  if (tools.length !== 1) return writerReject('writer_multiple_tools', metadata);
+  const [tool] = tools;
+  if (tool.name !== EXPERIENCE_V3_ENHANCE_WRITER_TOOL_NAME) return writerReject('writer_wrong_tool', metadata);
+  const inputMetadata = immutableCopy({ ...metadata, writerToolInputObject: isRecord(tool.input) }) as ExperienceV3EnhanceWriterDiagnosticMetadata;
+  if (!isRecord(tool.input) || !exactKeys(tool.input, ['operationId', 'entryId', 'snapshotHash', 'locale', 'units'])) {
+    return writerReject('writer_tool_input_malformed', immutableCopy({ ...inputMetadata, writerToolInputSchemaPassed: false }) as ExperienceV3EnhanceWriterDiagnosticMetadata);
+  }
+  if (tool.input.operationId !== manifest.operationId || tool.input.entryId !== manifest.entryId
+    || tool.input.snapshotHash !== manifest.snapshotHash || tool.input.locale !== manifest.locale) {
+    return writerReject('writer_identity_mismatch', immutableCopy({ ...inputMetadata, writerToolInputSchemaPassed: true, writerIdentityPassed: false }) as ExperienceV3EnhanceWriterDiagnosticMetadata);
+  }
+  const value = parseExperienceV3EnhanceProviderValue(tool.input, manifest);
+  if (!value) return writerReject('writer_tool_input_malformed', immutableCopy({ ...inputMetadata, writerToolInputSchemaPassed: false, writerIdentityPassed: true }) as ExperienceV3EnhanceWriterDiagnosticMetadata);
+  return immutableCopy({
+    ok: true as const,
+    value,
+    diagnosticMetadata: { ...inputMetadata, writerToolInputSchemaPassed: true, writerIdentityPassed: true },
+  }) as ExperienceV3EnhanceWriterToolParseResult;
+}
+
+export function parseExperienceV3EnhanceEvaluatorToolResponse(
+  response: ExperienceV3EnhanceEvaluatorResponse,
+  manifest: ExperienceFactManifest,
+): ExperienceV3EnhanceEvaluatorToolParseResult {
+  const metadata = evaluatorMetadata(response);
+  if (!response || typeof response !== 'object' || !Array.isArray(response.content)) return evaluatorReject('evaluator_output_malformed', metadata);
+  if (response.stopReason === 'max_tokens') return evaluatorReject('evaluator_max_tokens', metadata);
+  if (response.stopReason !== 'tool_use') return evaluatorReject('evaluator_output_malformed', metadata);
+  const unexpected = response.content.find((block) => block.type !== 'tool_use');
+  if (unexpected?.type === 'text') return evaluatorReject('evaluator_unexpected_text_block', metadata);
+  if (unexpected) return evaluatorReject('evaluator_output_malformed', metadata);
+  const tools = response.content.filter((block): block is Extract<ExperienceV3EnhanceContentBlock, { type: 'tool_use' }> => block.type === 'tool_use');
+  if (tools.length === 0) return evaluatorReject('evaluator_tool_missing', metadata);
+  if (tools.length !== 1) return evaluatorReject('evaluator_multiple_tools', metadata);
+  const [tool] = tools;
+  if (tool.name !== EXPERIENCE_V3_ENHANCE_EVALUATOR_TOOL_NAME) return evaluatorReject('evaluator_wrong_tool', metadata);
+  const inputMetadata = immutableCopy({ ...metadata, evaluatorToolInputObject: isRecord(tool.input) }) as ExperienceV3EnhanceEvaluatorDiagnosticMetadata;
+  if (!isRecord(tool.input) || !exactKeys(tool.input, ['operationId', 'entryId', 'snapshotHash', 'locale', 'phases', 'materiality'])) {
+    return evaluatorReject('evaluator_tool_input_malformed', immutableCopy({ ...inputMetadata, evaluatorToolInputSchemaPassed: false }) as ExperienceV3EnhanceEvaluatorDiagnosticMetadata);
+  }
+  if (tool.input.operationId !== manifest.operationId || tool.input.entryId !== manifest.entryId
+    || tool.input.snapshotHash !== manifest.snapshotHash || tool.input.locale !== manifest.locale) {
+    return evaluatorReject('evaluator_identity_mismatch', immutableCopy({ ...inputMetadata, evaluatorToolInputSchemaPassed: true, evaluatorIdentityPassed: false }) as ExperienceV3EnhanceEvaluatorDiagnosticMetadata);
+  }
+  const value = parseExperienceV3EnhanceEvaluatorValue(tool.input, manifest);
+  if (!value) return evaluatorReject('evaluator_tool_input_malformed', immutableCopy({ ...inputMetadata, evaluatorToolInputSchemaPassed: false, evaluatorIdentityPassed: true }) as ExperienceV3EnhanceEvaluatorDiagnosticMetadata);
+  return immutableCopy({
+    ok: true as const,
+    value,
+    diagnosticMetadata: { ...inputMetadata, evaluatorToolInputSchemaPassed: true, evaluatorIdentityPassed: true },
+  }) as ExperienceV3EnhanceEvaluatorToolParseResult;
 }
 
 function aggregate(
@@ -466,7 +754,8 @@ export function buildExperienceV3EnhanceWriterPrompt(manifest: ExperienceFactMan
     'Improve only grammar, clarity, safe concision, professional phrasing, tense, or CV perspective.',
     'Never invent metrics, achievements, tools, certifications, leadership, ownership, scope, responsibility, domain expertise, or universal claims.',
     'Do not return headings, commentary, markdown, diagnostics, Summary prose, validation, apply authority, usage authority, or mutation instructions.',
-    'Return strict JSON only with exactly operationId, entryId, snapshotHash, locale, and units. Each unit has exactly factId and text.',
+    `Invoke only the ${EXPERIENCE_V3_ENHANCE_WRITER_TOOL_NAME} tool. Do not emit text, Markdown, code fences, commentary, explanations, headings, or reasoning.`,
+    'Its input has exactly operationId, entryId, snapshotHash, locale, and units. Each unit has exactly factId and text.',
     JSON.stringify(manifest),
   ].join('\n');
 }
@@ -478,7 +767,8 @@ export function buildExperienceV3EnhanceEvaluatorPrompt(
   return [
     'Act only as an independent non-writing validator. Never rewrite, repair, or suggest replacement prose.',
     'Check complete fact retention, entry ownership, unsupported claims, escalation, quantifiers, cross-entry leakage, role/company/date mutation, target language/script, grammar, clarity, employment tense, CV perspective, degradation, and material improvement.',
-    'Return strict JSON only with operationId, entryId, snapshotHash, locale, phases, and materiality.',
+    `Invoke only the ${EXPERIENCE_V3_ENHANCE_EVALUATOR_TOOL_NAME} tool. Do not emit text, Markdown, code fences, commentary, explanations, headings, or reasoning.`,
+    'Its input has exactly operationId, entryId, snapshotHash, locale, phases, and materiality.',
     'phases contains exactly semantic and language_quality; each contains status and structured violations.',
     `materiality status is material, no_op, or degraded. A material result requires exactly one kind from: ${EXPERIENCE_V3_ENHANCE_MATERIALITY_KINDS.join(', ')}.`,
     'For no_op or degraded, kind must be null. Include sourceEquivalent and degradationDetected booleans.',
@@ -493,14 +783,20 @@ export async function executeExperienceV3EnhanceServer(
 ): Promise<ExperienceV3EnhanceResponse> {
   const manifest = parseExperienceV3EnhanceRequest(rawRequest);
   if (!manifest) return failure('invalid_request_contract');
-  let writerRaw: string;
+  let writerResponse: ExperienceV3EnhanceWriterResponse;
   try {
-    writerRaw = await transports.generate(buildExperienceV3EnhanceWriterPrompt(manifest));
+    writerResponse = await transports.generate(buildExperienceV3EnhanceWriterPrompt(manifest));
   } catch {
-    return failure('provider_request_failed');
+    return failure('writer_request_failed');
   }
-  const providerOutput = parseExperienceV3EnhanceProviderOutput(writerRaw, manifest);
-  if (!providerOutput) return failure('provider_output_malformed');
+  const writerResult = parseExperienceV3EnhanceWriterToolResponse(writerResponse, manifest);
+  if (!writerResult.ok) return failure(
+    writerResult.typedReason,
+    undefined,
+    diagnosticEvidence(null, undefined, writerResult.diagnosticMetadata),
+  );
+  const providerOutput = writerResult.value;
+  const writerDiagnostic = writerResult.diagnosticMetadata;
   const candidate = candidateFromOutput(manifest, providerOutput);
   const structural = validateEnhanceStructure(manifest, candidate, providerOutput);
   if (structural.status !== 'passed') {
@@ -516,23 +812,30 @@ export async function executeExperienceV3EnhanceServer(
       notEvaluated('semantic'),
       notEvaluated('language_quality'),
     );
-    return failure('structural_validation_failed', validation, diagnosticEvidence(candidate, validation), internalRejectionAudit(manifest, candidate, validation));
+    return failure('structural_validation_failed', validation, diagnosticEvidence(candidate, validation, writerDiagnostic), internalRejectionAudit(manifest, candidate, validation));
   }
-  let evaluatorRaw: string;
+  let evaluatorResponse: ExperienceV3EnhanceEvaluatorResponse;
   try {
-    evaluatorRaw = await transports.evaluate(buildExperienceV3EnhanceEvaluatorPrompt(manifest, candidate));
+    evaluatorResponse = await transports.evaluate(buildExperienceV3EnhanceEvaluatorPrompt(manifest, candidate));
   } catch {
-    return failure('validator_exception', undefined, diagnosticEvidence(candidate), internalRejectionAudit(manifest, candidate));
+    return failure('validator_exception', undefined, diagnosticEvidence(candidate, undefined, writerDiagnostic), internalRejectionAudit(manifest, candidate));
   }
-  const evaluator = parseExperienceV3EnhanceEvaluatorOutput(evaluatorRaw, manifest);
-  if (!evaluator) return failure('evaluator_output_malformed', undefined, diagnosticEvidence(candidate), internalRejectionAudit(manifest, candidate));
+  const evaluatorResult = parseExperienceV3EnhanceEvaluatorToolResponse(evaluatorResponse, manifest);
+  if (!evaluatorResult.ok) return failure(
+    evaluatorResult.typedReason,
+    undefined,
+    diagnosticEvidence(candidate, undefined, writerDiagnostic, evaluatorResult.diagnosticMetadata),
+    internalRejectionAudit(manifest, candidate),
+  );
+  const evaluator = evaluatorResult.value;
+  const evaluatorDiagnostic = evaluatorResult.diagnosticMetadata;
   const semantic = immutableCopy({ category: 'semantic' as const, ...evaluator.phases.semantic }) as ValidationPhaseResult;
   const languageQuality = immutableCopy({
     category: 'language_quality' as const,
     ...evaluator.phases.language_quality,
   }) as ValidationPhaseResult;
   const validation = aggregate(manifest, candidate, structural, semantic, languageQuality);
-  const evidence = diagnosticEvidence(candidate, validation);
+  const evidence = diagnosticEvidence(candidate, validation, writerDiagnostic, evaluatorDiagnostic);
   const audit = internalRejectionAudit(manifest, candidate, validation);
   if (validation.decision !== 'accept') return failure('validation_rejected', validation, evidence, audit);
   if (evaluator.materiality.status === 'degraded' || evaluator.materiality.degradationDetected) {

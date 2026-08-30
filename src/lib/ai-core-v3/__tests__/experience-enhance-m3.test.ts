@@ -11,7 +11,13 @@ import {
   type ExperienceV3EnhanceOperationSnapshot,
   type ExperienceV3EnhanceResponse,
 } from '..';
-import { executeExperienceV3EnhanceServer } from '../experience-enhance-server';
+import {
+  executeExperienceV3EnhanceServer,
+  EXPERIENCE_V3_ENHANCE_EVALUATOR_TOOL_NAME,
+  EXPERIENCE_V3_ENHANCE_WRITER_TOOL_NAME,
+  type ExperienceV3EnhanceEvaluatorResponse,
+  type ExperienceV3EnhanceWriterResponse,
+} from '../experience-enhance-server';
 
 const SOURCE = 'help customers with service questions.\nkeep accurate records of requests.';
 const IMPROVED = [
@@ -137,8 +143,29 @@ interface ServerOptions {
   evaluatorThrows?: boolean;
   writerRaw?: string;
   evaluatorRaw?: string;
+  writerResponse?: ExperienceV3EnhanceWriterResponse;
+  evaluatorResponse?: ExperienceV3EnhanceEvaluatorResponse;
   writerUnits?: readonly string[];
   evaluator?: Parameters<typeof evaluatorJson>[1];
+}
+
+function toolResponse(raw: string, name: string): ExperienceV3EnhanceWriterResponse {
+  try {
+    return { stopReason: 'tool_use', content: [{ type: 'tool_use', name, input: JSON.parse(raw) }] };
+  } catch {
+    return { stopReason: 'tool_use', content: [{ type: 'text' }] };
+  }
+}
+
+function forcedResponse(
+  name: string,
+  input: unknown,
+  options: { stopReason?: string | null; content?: ExperienceV3EnhanceWriterResponse['content'] } = {},
+): ExperienceV3EnhanceWriterResponse {
+  return {
+    stopReason: options.stopReason === undefined ? 'tool_use' : options.stopReason,
+    content: options.content ?? [{ type: 'tool_use', name, input }],
+  };
 }
 
 async function serverResponse(
@@ -150,12 +177,12 @@ async function serverResponse(
     generate: async () => {
       counts.writer += 1;
       if (options.writerThrows) throw new Error('writer timeout');
-      return options.writerRaw ?? writerJson(snapshot, { units: options.writerUnits });
+      return options.writerResponse ?? toolResponse(options.writerRaw ?? writerJson(snapshot, { units: options.writerUnits }), EXPERIENCE_V3_ENHANCE_WRITER_TOOL_NAME);
     },
     evaluate: async () => {
       counts.evaluator += 1;
       if (options.evaluatorThrows) throw new Error('evaluator timeout');
-      return options.evaluatorRaw ?? evaluatorJson(snapshot, options.evaluator);
+      return options.evaluatorResponse ?? toolResponse(options.evaluatorRaw ?? evaluatorJson(snapshot, options.evaluator), EXPERIENCE_V3_ENHANCE_EVALUATOR_TOOL_NAME);
     },
   });
 }
@@ -649,6 +676,96 @@ describe('M3 E. race, apply, rollback, and usage', () => {
       runHarness({ server: { writerThrows: true } }),
     ]);
     expect(runs.map((run) => run.usageCallCount)).toEqual([0, 0, 0]);
+  });
+});
+
+describe('M4 M3 forced-tool transport closure', () => {
+  function writerInput(snapshot: ExperienceV3EnhanceOperationSnapshot): Record<string, unknown> {
+    return JSON.parse(writerJson(snapshot)) as Record<string, unknown>;
+  }
+
+  function evaluatorInput(snapshot: ExperienceV3EnhanceOperationSnapshot): Record<string, unknown> {
+    return JSON.parse(evaluatorJson(snapshot)) as Record<string, unknown>;
+  }
+
+  it('accepts one exact writer tool and reaches exactly one evaluator tool', async () => {
+    const run = await runHarness();
+    expect(run.result.kind).toBe('handled_success');
+    expect([run.writerCount, run.evaluatorCount]).toEqual([1, 1]);
+    if (run.result.kind === 'handled_success') {
+      expect(run.result.diagnostic).toMatchObject({
+        writerStopReason: 'tool_use', writerContentBlockCount: 1, writerTextBlockCount: 0,
+        writerToolBlockCount: 1, writerExpectedToolCount: 1, writerToolNameMatched: true,
+        writerToolInputObject: true, writerToolInputSchemaPassed: true, writerIdentityPassed: true,
+        evaluatorStopReason: 'tool_use', evaluatorContentBlockCount: 1, evaluatorTextBlockCount: 0,
+        evaluatorToolBlockCount: 1, evaluatorExpectedToolCount: 1, evaluatorToolNameMatched: true,
+        evaluatorToolInputObject: true, evaluatorToolInputSchemaPassed: true, evaluatorIdentityPassed: true,
+      });
+    }
+  });
+
+  const writerRejections: readonly [string, string, (snapshot: ExperienceV3EnhanceOperationSnapshot) => ExperienceV3EnhanceWriterResponse][] = [
+    ['max_tokens', 'writer_max_tokens', (s) => forcedResponse(EXPERIENCE_V3_ENHANCE_WRITER_TOOL_NAME, writerInput(s), { stopReason: 'max_tokens' })],
+    ['missing tool', 'writer_tool_missing', () => forcedResponse(EXPERIENCE_V3_ENHANCE_WRITER_TOOL_NAME, {}, { content: [] })],
+    ['multiple tools', 'writer_multiple_tools', (s) => forcedResponse(EXPERIENCE_V3_ENHANCE_WRITER_TOOL_NAME, writerInput(s), { content: [
+      { type: 'tool_use', name: EXPERIENCE_V3_ENHANCE_WRITER_TOOL_NAME, input: writerInput(s) },
+      { type: 'tool_use', name: EXPERIENCE_V3_ENHANCE_WRITER_TOOL_NAME, input: writerInput(s) },
+    ] })],
+    ['wrong tool', 'writer_wrong_tool', (s) => forcedResponse('other_tool', writerInput(s))],
+    ['text only', 'writer_unexpected_text_block', (s) => forcedResponse(EXPERIENCE_V3_ENHANCE_WRITER_TOOL_NAME, writerInput(s), { content: [{ type: 'text', text: '{"operationId":"..."}' }] })],
+    ['fenced JSON text', 'writer_unexpected_text_block', (s) => forcedResponse(EXPERIENCE_V3_ENHANCE_WRITER_TOOL_NAME, writerInput(s), { content: [{ type: 'text', text: '```json\\n{}\\n```' }] })],
+    ['commentary plus tool', 'writer_unexpected_text_block', (s) => forcedResponse(EXPERIENCE_V3_ENHANCE_WRITER_TOOL_NAME, writerInput(s), { content: [
+      { type: 'text', text: 'commentary' }, { type: 'tool_use', name: EXPERIENCE_V3_ENHANCE_WRITER_TOOL_NAME, input: writerInput(s) },
+    ] })],
+    ['unexpected block', 'provider_output_malformed', (s) => forcedResponse(EXPERIENCE_V3_ENHANCE_WRITER_TOOL_NAME, writerInput(s), { content: [{ type: 'image' }] })],
+    ['malformed input', 'writer_tool_input_malformed', () => forcedResponse(EXPERIENCE_V3_ENHANCE_WRITER_TOOL_NAME, null)],
+    ['missing required key', 'writer_tool_input_malformed', (s) => {
+      const input = writerInput(s); delete input.units; return forcedResponse(EXPERIENCE_V3_ENHANCE_WRITER_TOOL_NAME, input);
+    }],
+    ['extra authority key', 'writer_tool_input_malformed', (s) => forcedResponse(EXPERIENCE_V3_ENHANCE_WRITER_TOOL_NAME, { ...writerInput(s), applyAuthorized: true })],
+    ['wrong operation identity', 'writer_identity_mismatch', (s) => forcedResponse(EXPERIENCE_V3_ENHANCE_WRITER_TOOL_NAME, { ...writerInput(s), operationId: 'foreign' })],
+    ['wrong entry identity', 'writer_identity_mismatch', (s) => forcedResponse(EXPERIENCE_V3_ENHANCE_WRITER_TOOL_NAME, { ...writerInput(s), entryId: 'foreign' })],
+    ['wrong snapshot identity', 'writer_identity_mismatch', (s) => forcedResponse(EXPERIENCE_V3_ENHANCE_WRITER_TOOL_NAME, { ...writerInput(s), snapshotHash: 'foreign' })],
+    ['wrong locale identity', 'writer_identity_mismatch', (s) => forcedResponse(EXPERIENCE_V3_ENHANCE_WRITER_TOOL_NAME, { ...writerInput(s), locale: 'de' })],
+    ['wrong fact ID', 'writer_tool_input_malformed', (s) => {
+      const input = writerInput(s) as { units: Array<Record<string, unknown>> }; input.units[0].factId = 'foreign';
+      return forcedResponse(EXPERIENCE_V3_ENHANCE_WRITER_TOOL_NAME, input);
+    }],
+    ['wrong fact order', 'writer_tool_input_malformed', (s) => {
+      const input = writerInput(s) as { units: Array<Record<string, unknown>> }; [input.units[0], input.units[1]] = [input.units[1], input.units[0]];
+      return forcedResponse(EXPERIENCE_V3_ENHANCE_WRITER_TOOL_NAME, input);
+    }],
+    ['wrong stop reason', 'provider_output_malformed', (s) => forcedResponse(EXPERIENCE_V3_ENHANCE_WRITER_TOOL_NAME, writerInput(s), { stopReason: 'end_turn' })],
+  ];
+
+  it.each(writerRejections)('rejects writer $0 as $1 without evaluator, apply, usage, or V2', async (_label, reason, makeResponse) => {
+    const run = await runHarness({ server: { writerResponse: makeResponse(captureExperienceV3EnhanceOperationSnapshot(makeInput())) } });
+    expect(run.result).toMatchObject({ kind: 'handled_failure', typedReason: reason });
+    expect(run.evaluatorCount).toBe(0);
+    expect([run.writeCount, run.persistCount, run.usage, run.requestCount]).toEqual([0, 0, 9, 1]);
+    if (run.result.kind === 'handled_failure') {
+      expect(run.result.diagnostic).toMatchObject({ applyAuthorized: false, applyAttempted: false, applyCommitted: false, v2FallthroughCount: 0 });
+      expect(run.result.diagnostic.phases).toEqual({ structural: 'not_evaluated', semantic: 'not_evaluated', language_quality: 'not_evaluated' });
+    }
+  });
+
+  it('keeps evaluator malformed transport terminal and never applies', async () => {
+    const snapshot = captureExperienceV3EnhanceOperationSnapshot(makeInput());
+    const malformed = forcedResponse(EXPERIENCE_V3_ENHANCE_EVALUATOR_TOOL_NAME, evaluatorInput(snapshot), { content: [{ type: 'text' }] });
+    const run = await runHarness({ server: { evaluatorResponse: malformed } });
+    expect(run.result).toMatchObject({ kind: 'handled_failure', typedReason: 'evaluator_unexpected_text_block' });
+    expect(run.evaluatorCount).toBe(1);
+    expect([run.writeCount, run.persistCount, run.usage]).toEqual([0, 0, 9]);
+  });
+
+  it('keeps the AAB536 malformed-writer observation non-PII and closes the old text channel', async () => {
+    const snapshot = captureExperienceV3EnhanceOperationSnapshot(makeInput({ requestedLocale: 'de', uiLocale: 'de', storedContentLocale: 'de' }));
+    const run = await runHarness({ server: { writerResponse: {
+      stopReason: 'end_turn', content: [{ type: 'text', text: 'malformed provider JSON' }],
+    } } });
+    expect(run.result).toMatchObject({ kind: 'handled_failure', typedReason: 'provider_output_malformed' });
+    expect(run.evaluatorCount).toBe(0);
+    expect(snapshot.manifest.exactSourceText).not.toContain('AAB');
   });
 });
 

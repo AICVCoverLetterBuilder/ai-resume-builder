@@ -77,6 +77,10 @@ import {
 import {
   EXPERIENCE_V3_ENHANCE_ACTION,
   EXPERIENCE_V3_EVALUATOR_TOOL,
+  EXPERIENCE_V3_ENHANCE_EVALUATOR_TOOL,
+  EXPERIENCE_V3_ENHANCE_EVALUATOR_TOOL_NAME,
+  EXPERIENCE_V3_ENHANCE_WRITER_TOOL,
+  EXPERIENCE_V3_ENHANCE_WRITER_TOOL_NAME,
   EXPERIENCE_V3_GENERATE_ACTION,
   SUMMARY_V3_GENERATE_ACTION,
   executeExperienceV3EnhanceServer,
@@ -85,6 +89,10 @@ import {
   isAiCoreV3Enabled,
 } from '@/lib/ai-core-v3';
 import type { ExperienceV3GenerateFailureResponse } from '@/lib/ai-core-v3/experience-generate';
+import type {
+  ExperienceV3EnhanceEvaluatorResponse,
+  ExperienceV3EnhanceWriterResponse,
+} from '@/lib/ai-core-v3/experience-enhance-server';
 
 /**
  * Explicit Vercel serverless function execution budget (seconds).
@@ -532,6 +540,24 @@ function parseCompactVerifierResponse(raw: string): CompactVerifierDecision[] | 
   } catch {
     return null;
   }
+}
+
+function getForcedToolResponse(response: Anthropic.Messages.Message): ExperienceV3EnhanceWriterResponse {
+  return {
+    stopReason: response.stop_reason,
+    content: response.content.map((block) => block.type === 'tool_use'
+      ? { type: 'tool_use' as const, name: block.name, input: block.input }
+      : { type: block.type }),
+  };
+}
+
+function getForcedEvaluatorResponse(response: Anthropic.Messages.Message): ExperienceV3EnhanceEvaluatorResponse {
+  return {
+    stopReason: response.stop_reason,
+    content: response.content.map((block) => block.type === 'tool_use'
+      ? { type: 'tool_use' as const, name: block.name, input: block.input }
+      : { type: block.type }),
+  };
 }
 
 /**
@@ -2529,18 +2555,22 @@ ${sourceFactsText || '(none)'}`
         }, { status: 409 });
       }
       const result = await executeExperienceV3EnhanceServer(params, {
-        generate: async (prompt) => getText(await callWithRetry({
+        generate: async (prompt) => getForcedToolResponse(await callWithRetry({
           model: MODEL,
           max_tokens: 1200,
           temperature: 0,
-          system: 'You are the single AI Core V3 Experience Enhance prose writer. Preserve every required fact and follow the strict JSON contract exactly.',
+          system: 'You are the single AI Core V3 Experience Enhance prose writer. Invoke only the submit_experience_enhancement tool and preserve every required fact.',
+          tools: [EXPERIENCE_V3_ENHANCE_WRITER_TOOL],
+          tool_choice: { type: 'tool', name: EXPERIENCE_V3_ENHANCE_WRITER_TOOL_NAME, disable_parallel_tool_use: true },
           messages: [{ role: 'user', content: prompt }],
         }, deadlineAt, undefined, AI_PROVIDER_CALL_TIMEOUT_MS, 'provider', undefined, false)),
-        evaluate: async (prompt) => getText(await callWithRetry({
+        evaluate: async (prompt) => getForcedEvaluatorResponse(await callWithRetry({
           model: MODEL,
           max_tokens: 1200,
           temperature: 0,
-          system: 'You are the independent non-writing AI Core V3 Experience Enhance validator. Return structured evidence only.',
+          system: 'You are the independent non-writing AI Core V3 Experience Enhance validator. Invoke only the submit_experience_enhancement_validation tool and return structured evidence only.',
+          tools: [EXPERIENCE_V3_ENHANCE_EVALUATOR_TOOL],
+          tool_choice: { type: 'tool', name: EXPERIENCE_V3_ENHANCE_EVALUATOR_TOOL_NAME, disable_parallel_tool_use: true },
           messages: [{ role: 'user', content: prompt }],
         }, deadlineAt, undefined, AI_PROVIDER_CALL_TIMEOUT_MS, 'verifier', undefined, false)),
       });
@@ -2549,6 +2579,7 @@ ${sourceFactsText || '(none)'}`
         : result.typedReason === 'invalid_request_contract'
           ? 400
           : result.typedReason.includes('provider') || result.typedReason.includes('evaluator')
+            || result.typedReason.startsWith('writer_')
             || result.typedReason === 'validator_exception'
             ? 502
             : 422;
