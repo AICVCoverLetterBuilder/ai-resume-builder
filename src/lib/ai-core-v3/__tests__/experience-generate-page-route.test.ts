@@ -232,7 +232,7 @@ describe('M2 focused page and route integration', () => {
     vi.resetModules();
   });
 
-  it('uses one writer and one evaluator transport call with the bounded raw-JSON evaluator contract', async () => {
+  it('uses one writer and one evaluator transport call with one forced evaluator tool', async () => {
     const environmentKeys = [
       'AI_CORE_V3_ENABLED',
       'NEXT_PUBLIC_AI_CORE_V3_ENABLED',
@@ -270,7 +270,7 @@ describe('M2 focused page and route integration', () => {
         'Stimmt laufende Aufgaben mit Kolleginnen und Kollegen ab.',
       ],
     });
-    const evaluatorResponse = JSON.stringify({
+    const evaluatorInput = {
       operationId: manifest.operationId,
       entryId: manifest.entryId,
       snapshotHash: manifest.snapshotHash,
@@ -279,19 +279,28 @@ describe('M2 focused page and route integration', () => {
         semantic: { status: 'passed', violations: [] },
         language_quality: { status: 'passed', violations: [] },
       },
-    });
+    };
     const messagesCreateSpy = vi.fn(async (params: {
       system?: unknown;
       max_tokens?: unknown;
       temperature?: unknown;
       messages?: readonly { content?: unknown }[];
+      tools?: unknown;
+      tool_choice?: unknown;
     }) => {
       const system = String(params.system || '');
       if (system.includes('single AI Core V3 Experience prose writer')) {
         return { content: [{ type: 'text', text: writerResponse }] };
       }
       if (system.includes('independent non-writing CV validator')) {
-        return { content: [{ type: 'text', text: evaluatorResponse }] };
+        return {
+          stop_reason: 'tool_use',
+          content: [{
+            type: 'tool_use',
+            name: 'submit_experience_validation',
+            input: evaluatorInput,
+          }],
+        };
       }
       throw new Error('Unexpected Anthropic transport call in enabled route test');
     });
@@ -335,8 +344,14 @@ describe('M2 focused page and route integration', () => {
         String(params.system || '').includes('independent non-writing CV validator'))?.[0];
       expect(writerCall).toMatchObject({ max_tokens: 900, temperature: 0 });
       expect(evaluatorCall).toMatchObject({ max_tokens: 1200, temperature: 0 });
-      expect(String(evaluatorCall?.messages?.[0]?.content)).toContain('Return one complete raw JSON object only. Begin with { and end with }.');
-      expect(String(evaluatorCall?.messages?.[0]?.content)).toContain('Do not use Markdown, code fences, commentary, explanations, headings, or reasoning.');
+      expect(evaluatorCall?.tools).toMatchObject([{ name: 'submit_experience_validation', strict: true }]);
+      expect(evaluatorCall?.tool_choice).toEqual({
+        type: 'tool',
+        name: 'submit_experience_validation',
+        disable_parallel_tool_use: true,
+      });
+      expect(String(evaluatorCall?.messages?.[0]?.content)).toContain('Invoke only the submit_experience_validation tool.');
+      expect(String(evaluatorCall?.messages?.[0]?.content)).toContain('Do not emit text, Markdown, code fences, commentary, explanations, headings, or reasoning.');
     } finally {
       coreModule?.resetAiCoreV3TestOverride();
       vi.restoreAllMocks();
@@ -358,7 +373,7 @@ describe('M2 focused page and route integration', () => {
     );
     expect(branch.match(/generate: async \(prompt\)/g)).toHaveLength(1);
     expect(branch.match(/evaluate: async \(prompt\)/g)).toHaveLength(1);
-    expect(branch.match(/undefined, false\)\)/g)).toHaveLength(2);
+    expect(branch.match(/undefined, false\)/g)).toHaveLength(2);
   });
 
   it('keeps new V3 modules isolated from legacy writers, repair, fallback, and Summary dependencies', () => {

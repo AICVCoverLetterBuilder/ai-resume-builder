@@ -1,4 +1,5 @@
 import { createCandidateEnvelope } from './candidate-envelope';
+import type Anthropic from '@anthropic-ai/sdk';
 import type { AiCoreV3CandidateEnvelope, ExperienceFactManifest } from './contracts';
 import { createExperienceFactManifest } from './experience-manifest';
 import {
@@ -20,10 +21,73 @@ import {
 
 export interface ExperienceV3GenerateTransportSet {
   readonly generate: (prompt: string) => Promise<string>;
-  readonly evaluate: (prompt: string) => Promise<string>;
+  readonly evaluate: (prompt: string) => Promise<ExperienceV3EvaluatorResponse>;
 }
 
 type EvaluatedCategory = Extract<ViolationCategory, 'semantic' | 'language_quality'>;
+
+export const EXPERIENCE_V3_EVALUATOR_TOOL_NAME = 'submit_experience_validation' as const;
+
+export const EXPERIENCE_V3_EVALUATOR_TOOL: Anthropic.Tool = {
+  name: EXPERIENCE_V3_EVALUATOR_TOOL_NAME,
+  description: 'Submit non-writing Experience Generate validation evidence only. This tool cannot rewrite candidate prose or authorize apply, persistence, usage, retries, or repair.',
+  strict: true,
+  input_schema: {
+    type: 'object' as const,
+    additionalProperties: false,
+    required: ['operationId', 'entryId', 'snapshotHash', 'locale', 'phases'],
+    properties: {
+      operationId: { type: 'string' },
+      entryId: { type: 'string' },
+      snapshotHash: { type: 'string' },
+      locale: { type: 'string' },
+      phases: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['semantic', 'language_quality'],
+        properties: {
+          semantic: evaluatorPhaseSchema('semantic'),
+          language_quality: evaluatorPhaseSchema('language_quality'),
+        },
+      },
+    },
+  },
+};
+
+export type ExperienceV3EvaluatorContentBlock =
+  | { readonly type: 'tool_use'; readonly name: string; readonly input: unknown }
+  | { readonly type: string };
+
+export interface ExperienceV3EvaluatorResponse {
+  readonly stopReason: string | null;
+  readonly content: readonly ExperienceV3EvaluatorContentBlock[];
+}
+
+function evaluatorPhaseSchema(category: EvaluatedCategory) {
+  return {
+    type: 'object',
+    additionalProperties: false,
+    required: ['status', 'violations'],
+    properties: {
+      status: { type: 'string', enum: ['passed', 'failed'] },
+      violations: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['code', 'category', 'detail'],
+          properties: {
+            code: { type: 'string' },
+            category: { type: 'string', const: category },
+            detail: { type: 'string' },
+            factIds: { type: 'array', items: { type: 'string' } },
+            entryIds: { type: 'array', items: { type: 'string' } },
+          },
+        },
+      },
+    },
+  } as const;
+}
 
 interface EvaluatorPhasePayload {
   readonly status: 'passed' | 'failed';
@@ -208,19 +272,6 @@ function phaseViolation(
   }) as AiCoreV3Violation;
 }
 
-function failedPhase(
-  category: ViolationCategory,
-  code: string,
-  detail: string,
-  entryId?: string,
-): ValidationPhaseResult {
-  return immutableCopy({
-    category,
-    status: 'failed' as const,
-    violations: [phaseViolation(code, category, detail, entryId)],
-  }) as ValidationPhaseResult;
-}
-
 function notEvaluatedPhase(category: ViolationCategory): ValidationPhaseResult {
   return immutableCopy({ category, status: 'not_evaluated' as const, violations: [] }) as ValidationPhaseResult;
 }
@@ -294,33 +345,75 @@ function parseEvaluatorPhase(value: unknown, category: EvaluatedCategory): Evalu
   return immutableCopy({ status: value.status, violations }) as EvaluatorPhasePayload;
 }
 
-export function parseExperienceV3EvaluatorOutput(
-  raw: string,
+type EvaluatorToolRejectionReason =
+  | 'evaluator_max_tokens'
+  | 'evaluator_tool_missing'
+  | 'evaluator_multiple_tools'
+  | 'evaluator_wrong_tool'
+  | 'evaluator_unexpected_text_block'
+  | 'evaluator_tool_input_malformed'
+  | 'evaluator_identity_mismatch'
+  | 'evaluator_output_malformed';
+
+export type ExperienceV3EvaluatorToolParseResult =
+  | { readonly ok: true; readonly value: EvaluatorPayload }
+  | { readonly ok: false; readonly typedReason: EvaluatorToolRejectionReason };
+
+function rejectEvaluatorTool(typedReason: EvaluatorToolRejectionReason): ExperienceV3EvaluatorToolParseResult {
+  return immutableCopy({ ok: false as const, typedReason }) as ExperienceV3EvaluatorToolParseResult;
+}
+
+function parseExperienceV3EvaluatorToolInput(
+  value: unknown,
   manifest: ExperienceFactManifest,
-): EvaluatorPayload | null {
-  const value = parseStrictJson(raw);
+): ExperienceV3EvaluatorToolParseResult {
   if (!isRecord(value) || !exactKeys(
     value,
     ['operationId', 'entryId', 'snapshotHash', 'locale', 'phases'],
-  )) return null;
+  )) return rejectEvaluatorTool('evaluator_tool_input_malformed');
   if (
     value.operationId !== manifest.operationId
     || value.entryId !== manifest.entryId
     || value.snapshotHash !== manifest.snapshotHash
     || value.locale !== manifest.locale
-    || !isRecord(value.phases)
-    || !exactKeys(value.phases, ['semantic', 'language_quality'])
-  ) return null;
+  ) return rejectEvaluatorTool('evaluator_identity_mismatch');
+  if (!isRecord(value.phases) || !exactKeys(value.phases, ['semantic', 'language_quality'])) {
+    return rejectEvaluatorTool('evaluator_tool_input_malformed');
+  }
   const semantic = parseEvaluatorPhase(value.phases.semantic, 'semantic');
   const languageQuality = parseEvaluatorPhase(value.phases.language_quality, 'language_quality');
-  if (!semantic || !languageQuality) return null;
-  return immutableCopy({
+  if (!semantic || !languageQuality) return rejectEvaluatorTool('evaluator_tool_input_malformed');
+  return immutableCopy({ ok: true as const, value: {
     operationId: manifest.operationId,
     entryId: manifest.entryId,
     snapshotHash: manifest.snapshotHash,
     locale: manifest.locale,
     phases: { semantic, language_quality: languageQuality },
-  }) as EvaluatorPayload;
+  } }) as ExperienceV3EvaluatorToolParseResult;
+}
+
+export function parseExperienceV3EvaluatorToolResponse(
+  response: ExperienceV3EvaluatorResponse,
+  manifest: ExperienceFactManifest,
+): ExperienceV3EvaluatorToolParseResult {
+  if (!response || typeof response !== 'object' || !Array.isArray(response.content)) {
+    return rejectEvaluatorTool('evaluator_output_malformed');
+  }
+  if (response.stopReason === 'max_tokens') return rejectEvaluatorTool('evaluator_max_tokens');
+  if (response.stopReason !== 'tool_use') return rejectEvaluatorTool('evaluator_output_malformed');
+
+  const unexpected = response.content.find((block) => block.type !== 'tool_use');
+  if (unexpected?.type === 'text') return rejectEvaluatorTool('evaluator_unexpected_text_block');
+  if (unexpected) return rejectEvaluatorTool('evaluator_output_malformed');
+
+  const toolBlocks = response.content.filter((block): block is Extract<ExperienceV3EvaluatorContentBlock, { type: 'tool_use' }> => (
+    block.type === 'tool_use'
+  ));
+  if (toolBlocks.length === 0) return rejectEvaluatorTool('evaluator_tool_missing');
+  if (toolBlocks.length !== 1) return rejectEvaluatorTool('evaluator_multiple_tools');
+  const [tool] = toolBlocks;
+  if (tool.name !== EXPERIENCE_V3_EVALUATOR_TOOL_NAME) return rejectEvaluatorTool('evaluator_wrong_tool');
+  return parseExperienceV3EvaluatorToolInput(tool.input, manifest);
 }
 
 function aggregateWithPhases(
@@ -379,8 +472,8 @@ export function buildExperienceV3EvaluatorPrompt(
   return [
     'Act only as an independent non-writing validator. Never rewrite, correct, or replace candidate prose.',
     'Check relevance, unsupported concrete claims, metrics, achievements, certifications, tools, leadership, cross-entry facts, role/company mutation, responsibility escalation, Summary leakage, target locale/script, grammar, CV form, and employment tense.',
-    'Return one complete raw JSON object only. Begin with { and end with }. Do not use Markdown, code fences, commentary, explanations, headings, or reasoning.',
-    'The top-level object has exactly operationId, entryId, snapshotHash, locale, and phases. Echo operationId, entryId, snapshotHash, and locale exactly from the immutable manifest.',
+    `Invoke only the ${EXPERIENCE_V3_EVALUATOR_TOOL_NAME} tool. Do not emit text, Markdown, code fences, commentary, explanations, headings, or reasoning.`,
+    'Its input has exactly operationId, entryId, snapshotHash, locale, and phases. Echo operationId, entryId, snapshotHash, and locale exactly from the immutable manifest.',
     'phases has exactly semantic and language_quality. Each phase has exactly status (passed or failed) and violations.',
     'Each violation contains only code, category, detail, and optional factIds/entryIds. A passed phase has an empty violations array; a failed phase has at least one violation.',
     'Keep each violation detail concise and return no fields other than the required validation schema.',
@@ -418,21 +511,10 @@ export async function executeExperienceV3GenerateServer(
     return failure('structural_validation_failed', validation);
   }
 
-  let evaluatorRaw: string;
+  let evaluatorResponse: ExperienceV3EvaluatorResponse;
   try {
-    evaluatorRaw = await transports.evaluate(buildExperienceV3EvaluatorPrompt(manifest, candidate));
+    evaluatorResponse = await transports.evaluate(buildExperienceV3EvaluatorPrompt(manifest, candidate));
   } catch {
-    const validation = aggregateWithPhases(
-      manifest,
-      candidate,
-      structural,
-      failedPhase('semantic', 'evaluator_exception', 'Independent evaluator request failed', manifest.entryId),
-      notEvaluatedPhase('language_quality'),
-    );
-    return failure('evaluator_request_failed', validation);
-  }
-  const evaluator = parseExperienceV3EvaluatorOutput(evaluatorRaw, manifest);
-  if (!evaluator) {
     const validation = aggregateWithPhases(
       manifest,
       candidate,
@@ -440,8 +522,20 @@ export async function executeExperienceV3GenerateServer(
       notEvaluatedPhase('semantic'),
       notEvaluatedPhase('language_quality'),
     );
-    return failure('evaluator_output_malformed', validation);
+    return failure('evaluator_request_failed', validation);
   }
+  const evaluatorResult = parseExperienceV3EvaluatorToolResponse(evaluatorResponse, manifest);
+  if (!evaluatorResult.ok) {
+    const validation = aggregateWithPhases(
+      manifest,
+      candidate,
+      structural,
+      notEvaluatedPhase('semantic'),
+      notEvaluatedPhase('language_quality'),
+    );
+    return failure(evaluatorResult.typedReason, validation);
+  }
+  const evaluator = evaluatorResult.value;
 
   const semantic = immutableCopy({
     category: 'semantic' as const,

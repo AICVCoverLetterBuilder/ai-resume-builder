@@ -11,9 +11,11 @@ import {
   type ExperienceV3GenerateResponse,
 } from '..';
 import {
+  EXPERIENCE_V3_EVALUATOR_TOOL_NAME,
   buildExperienceV3EvaluatorPrompt,
   executeExperienceV3GenerateServer,
-  parseExperienceV3EvaluatorOutput,
+  parseExperienceV3EvaluatorToolResponse,
+  type ExperienceV3EvaluatorResponse,
 } from '../experience-generate-server';
 import { GERMAN_AAB529_DEVICE_OUTPUT_FIXTURE } from '../fixtures/german-aab529-device-output';
 
@@ -146,6 +148,20 @@ function evaluatorJson(
   });
 }
 
+function evaluatorToolResponse(
+  manifest: ReturnType<typeof captureExperienceV3OperationSnapshot>['manifest'],
+  input: unknown = JSON.parse(evaluatorJson(manifest)),
+): ExperienceV3EvaluatorResponse {
+  return {
+    stopReason: 'tool_use',
+    content: [{
+      type: 'tool_use',
+      name: EXPERIENCE_V3_EVALUATOR_TOOL_NAME,
+      input,
+    }],
+  };
+}
+
 async function validServerResponse(
   manifest: ReturnType<typeof captureExperienceV3OperationSnapshot>['manifest'],
   options: {
@@ -155,7 +171,7 @@ async function validServerResponse(
     semanticCode?: string;
     languageCode?: string;
     evaluatorExtra?: Record<string, unknown>;
-    evaluatorRaw?: string;
+    evaluatorResponse?: ExperienceV3EvaluatorResponse;
     writerThrows?: boolean;
     evaluatorThrows?: boolean;
   } = {},
@@ -167,14 +183,14 @@ async function validServerResponse(
     },
     evaluate: async () => {
       if (options.evaluatorThrows) throw new Error('evaluator timeout');
-      if (options.evaluatorRaw !== undefined) return options.evaluatorRaw;
-      return evaluatorJson(manifest, {
+      if (options.evaluatorResponse !== undefined) return options.evaluatorResponse;
+      return evaluatorToolResponse(manifest, JSON.parse(evaluatorJson(manifest, {
         semanticStatus: options.semanticStatus,
         languageStatus: options.languageStatus,
         semanticCode: options.semanticCode,
         languageCode: options.languageCode,
         extra: options.evaluatorExtra,
-      });
+      })));
     },
   });
 }
@@ -384,7 +400,7 @@ describe('M2 C and D. bounded transports and fail-closed validation', () => {
     let writers = 0;
     await executeExperienceV3GenerateServer({ manifest }, {
       generate: async () => { writers += 1; return writerJson(manifest); },
-      evaluate: async () => evaluatorJson(manifest),
+      evaluate: async () => evaluatorToolResponse(manifest),
     });
     expect(writers).toBe(1);
   });
@@ -394,7 +410,7 @@ describe('M2 C and D. bounded transports and fail-closed validation', () => {
     let evaluators = 0;
     await executeExperienceV3GenerateServer({ manifest }, {
       generate: async () => writerJson(manifest),
-      evaluate: async () => { evaluators += 1; return evaluatorJson(manifest); },
+      evaluate: async () => { evaluators += 1; return evaluatorToolResponse(manifest); },
     });
     expect(evaluators).toBe(1);
   });
@@ -456,7 +472,7 @@ describe('M2 C and D. bounded transports and fail-closed validation', () => {
     expect(run.writeCount).toBe(0);
   });
 
-  it('23. makes the evaluator raw-object contract explicit without accepting wrappers', () => {
+  it('23. makes the evaluator forced-tool contract explicit and exposes no prose or authority channel', () => {
     const manifest = captureExperienceV3OperationSnapshot(makeInput()).manifest;
     const prompt = buildExperienceV3EvaluatorPrompt(manifest, {
       operationId: manifest.operationId,
@@ -471,12 +487,31 @@ describe('M2 C and D. bounded transports and fail-closed validation', () => {
         text,
       })),
     });
-    expect(prompt).toContain('Return one complete raw JSON object only. Begin with { and end with }.');
-    expect(prompt).toContain('Do not use Markdown, code fences, commentary, explanations, headings, or reasoning.');
+    expect(prompt).toContain(`Invoke only the ${EXPERIENCE_V3_EVALUATOR_TOOL_NAME} tool.`);
+    expect(prompt).toContain('Do not emit text, Markdown, code fences, commentary, explanations, headings, or reasoning.');
     expect(prompt).toContain('Echo operationId, entryId, snapshotHash, and locale exactly from the immutable manifest.');
   });
 
-  it('24. rejects malformed, wrapped, truncated, schema-invalid, and identity-mismatched evaluator evidence as not evaluated', async () => {
+  it('24. accepts one valid forced tool response with byte-identical candidate prose and three passed phases', async () => {
+    const manifest = captureExperienceV3OperationSnapshot(makeInput()).manifest;
+    const valid = JSON.parse(evaluatorJson(manifest)) as Record<string, unknown>;
+    const result = await executeExperienceV3GenerateServer({ manifest }, {
+      generate: async () => writerJson(manifest),
+      evaluate: async () => evaluatorToolResponse(manifest, valid),
+    });
+    expect(result).toMatchObject({ ok: true });
+    if (result.ok) {
+      expect(result.candidate.text).toBe(EN_BULLETS.map((bullet) => `• ${bullet}`).join('\n'));
+      expect(result.candidate.units?.map((unit) => unit.text)).toEqual(EN_BULLETS);
+      expect(result.validation.phases).toMatchObject({
+        structural: { status: 'passed' },
+        semantic: { status: 'passed' },
+        language_quality: { status: 'passed' },
+      });
+    }
+  });
+
+  it('25. rejects every non-tool or invalid forced-tool response as not evaluated', async () => {
     const manifest = captureExperienceV3OperationSnapshot(makeInput()).manifest;
     const valid = JSON.parse(evaluatorJson(manifest)) as Record<string, unknown>;
     const missingFields = JSON.parse(JSON.stringify(valid)) as { phases: Record<string, unknown> };
@@ -484,24 +519,41 @@ describe('M2 C and D. bounded transports and fail-closed validation', () => {
     const unexpectedAuthority = { ...valid, accepted: true };
     const invalidEnum = JSON.parse(JSON.stringify(valid)) as { phases: { semantic: { status: string } } };
     invalidEnum.phases.semantic.status = 'pending';
-    const wrongIdentity = { ...valid, entryId: 'another-entry' };
-    const cases = [
-      '{"operationId":',
-      `${evaluatorJson(manifest)}${evaluatorJson(manifest)}`,
-      `Evaluator notes:\n${evaluatorJson(manifest)}`,
-      `\`\`\`json\n${evaluatorJson(manifest)}\n\`\`\``,
-      JSON.stringify(missingFields),
-      JSON.stringify(unexpectedAuthority),
-      JSON.stringify(invalidEnum),
-      JSON.stringify(wrongIdentity),
+    const tool = (input: unknown, name = EXPERIENCE_V3_EVALUATOR_TOOL_NAME) => ({
+      type: 'tool_use' as const,
+      name,
+      input,
+    });
+    const cases: readonly { name: string; response: ExperienceV3EvaluatorResponse; typedReason: string }[] = [
+      { name: 'text-only valid-looking JSON', response: { stopReason: 'tool_use', content: [{ type: 'text' }] }, typedReason: 'evaluator_unexpected_text_block' },
+      { name: 'Markdown-fenced JSON', response: { stopReason: 'tool_use', content: [{ type: 'text' }] }, typedReason: 'evaluator_unexpected_text_block' },
+      { name: 'commentary plus JSON', response: { stopReason: 'tool_use', content: [{ type: 'text' }] }, typedReason: 'evaluator_unexpected_text_block' },
+      { name: 'zero tools', response: { stopReason: 'tool_use', content: [] }, typedReason: 'evaluator_tool_missing' },
+      { name: 'two tools', response: { stopReason: 'tool_use', content: [tool(valid), tool(valid)] }, typedReason: 'evaluator_multiple_tools' },
+      { name: 'wrong tool', response: { stopReason: 'tool_use', content: [tool(valid, 'wrong_tool')] }, typedReason: 'evaluator_wrong_tool' },
+      { name: 'tool plus text', response: { stopReason: 'tool_use', content: [tool(valid), { type: 'text' }] }, typedReason: 'evaluator_unexpected_text_block' },
+      { name: 'malformed input', response: { stopReason: 'tool_use', content: [tool(null)] }, typedReason: 'evaluator_tool_input_malformed' },
+      { name: 'missing fields', response: { stopReason: 'tool_use', content: [tool(missingFields)] }, typedReason: 'evaluator_tool_input_malformed' },
+      { name: 'unexpected fields', response: { stopReason: 'tool_use', content: [tool(unexpectedAuthority)] }, typedReason: 'evaluator_tool_input_malformed' },
+      { name: 'invalid enums', response: { stopReason: 'tool_use', content: [tool(invalidEnum)] }, typedReason: 'evaluator_tool_input_malformed' },
+      { name: 'operation mismatch', response: { stopReason: 'tool_use', content: [tool({ ...valid, operationId: 'other-operation' })] }, typedReason: 'evaluator_identity_mismatch' },
+      { name: 'entry mismatch', response: { stopReason: 'tool_use', content: [tool({ ...valid, entryId: 'another-entry' })] }, typedReason: 'evaluator_identity_mismatch' },
+      { name: 'snapshot mismatch', response: { stopReason: 'tool_use', content: [tool({ ...valid, snapshotHash: 'other-snapshot' })] }, typedReason: 'evaluator_identity_mismatch' },
+      { name: 'locale mismatch', response: { stopReason: 'tool_use', content: [tool({ ...valid, locale: 'de' })] }, typedReason: 'evaluator_identity_mismatch' },
+      { name: 'max tokens', response: { stopReason: 'max_tokens', content: [tool(valid)] }, typedReason: 'evaluator_max_tokens' },
+      { name: 'unexpected stop reason', response: { stopReason: 'end_turn', content: [tool(valid)] }, typedReason: 'evaluator_output_malformed' },
+      { name: 'unexpected content block', response: { stopReason: 'tool_use', content: [{ type: 'thinking' }] }, typedReason: 'evaluator_output_malformed' },
     ];
-    for (const raw of cases) {
-      expect(parseExperienceV3EvaluatorOutput(raw, manifest)).toBeNull();
+    for (const testCase of cases) {
+      expect(parseExperienceV3EvaluatorToolResponse(testCase.response, manifest)).toMatchObject({
+        ok: false,
+        typedReason: testCase.typedReason,
+      });
       const result = await executeExperienceV3GenerateServer({ manifest }, {
         generate: async () => writerJson(manifest),
-        evaluate: async () => raw,
+        evaluate: async () => testCase.response,
       });
-      expect(result).toMatchObject({ ok: false, typedReason: 'evaluator_output_malformed' });
+      expect(result).toMatchObject({ ok: false, typedReason: testCase.typedReason });
       if (!result.ok) {
         expect(result.validation?.phases).toMatchObject({
           structural: { status: 'passed' },
@@ -512,8 +564,10 @@ describe('M2 C and D. bounded transports and fail-closed validation', () => {
     }
   });
 
-  it('25. keeps malformed evaluator output terminal with no apply, usage, or V2 fallthrough', async () => {
-    const run = await runHarness({ serverOptions: { evaluatorRaw: '{"operationId":' } });
+  it('26. keeps malformed evaluator output terminal with no apply, usage, or V2 fallthrough', async () => {
+    const run = await runHarness({ serverOptions: {
+      evaluatorResponse: { stopReason: 'tool_use', content: [{ type: 'thinking' }] },
+    } });
     expect(run.result).toMatchObject({ kind: 'handled_failure', typedReason: 'evaluator_output_malformed' });
     if (run.result.kind === 'handled_failure') {
       expect(run.result.diagnostic).toMatchObject({
@@ -540,7 +594,7 @@ describe('M2 C and D. bounded transports and fail-closed validation', () => {
         locale: 'de',
         bullets: EN_BULLETS,
       }),
-      evaluate: async () => evaluatorJson(manifest),
+      evaluate: async () => evaluatorToolResponse(manifest),
     });
     expect(result).toMatchObject({ ok: false, typedReason: 'provider_output_malformed' });
   });

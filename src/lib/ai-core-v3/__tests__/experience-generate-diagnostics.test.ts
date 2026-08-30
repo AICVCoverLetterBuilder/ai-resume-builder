@@ -25,7 +25,11 @@ import {
   type ExperienceV3AdapterInput,
   type ExperienceV3AdapterResult,
 } from '../experience-generate';
-import { executeExperienceV3GenerateServer } from '../experience-generate-server';
+import {
+  EXPERIENCE_V3_EVALUATOR_TOOL_NAME,
+  executeExperienceV3GenerateServer,
+  type ExperienceV3EvaluatorResponse,
+} from '../experience-generate-server';
 import { M4_M2_EVALUATOR_MALFORMED_DEVICE_DIAGNOSTIC_FIXTURE } from '../fixtures/m4-m2-evaluator-malformed-device-diagnostic';
 
 const DEVICE_ROLE = 'Servicetechniker Elektrotechnik';
@@ -140,6 +144,20 @@ function evaluatorJson(
   });
 }
 
+function evaluatorToolResponse(
+  manifest: ReturnType<typeof captureExperienceV3OperationSnapshot>['manifest'],
+  semantic: 'passed' | 'failed' = 'passed',
+): ExperienceV3EvaluatorResponse {
+  return {
+    stopReason: 'tool_use',
+    content: [{
+      type: 'tool_use',
+      name: EXPERIENCE_V3_EVALUATOR_TOOL_NAME,
+      input: JSON.parse(evaluatorJson(manifest, semantic)),
+    }],
+  };
+}
+
 type RunMode = 'success' | 'writer_failure' | 'evaluator_malformed' | 'semantic_reject' | 'race_failure';
 
 async function runDeviceFixture(mode: RunMode = 'success') {
@@ -162,8 +180,10 @@ async function runDeviceFixture(mode: RunMode = 'success') {
         },
         evaluate: async () => {
           evaluatorCalls += 1;
-          if (mode === 'evaluator_malformed') return '{"operationId":';
-          return evaluatorJson(manifest, mode === 'semantic_reject' ? 'failed' : 'passed');
+          if (mode === 'evaluator_malformed') {
+            return { stopReason: 'tool_use', content: [{ type: 'thinking' }] };
+          }
+          return evaluatorToolResponse(manifest, mode === 'semantic_reject' ? 'failed' : 'passed');
         },
       });
       httpStatus = response.ok
@@ -403,9 +423,11 @@ describe('M4 device-test-1 V3 Experience terminal diagnostics', () => {
       evaluator: { attempted: true, result: 'malformed' },
       phases: { structural: 'passed', semantic: 'not_evaluated', language_quality: 'not_evaluated' },
       rejectionReasonCodes: ['evaluator_output_malformed'],
+      finalDecision: 'transport_failure',
       applyAuthorized: false,
       usageDelta: 0,
       v2FallthroughCount: 0,
+      sourceCommitMarker: '6d02259',
     });
     const run = await runDeviceFixture('evaluator_malformed');
     expect(run.result).toMatchObject({ kind: 'handled_failure', typedReason: 'evaluator_output_malformed' });

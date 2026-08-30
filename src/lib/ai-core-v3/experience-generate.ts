@@ -28,6 +28,13 @@ export const EXPERIENCE_V3_TERMINAL_REASON_CODES = [
   'provider_output_malformed',
   'structural_validation_failed',
   'evaluator_request_failed',
+  'evaluator_max_tokens',
+  'evaluator_tool_missing',
+  'evaluator_multiple_tools',
+  'evaluator_wrong_tool',
+  'evaluator_unexpected_text_block',
+  'evaluator_tool_input_malformed',
+  'evaluator_identity_mismatch',
   'evaluator_output_malformed',
   'validation_rejected',
   'invalid_v3_response',
@@ -691,7 +698,16 @@ function diagnosticAttempts(
   if (reason === 'evaluator_request_failed') {
     return { writer: succeeded, evaluator: { attempted: true, result: 'failed' } };
   }
-  if (reason === 'evaluator_output_malformed') {
+  if ([
+    'evaluator_max_tokens',
+    'evaluator_tool_missing',
+    'evaluator_multiple_tools',
+    'evaluator_wrong_tool',
+    'evaluator_unexpected_text_block',
+    'evaluator_tool_input_malformed',
+    'evaluator_identity_mismatch',
+    'evaluator_output_malformed',
+  ].includes(reason)) {
     return { writer: succeeded, evaluator: { attempted: true, result: 'malformed' } };
   }
   if (reason === 'validation_rejected') return { writer: succeeded, evaluator: succeeded };
@@ -747,6 +763,14 @@ function buildExperienceV3TerminalDiagnostic(
   const raceFailure = reason === 'stale_snapshot' || reason === 'target_entry_deleted';
   const transportFailure = reason === 'provider_request_failed'
     || reason === 'evaluator_request_failed'
+    || reason === 'evaluator_max_tokens'
+    || reason === 'evaluator_tool_missing'
+    || reason === 'evaluator_multiple_tools'
+    || reason === 'evaluator_wrong_tool'
+    || reason === 'evaluator_unexpected_text_block'
+    || reason === 'evaluator_tool_input_malformed'
+    || reason === 'evaluator_identity_mismatch'
+    || reason === 'evaluator_output_malformed'
     || reason === 'transport_or_request_failure'
     || (routeHttpStatus !== null && routeHttpStatus >= 500);
   const notReady = reason === 'snapshot_capture_failed'

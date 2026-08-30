@@ -35,6 +35,6 @@ export const M4_M2_EVALUATOR_MALFORMED_DEVICE_DIAGNOSTIC_FIXTURE = immutableCopy
   usageAfter: 0,
   usageDelta: 0,
   raceGuardResult: 'not_evaluated',
-  sourceCommitMarker: 'ea96094',
+  sourceCommitMarker: '6d02259',
   buildChannel: 'internal',
 });

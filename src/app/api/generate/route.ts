@@ -76,6 +76,7 @@ import {
 } from '@/lib/cv-experience-localized-surfaces';
 import {
   EXPERIENCE_V3_ENHANCE_ACTION,
+  EXPERIENCE_V3_EVALUATOR_TOOL,
   EXPERIENCE_V3_GENERATE_ACTION,
   SUMMARY_V3_GENERATE_ACTION,
   executeExperienceV3EnhanceServer,
@@ -689,13 +690,27 @@ export async function POST(req: NextRequest) {
           system: 'You are the single AI Core V3 Experience prose writer. Follow the strict JSON contract exactly.',
           messages: [{ role: 'user', content: prompt }],
         }, deadlineAt, undefined, AI_PROVIDER_CALL_TIMEOUT_MS, 'provider', undefined, false)),
-        evaluate: async (prompt) => getText(await callWithRetry({
-          model: MODEL,
-          max_tokens: 1200,
-          temperature: 0,
-          system: 'You are an independent non-writing CV validator. Return structured validation evidence only.',
-          messages: [{ role: 'user', content: prompt }],
-        }, deadlineAt, undefined, AI_PROVIDER_CALL_TIMEOUT_MS, 'verifier', undefined, false)),
+        evaluate: async (prompt) => {
+          const response = await callWithRetry({
+            model: MODEL,
+            max_tokens: 1200,
+            temperature: 0,
+            system: 'You are an independent non-writing CV validator. Submit structured validation evidence only through the required tool.',
+            messages: [{ role: 'user', content: prompt }],
+            tools: [EXPERIENCE_V3_EVALUATOR_TOOL],
+            tool_choice: {
+              type: 'tool',
+              name: EXPERIENCE_V3_EVALUATOR_TOOL.name,
+              disable_parallel_tool_use: true,
+            },
+          }, deadlineAt, undefined, AI_PROVIDER_CALL_TIMEOUT_MS, 'verifier', undefined, false);
+          return {
+            stopReason: response.stop_reason,
+            content: response.content.map((block) => block.type === 'tool_use'
+              ? { type: 'tool_use' as const, name: block.name, input: block.input }
+              : { type: block.type }),
+          };
+        },
       });
       const status = result.ok
         ? 200
