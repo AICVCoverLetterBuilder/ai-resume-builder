@@ -28,6 +28,7 @@ import { M4_SUMMARY_GENERATE_DEVICE_OBSERVATION } from '../fixtures/m4-summary-g
 import { M4_SUMMARY_GENERATE_AAB545_OBSERVATION } from '../fixtures/m4-summary-generate-aab545-observation';
 import { M4_SUMMARY_GENERATE_AAB546_OBSERVATION } from '../fixtures/m4-summary-generate-aab546-observation';
 import { M4_SUMMARY_GENERATE_AAB547_TIMEOUT_OBSERVATION } from '../fixtures/m4-summary-generate-aab547-timeout-observation';
+import { M4_SUMMARY_GENERATE_AAB548_WRITER_SCHEMA_OBSERVATION } from '../fixtures/m4-summary-generate-aab548-writer-schema-observation';
 import { SummaryAiDiagnosticSession, formatSummaryAiDiagnosticForCopy } from '../../cv-summary-ai-diagnostics';
 
 function cv(): CVData {
@@ -627,6 +628,25 @@ describe('M4 transactional apply, preview, rollback, and usage', () => {
     expect(M4_SUMMARY_GENERATE_AAB546_OBSERVATION.attempts.every((attempt) => attempt.routeHttpStatus === 502)).toBe(true);
     expect(JSON.stringify(M4_SUMMARY_GENERATE_AAB546_OBSERVATION)).not.toMatch(/@|Ana|Example|Current|employer|role|prompt|token/u);
   });
+
+  it('92. AAB 548 physical writer schema observation remains fail-closed and immutable', () => {
+    expect(M4_SUMMARY_GENERATE_AAB548_WRITER_SCHEMA_OBSERVATION).toMatchObject({
+      package: '1.0.548 / 548', sourceMarker: '7cabc82', operation: 'summary_v3_generate',
+      routeHttpStatus: 502, ownershipResult: 'owned',
+      writer: { attempted: true, result: 'malformed', stopReason: 'tool_use', contentBlockCount: 1,
+        textBlockCount: 0, toolBlockCount: 1, expectedToolCount: 1, toolNameMatched: true,
+        toolInputObject: true, toolInputSchemaPassed: false, identityPassed: true },
+      evaluator: { attempted: false, result: 'not_attempted' }, candidatePresent: false,
+      repairAttempted: false, fallbackAttempted: false, apply: false, persistence: 'not_attempted',
+      usageDelta: 0, v2FallthroughCount: 0, summaryUnchanged: true, experienceUnchanged: true,
+      terminalRecordPresentBeforeToast: true, summaryCopyPresent: true,
+      m4ProviderFailure: { phase: 'initial_writer', failureStage: 'tool_validation', providerHttpStatus: null,
+        providerErrorCode: null, providerStructuralFieldPath: null, providerMessageFingerprint: 'v3s-f8b6c81c',
+        providerHttpResponseReceived: true },
+    });
+    expect(Object.isFrozen(M4_SUMMARY_GENERATE_AAB548_WRITER_SCHEMA_OBSERVATION)).toBe(true);
+    expect(JSON.stringify(M4_SUMMARY_GENERATE_AAB548_WRITER_SCHEMA_OBSERVATION)).not.toMatch(/@|fullName|email|phone|address|employer|role|prompt|token|credential|raw/u);
+  });
 });
 
 describe('M4 provider-failure observability envelope', () => {
@@ -702,6 +722,61 @@ describe('M4 provider-failure observability envelope', () => {
     expect(result).toMatchObject({ ok: false, typedReason: 'writer_tool_missing', m4ProviderFailure: { phase: 'initial_writer', failureStage: 'tool_validation', providerHttpStatus: null } });
   });
 
+  it('projects the exact safe writer schema code and path into the terminal failure envelope', async () => {
+    const manifest = snapshot().manifest;
+    const malformed = output(manifest);
+    malformed.units = {} as unknown as SummaryV3WriterOutput['units'];
+    const result = await executeSummaryV3GenerateServer({ manifest }, {
+      write: vi.fn(async () => ({ stopReason: 'tool_use', content: [{
+        type: 'tool_use', name: SUMMARY_V3_WRITER_TOOL_NAME, input: malformed,
+      }] })), evaluate: vi.fn(),
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      typedReason: 'writer_tool_input_malformed',
+      m4ProviderFailure: {
+        phase: 'initial_writer', failureStage: 'tool_validation', providerHttpStatus: null,
+        providerErrorCode: 'units_type', providerStructuralFieldPath: 'units',
+        providerHttpResponseReceived: true,
+      },
+    });
+  });
+
+  it('projects finite safe writer schema code and path without accepting malformed input', () => {
+    const manifest = snapshot().manifest;
+    const valid = output(manifest);
+    const cases: Array<[string, unknown, string, string | null]> = [
+      ['non-object', null, 'input_not_object', null],
+      ['missing top-level field', (() => { const v = { ...valid }; delete (v as Record<string, unknown>).units; return v; })(), 'top_level_keys', 'root'],
+      ['extra top-level field', { ...valid, extra: true }, 'top_level_keys', 'root'],
+      ['units wrong type', { ...valid, units: {} }, 'units_type', 'units'],
+      ['units too short', { ...valid, units: valid.units.slice(0, 1) }, 'units_length', 'units'],
+      ['missing nested field', { ...valid, units: [(() => { const unit = { ...(valid.units[0] as object) }; delete (unit as Record<string, unknown>).text; return unit; })(), ...valid.units.slice(1)] }, 'unit_keys', 'units.0'],
+      ['extra nested field', { ...valid, units: [{ ...(valid.units[0] as object), extra: true }, ...valid.units.slice(1)] }, 'unit_keys', 'units.0'],
+      ['wrong slot enum', { ...valid, units: [{ ...(valid.units[0] as object), slot: 'other' }, ...valid.units.slice(1)] }, 'slot_type_or_enum', 'units.0.slot'],
+      ['wrong fact item type', { ...valid, units: [{ ...(valid.units[0] as object), factIds: [1] }, ...valid.units.slice(1)] }, 'fact_id_type', 'units.0.factIds'],
+      ['wrong text type', { ...valid, units: [{ ...(valid.units[0] as object), text: 1 }, ...valid.units.slice(1)] }, 'text_type', 'units.0.text'],
+      ['unsafe text', { ...valid, units: [{ ...(valid.units[0] as object), text: '# Summary' }, ...valid.units.slice(1)] }, 'text_content', 'units.0.text'],
+      ['wrong order', { ...valid, units: [valid.units[1], valid.units[0], ...valid.units.slice(2)] }, 'unit_order', 'units'],
+      ['duration ownership', { ...valid, units: [{ ...(valid.units[0] as object), entryId: 'wrong' }, ...valid.units.slice(1)] }, 'duration_contract', 'units'],
+      ['experience ownership', { ...valid, units: [valid.units[0], { ...(valid.units[1] as object), entryId: 'wrong' }, ...valid.units.slice(2)] }, 'entry_ownership', 'units.1.entryId'],
+      ['wrong fact ownership', { ...valid, units: [valid.units[0], { ...(valid.units[1] as object), factIds: (valid.units[2] as { factIds: string[] }).factIds }, ...valid.units.slice(2)] }, 'fact_ownership', 'units.1.factIds'],
+    ];
+    for (const [name, toolInput, code, fieldPath] of cases) {
+      const result = parseSummaryV3WriterToolResponse({ stopReason: 'tool_use', content: [{ type: 'tool_use', name: SUMMARY_V3_WRITER_TOOL_NAME, input: toolInput }] }, manifest);
+      expect(result.ok, name).toBe(false);
+      if (!result.ok) expect(result.toolValidation, name).toEqual({ code, fieldPath });
+    }
+    const accepted = parseSummaryV3WriterToolResponse(writerResponse(manifest), manifest);
+    expect(accepted.ok).toBe(true);
+  });
+
+  it('keeps the shared writer contract for a valid repair-writer response', () => {
+    const manifest = snapshot().manifest;
+    const result = parseSummaryV3WriterToolResponse(writerResponse(manifest), manifest);
+    expect(result).toMatchObject({ ok: true, diagnosticMetadata: { toolInputSchemaPassed: true, identityPassed: true } });
+  });
+
   it('keeps route HTTP status separate from provider status in terminal diagnostics and copy', async () => {
     const captured = snapshot();
     const events: import('../summary-generate').SummaryV3GenerateTerminalEvent[] = [];
@@ -724,6 +799,33 @@ describe('M4 provider-failure observability envelope', () => {
     expect(copy).toContain('m4ProviderFailure');
     expect(copy).not.toContain('raw provider message');
     expect(copy).not.toContain('raw-provider-request-id');
+  });
+
+  it('carries safe writer schema code and path into the Summary terminal copy', async () => {
+    const captured = snapshot();
+    const events: import('../summary-generate').SummaryV3GenerateTerminalEvent[] = [];
+    const envelope = {
+      phase: 'initial_writer' as const, failureStage: 'tool_validation' as const,
+      errorClass: null, providerHttpStatus: null, providerErrorType: null,
+      providerErrorCode: 'units_type', providerRequestIdHash: null, providerRetryable: false,
+      providerMessageFingerprint: 'v3s-f8b6c81c', providerStructuralFieldPath: 'units',
+      providerHttpResponseReceived: true,
+    };
+    await runSummaryV3GenerateAdapter(input(), {
+      request: vi.fn(async () => ({ ok: false, action: SUMMARY_V3_GENERATE_ACTION,
+        typedReason: 'writer_tool_input_malformed', m4ProviderFailure: envelope })),
+      getLiveState: () => ({ cv: cv(), requestedLocale: 'en', uiLocale: 'en', storedContentLocale: 'en', exactVisibleSummary: '',
+        referenceDateIso: captured.referenceDateIso, jobContextHash: 'context-m4' }),
+      getActiveOperationId: () => 'm4-operation', writeCv: vi.fn(), projectPreviewSummary: (next) => next.summary,
+      persistCv: vi.fn(), incrementUsage: vi.fn(), getRouteHttpStatus: () => 502,
+      onTerminal: (event) => events.push(event),
+    });
+    const session = new SummaryAiDiagnosticSession({ uiLocale: 'en', requestedLocale: 'en', templateId: 'test', requestId: 'safe-request', usageCountBefore: 4 });
+    session.recordM4Terminal(events[0]);
+    const trace = session.commit();
+    expect(trace.m4ProviderFailure).toMatchObject({ providerErrorCode: 'units_type', providerStructuralFieldPath: 'units' });
+    expect(formatSummaryAiDiagnosticForCopy(trace)).toContain('"providerStructuralFieldPath": "units"');
+    expect(formatSummaryAiDiagnosticForCopy(trace)).toContain('"providerErrorCode": "units_type"');
   });
 });
 

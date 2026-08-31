@@ -77,6 +77,13 @@ const SAFE_PROVIDER_ERROR_CODES = new Set([
   'model_not_found', 'billing_error', 'quota_exceeded', 'timeout', 'connection_error',
 ]);
 
+const SAFE_TOOL_VALIDATION_CODES = new Set([
+  'input_not_object', 'top_level_keys', 'units_type', 'units_length', 'unit_not_object',
+  'unit_keys', 'slot_type_or_enum', 'entry_id_type', 'fact_ids_type', 'fact_id_type',
+  'text_type', 'text_content', 'unit_order', 'duration_contract', 'entry_ownership',
+  'fact_ownership', 'duplicate_fact_ids',
+]);
+
 function providerStatus(error: unknown): number | null {
   if (!error || typeof error !== 'object') return null;
   const status = (error as Record<string, unknown>).status;
@@ -167,9 +174,19 @@ export function classifySummaryV3ProviderFailure(
   }) as SummaryV3ProviderFailureEnvelope;
 }
 
-function toolValidationFailure(phase: SummaryV3ProviderPhase, reason: string): SummaryV3ProviderFailureEnvelope {
-  const base = classifySummaryV3ProviderFailure(new Error(reason), phase, 'tool_validation');
+type SummaryV3ToolValidationEvidence = Readonly<{
+  readonly code: string;
+  readonly fieldPath: string | null;
+}>;
+
+function toolValidationFailure(
+  phase: SummaryV3ProviderPhase,
+  reason: string,
+  evidence?: SummaryV3ToolValidationEvidence,
+): SummaryV3ProviderFailureEnvelope {
+  const base = classifySummaryV3ProviderFailure(new Error(reason), phase, 'tool_validation', evidence?.fieldPath);
   return immutableCopy({ ...base, errorClass: null, providerErrorType: null, providerRetryable: false,
+    providerErrorCode: evidence && SAFE_TOOL_VALIDATION_CODES.has(evidence.code) ? evidence.code : null,
     providerHttpResponseReceived: true }) as SummaryV3ProviderFailureEnvelope;
 }
 
@@ -418,36 +435,87 @@ function safeUnitText(text: string): boolean {
   return Boolean(trimmed) && !/```|^#{1,6}\s|^(?:[-*•▪◦‣⁃]|\d+[.)])\s|^(?:summary|output|explanation|here(?:'s| is))\b/imu.test(trimmed);
 }
 
-function parseSummaryV3WriterObject(value: unknown, manifest: SummaryV3Manifest): SummaryV3WriterOutput | null {
-  if (!isRecord(value) || !exactKeys(value, ['operationId', 'snapshotHash', 'locale', 'units'])
-    || value.operationId !== manifest.operationId || value.snapshotHash !== manifest.sourceSnapshotHash
-    || value.locale !== manifest.targetLocale || !Array.isArray(value.units)
-    || value.units.length !== manifest.selectedEntries.length + 1) return null;
-  const units = value.units.map((unit) => {
-    if (!isRecord(unit) || !exactKeys(unit, ['slot', 'entryId', 'factIds', 'text'])
-      || (unit.slot !== 'duration' && unit.slot !== 'experience') || !Array.isArray(unit.factIds)
-      || unit.factIds.some((id) => typeof id !== 'string') || typeof unit.text !== 'string'
-      || !safeUnitText(unit.text)) return null;
-    return { slot: unit.slot, entryId: unit.entryId, factIds: unit.factIds, text: unit.text } as SummaryV3WriterUnit;
+type SummaryV3WriterObjectParseResult =
+  | { readonly ok: true; readonly value: SummaryV3WriterOutput }
+  | { readonly ok: false; readonly evidence: SummaryV3ToolValidationEvidence };
+
+function writerObjectFailure(code: string, fieldPath: string | null): SummaryV3WriterObjectParseResult {
+  return { ok: false, evidence: { code, fieldPath } };
+}
+
+type SummaryV3WriterUnitParseResult =
+  | { readonly ok: true; readonly value: SummaryV3WriterUnit }
+  | { readonly ok: false; readonly evidence: SummaryV3ToolValidationEvidence };
+
+function writerUnitFailure(code: string, fieldPath: string): SummaryV3WriterUnitParseResult {
+  return { ok: false, evidence: { code, fieldPath } };
+}
+
+function parseSummaryV3WriterObjectDetailed(
+  value: unknown,
+  manifest: SummaryV3Manifest,
+): SummaryV3WriterObjectParseResult {
+  if (!isRecord(value)) return writerObjectFailure('input_not_object', null);
+  if (!exactKeys(value, ['operationId', 'snapshotHash', 'locale', 'units'])) {
+    return writerObjectFailure('top_level_keys', 'root');
+  }
+  if (value.operationId !== manifest.operationId || value.snapshotHash !== manifest.sourceSnapshotHash
+    || value.locale !== manifest.targetLocale) {
+    return writerObjectFailure('top_level_keys', 'root');
+  }
+  if (!Array.isArray(value.units)) return writerObjectFailure('units_type', 'units');
+  if (value.units.length !== manifest.selectedEntries.length + 1) {
+    return writerObjectFailure('units_length', 'units');
+  }
+  const units = value.units.map((unit, index) => {
+    const path = `units.${index}`;
+    if (!isRecord(unit)) return writerUnitFailure('unit_not_object', path);
+    if (!exactKeys(unit, ['slot', 'entryId', 'factIds', 'text'])) return writerUnitFailure('unit_keys', path);
+    if (unit.slot !== 'duration' && unit.slot !== 'experience') {
+      return writerUnitFailure('slot_type_or_enum', `${path}.slot`);
+    }
+    if (!(typeof unit.entryId === 'string' || unit.entryId === null)) {
+      return writerUnitFailure('entry_id_type', `${path}.entryId`);
+    }
+    if (!Array.isArray(unit.factIds)) return writerUnitFailure('fact_ids_type', `${path}.factIds`);
+    if (unit.factIds.some((id) => typeof id !== 'string')) {
+      return writerUnitFailure('fact_id_type', `${path}.factIds`);
+    }
+    if (typeof unit.text !== 'string') return writerUnitFailure('text_type', `${path}.text`);
+    if (!safeUnitText(unit.text)) return writerUnitFailure('text_content', `${path}.text`);
+    return { ok: true as const, value: { slot: unit.slot, entryId: unit.entryId, factIds: unit.factIds, text: unit.text } as SummaryV3WriterUnit };
   });
-  if (units.some((unit) => unit === null)) return null;
-  const typed = units as SummaryV3WriterUnit[];
-  if (typed[0]?.slot !== 'duration' || typed.slice(1).some((unit) => unit.slot !== 'experience')) return null;
+  const firstFailure = units.find((unit): unit is { readonly ok: false; readonly evidence: SummaryV3ToolValidationEvidence } => !unit.ok);
+  if (firstFailure) return firstFailure;
+  const typed = units.map((unit) => (unit as { readonly ok: true; readonly value: SummaryV3WriterUnit }).value);
+  if (typed[0]?.slot !== 'duration' || typed.slice(1).some((unit) => unit.slot !== 'experience')) {
+    return writerObjectFailure('unit_order', 'units');
+  }
   const duration = typed.filter((unit) => unit.slot === 'duration');
   const experiences = typed.filter((unit) => unit.slot === 'experience');
   if (duration.length !== 1 || duration[0].entryId !== null || duration[0].factIds.length !== 0
-    || experiences.length !== manifest.selectedEntries.length) return null;
+    || experiences.length !== manifest.selectedEntries.length) {
+    return writerObjectFailure('duration_contract', 'units');
+  }
   for (let index = 0; index < experiences.length; index += 1) {
     const expected = manifest.selectedEntries[index];
     const actual = experiences[index];
     const expectedFactIds = expected.facts.map((fact) => fact.factId);
-    if (actual.entryId !== expected.entryId || actual.factIds.length !== expectedFactIds.length
-      || actual.factIds.some((id, factIndex) => id !== expectedFactIds[factIndex])) return null;
+    if (actual.entryId !== expected.entryId) return writerObjectFailure('entry_ownership', `units.${index + 1}.entryId`);
+    if (actual.factIds.length !== expectedFactIds.length
+      || actual.factIds.some((id, factIndex) => id !== expectedFactIds[factIndex])) {
+      return writerObjectFailure('fact_ownership', `units.${index + 1}.factIds`);
+    }
   }
   const all = experiences.flatMap((unit) => unit.factIds);
-  if (new Set(all).size !== all.length) return null;
-  return immutableCopy({ operationId: manifest.operationId, snapshotHash: manifest.sourceSnapshotHash,
-    locale: manifest.targetLocale, units: typed }) as SummaryV3WriterOutput;
+  if (new Set(all).size !== all.length) return writerObjectFailure('duplicate_fact_ids', 'units.factIds');
+  return { ok: true, value: immutableCopy({ operationId: manifest.operationId, snapshotHash: manifest.sourceSnapshotHash,
+    locale: manifest.targetLocale, units: typed }) as SummaryV3WriterOutput };
+}
+
+function parseSummaryV3WriterObject(value: unknown, manifest: SummaryV3Manifest): SummaryV3WriterOutput | null {
+  const result = parseSummaryV3WriterObjectDetailed(value, manifest);
+  return result.ok ? result.value : null;
 }
 
 export function parseSummaryV3WriterOutput(value: unknown, manifest: SummaryV3Manifest): SummaryV3WriterOutput | null {
@@ -518,7 +586,7 @@ function failedTransportEvidence(
 
 export type SummaryV3WriterToolParseResult =
   | { readonly ok: true; readonly value: SummaryV3WriterOutput; readonly diagnosticMetadata: SummaryV3DiagnosticAttempt }
-  | { readonly ok: false; readonly typedReason: string; readonly diagnosticMetadata: SummaryV3DiagnosticAttempt };
+  | { readonly ok: false; readonly typedReason: string; readonly diagnosticMetadata: SummaryV3DiagnosticAttempt; readonly toolValidation?: SummaryV3ToolValidationEvidence };
 
 export function parseSummaryV3WriterToolResponse(
   response: SummaryV3WriterResponse,
@@ -552,10 +620,12 @@ export function parseSummaryV3WriterToolResponse(
   }
   const inputMetadata = { ...base, toolInputObject: isRecord(tool.input) };
   if (!isRecord(tool.input)) {
-    return { ok: false, typedReason: 'writer_tool_input_malformed', diagnosticMetadata: { ...inputMetadata, result: 'malformed', toolInputSchemaPassed: false } };
+    return { ok: false, typedReason: 'writer_tool_input_malformed', diagnosticMetadata: { ...inputMetadata, result: 'malformed', toolInputSchemaPassed: false },
+      toolValidation: { code: 'input_not_object', fieldPath: null } };
   }
   if (!exactKeys(tool.input, ['operationId', 'snapshotHash', 'locale', 'units'])) {
-    return { ok: false, typedReason: 'writer_tool_input_malformed', diagnosticMetadata: { ...inputMetadata, result: 'malformed', toolInputSchemaPassed: false } };
+    return { ok: false, typedReason: 'writer_tool_input_malformed', diagnosticMetadata: { ...inputMetadata, result: 'malformed', toolInputSchemaPassed: false },
+      toolValidation: { code: 'top_level_keys', fieldPath: 'root' } };
   }
   if (tool.input.operationId !== manifest.operationId || tool.input.snapshotHash !== manifest.sourceSnapshotHash
     || tool.input.locale !== manifest.targetLocale) {
@@ -565,7 +635,9 @@ export function parseSummaryV3WriterToolResponse(
   }
   const value = parseSummaryV3WriterObject(tool.input, manifest);
   if (!value) {
-    return { ok: false, typedReason: 'writer_tool_input_malformed', diagnosticMetadata: { ...inputMetadata, result: 'malformed', toolInputSchemaPassed: false, identityPassed: true } };
+    const detailed = parseSummaryV3WriterObjectDetailed(tool.input, manifest);
+    return { ok: false, typedReason: 'writer_tool_input_malformed', diagnosticMetadata: { ...inputMetadata, result: 'malformed', toolInputSchemaPassed: false, identityPassed: true },
+      toolValidation: detailed.ok ? undefined : detailed.evidence };
   }
   return { ok: true, value, diagnosticMetadata: updateTransportAttempt(response, SUMMARY_V3_WRITER_TOOL_NAME, 'succeeded', true, true) };
 }
@@ -800,7 +872,7 @@ export async function executeSummaryV3GenerateServer(
   const primaryOutput = parseSummaryV3WriterToolResponse(primaryResponse, manifest);
   transportEvidence = { ...transportEvidence, writer: primaryOutput.diagnosticMetadata };
   if (!primaryOutput.ok) return failure(primaryOutput.typedReason, undefined, false, undefined, transportEvidence,
-    toolValidationFailure('initial_writer', primaryOutput.typedReason));
+    toolValidationFailure('initial_writer', primaryOutput.typedReason, primaryOutput.toolValidation));
   const primary = await evaluateCandidate(manifest, primaryOutput.value, transports);
   transportEvidence = { ...transportEvidence, evaluator: primary.evaluatorMetadata };
   if (!primary.ok) return failure(primary.typedReason, undefined, false, undefined, transportEvidence, primary.m4ProviderFailure);
@@ -828,7 +900,7 @@ export async function executeSummaryV3GenerateServer(
   const repairOutput = parseSummaryV3WriterToolResponse(repairResponse, manifest);
   transportEvidence = { ...transportEvidence, writer: repairOutput.diagnosticMetadata };
   if (!repairOutput.ok) return failure('repair_output_malformed', primary.validation, true, primary.candidate, transportEvidence,
-    toolValidationFailure('repair_writer', repairOutput.typedReason));
+    toolValidationFailure('repair_writer', repairOutput.typedReason, repairOutput.toolValidation));
   const repair = await evaluateCandidate(manifest, repairOutput.value, transports, 'post_repair_evaluator');
   transportEvidence = { ...transportEvidence, evaluator: repair.evaluatorMetadata };
   if (!repair.ok) return failure(`repair_${repair.typedReason}`, primary.validation, true, primary.candidate, transportEvidence, repair.m4ProviderFailure);
