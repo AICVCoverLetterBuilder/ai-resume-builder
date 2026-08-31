@@ -4,6 +4,11 @@ import type { AiCoreV3CandidateEnvelope } from './contracts';
 import { immutableCopy } from './immutability';
 import { INTERNAL_AI_RESET_ENABLED } from '../build-channel';
 import {
+  AI_PLATFORM_MAX_DURATION_S,
+  EXPERIENCE_LOCALIZATION_SERVER_BUDGET_MS,
+  EXPERIENCE_LOCALIZATION_VERIFIER_TIMEOUT_MS,
+} from '../ai-request-timing';
+import {
   SUMMARY_V3_GENERATE_ACTION,
   hashSummaryV3Value,
   type SummaryV3DiagnosticAttempt,
@@ -33,6 +38,16 @@ export interface SummaryV3GenerateTransportSet {
 
 export const SUMMARY_V3_WRITER_TOOL_NAME = 'submit_summary_generation' as const;
 export const SUMMARY_V3_EVALUATOR_TOOL_NAME = 'submit_summary_validation' as const;
+
+/** M4 aliases existing constrained-provider authorities; no new transport value is introduced. */
+export const SUMMARY_V3_INITIAL_WRITER_TIMEOUT_MS = EXPERIENCE_LOCALIZATION_VERIFIER_TIMEOUT_MS;
+export const SUMMARY_V3_SERVER_BUDGET_MS = EXPERIENCE_LOCALIZATION_SERVER_BUDGET_MS;
+export const SUMMARY_V3_POST_PROCESSING_HEADROOM_MS =
+  AI_PLATFORM_MAX_DURATION_S * 1_000 - SUMMARY_V3_SERVER_BUDGET_MS;
+
+export function computeSummaryV3ServerDeadline(requestStartedAt: number): number {
+  return requestStartedAt + SUMMARY_V3_SERVER_BUDGET_MS;
+}
 
 type EvaluatedCategory = 'semantic' | 'language_quality';
 

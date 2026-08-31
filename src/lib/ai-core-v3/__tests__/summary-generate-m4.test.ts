@@ -27,6 +27,7 @@ import {
 import { M4_SUMMARY_GENERATE_DEVICE_OBSERVATION } from '../fixtures/m4-summary-generate-device-observation';
 import { M4_SUMMARY_GENERATE_AAB545_OBSERVATION } from '../fixtures/m4-summary-generate-aab545-observation';
 import { M4_SUMMARY_GENERATE_AAB546_OBSERVATION } from '../fixtures/m4-summary-generate-aab546-observation';
+import { M4_SUMMARY_GENERATE_AAB547_TIMEOUT_OBSERVATION } from '../fixtures/m4-summary-generate-aab547-timeout-observation';
 import { SummaryAiDiagnosticSession, formatSummaryAiDiagnosticForCopy } from '../../cv-summary-ai-diagnostics';
 
 function cv(): CVData {
@@ -723,5 +724,39 @@ describe('M4 provider-failure observability envelope', () => {
     expect(copy).toContain('m4ProviderFailure');
     expect(copy).not.toContain('raw provider message');
     expect(copy).not.toContain('raw-provider-request-id');
+  });
+});
+
+describe('M4 AAB 547 immutable timeout authority', () => {
+  it('maps the physical fixture to the exact initial-writer fail-closed result', () => {
+    expect(M4_SUMMARY_GENERATE_AAB547_TIMEOUT_OBSERVATION).toMatchObject({
+      package: '1.0.547 / 547', sourceMarker: 'd9067d3', operation: 'summary_v3_generate',
+      sourceWasEmpty: true, selectedExperienceCount: 1, availableFactCount: 3, requiredFactCount: 3,
+      routeHttpStatus: 502,
+      m4ProviderFailure: { phase: 'initial_writer', failureStage: 'sdk_request', errorClass: 'Error',
+        providerHttpStatus: null, providerErrorType: 'timeout', providerErrorCode: null,
+        providerRequestIdHash: null, providerRetryable: false, providerMessageFingerprint: 'v3s-75034834',
+        providerStructuralFieldPath: null, providerHttpResponseReceived: null },
+      writer: { attempted: true, result: 'failed' }, evaluator: { attempted: false, result: 'not_attempted' },
+      candidatePresent: false, repairAttempted: false, fallbackAttempted: false,
+      apply: false, persistence: 'not_attempted', usageBefore: 0, usageAfter: 0, usageDelta: 0,
+      v2FallthroughCount: 0, summaryUnchanged: true, experienceUnchanged: true,
+      terminalRecordPresentBeforeToast: true, summaryCopyPresent: true, toastShown: true,
+    });
+    expect(Object.values(M4_SUMMARY_GENERATE_AAB547_TIMEOUT_OBSERVATION.phases)
+      .every((phase) => phase === 'not_evaluated')).toBe(true);
+  });
+
+  it('ties the historical fingerprint only to the committed 8000ms provider timeout message', () => {
+    expect(hashSummaryV3Value('provider_transport_timeout after 8000ms')).toBe('v3s-75034834');
+    expect(hashSummaryV3Value('verifier_transport_timeout after 8000ms')).not.toBe('v3s-75034834');
+    expect(hashSummaryV3Value('route_deadline_exceeded after 8000ms')).not.toBe('v3s-75034834');
+  });
+
+  it('contains no CV prose, identity, raw request ID, provider message, token, or credential', () => {
+    expect(Object.isFrozen(M4_SUMMARY_GENERATE_AAB547_TIMEOUT_OBSERVATION)).toBe(true);
+    const serialized = JSON.stringify(M4_SUMMARY_GENERATE_AAB547_TIMEOUT_OBSERVATION);
+    expect(serialized).not.toMatch(/@|fullName|email|phone|address|employer|roleTitle|raw request|api[_-]?key|credential|bearer/iu);
+    expect(M4_SUMMARY_GENERATE_AAB547_TIMEOUT_OBSERVATION.m4ProviderFailure.providerRequestIdHash).toBeNull();
   });
 });

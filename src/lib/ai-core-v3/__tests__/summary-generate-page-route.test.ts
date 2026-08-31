@@ -6,12 +6,23 @@ import { translations, type Locale } from '../../i18n/translations';
 import type { CVData } from '../../types';
 import { SUMMARY_AI_DIAG_STORAGE_KEY } from '../../cv-summary-ai-diagnostics';
 import {
+  AI_CLIENT_TIMEOUT_MS,
+  AI_PLATFORM_MAX_DURATION_S,
+  AI_PROVIDER_CALL_TIMEOUT_MS,
+  callProviderWithDeadline,
+} from '../../ai-request-timing';
+import {
   SUMMARY_V3_EVALUATOR_TOOL_NAME,
   SUMMARY_V3_GENERATE_ACTION,
   SUMMARY_V3_WRITER_TOOL_NAME,
+  SUMMARY_V3_INITIAL_WRITER_TIMEOUT_MS,
+  SUMMARY_V3_POST_PROCESSING_HEADROOM_MS,
+  SUMMARY_V3_SERVER_BUDGET_MS,
+  computeSummaryV3ServerDeadline,
   captureSummaryV3GenerateOperationSnapshot,
   classifySummaryV3GenerateRouting,
   type SummaryV3GenerateAdapterInput,
+  type SummaryV3Manifest,
 } from '..';
 
 const m4Adapter = vi.hoisted(() => vi.fn());
@@ -39,6 +50,27 @@ function pageCv(summary = '', contentLocale: Locale = 'en'): CVData {
     education: [], skills: ['TypeScript'], certifications: [], languages: [{ name: 'English', level: 'fluent' }],
     templateId: 'modern-minimal', region: 'EU', createdAt: '', updatedAt: '',
   };
+}
+
+function validForcedWriterResponse(manifest: SummaryV3Manifest) {
+  return { stop_reason: 'tool_use', content: [{
+    type: 'tool_use',
+    name: SUMMARY_V3_WRITER_TOOL_NAME,
+    input: {
+      operationId: manifest.operationId,
+      snapshotHash: manifest.sourceSnapshotHash,
+      locale: manifest.targetLocale,
+      units: [
+        { slot: 'duration', entryId: null, factIds: [], text: 'I have professional experience.' },
+        ...manifest.selectedEntries.map((entry) => ({
+          slot: 'experience',
+          entryId: entry.entryId,
+          factIds: entry.facts.map((fact) => fact.factId),
+          text: `I work as ${entry.roleTitle} at ${entry.employer}.`,
+        })),
+      ],
+    },
+  }] };
 }
 
 function installMocks(): void {
@@ -180,10 +212,26 @@ async function disabledDirectRoute() {
   }
 }
 
-async function forcedToolDirectRoute(options: { malformedWriter?: boolean; transportFailure?: boolean } = {}) {
+async function forcedToolDirectRoute(options: {
+  malformedWriter?: boolean;
+  transportFailure?: boolean;
+  forceRepair?: boolean;
+  routeEntryElapsedMs?: number;
+  initialWriterDelayMs?: number;
+  initialEvaluatorDelayMs?: number;
+  onInitialWriterStarted?: () => void;
+  onInitialEvaluatorStarted?: () => void;
+} = {}) {
   const keys = ['AI_CORE_V3_ENABLED', 'NEXT_PUBLIC_AI_CORE_V3_ENABLED', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'] as const;
   const saved = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
-  const requests: Array<{ tools?: unknown[]; tool_choice?: unknown; system?: unknown }> = [];
+  const requests: Array<{
+    tools?: unknown[];
+    tool_choice?: unknown;
+    system?: unknown;
+    requestOptions?: { timeout?: number; maxRetries?: number; signal?: AbortSignal };
+  }> = [];
+  let writerCalls = 0;
+  let evaluatorCalls = 0;
   const checks = ['factRetention', 'entryOwnership', 'currentPriorSeparation', 'unsupportedClaimsAbsent',
     'roleEmployerStateAccurate', 'durationMeaningAndScope', 'optionalAuthorityRespected', 'targetLanguageAndScript',
     'firstPersonPerspective', 'currentRoleTense', 'priorRoleTense', 'grammarAndClarity',
@@ -192,33 +240,49 @@ async function forcedToolDirectRoute(options: { malformedWriter?: boolean; trans
     process.env.AI_CORE_V3_ENABLED = 'true'; process.env.NEXT_PUBLIC_AI_CORE_V3_ENABLED = 'true';
     process.env.ANTHROPIC_API_KEY = 'm4-route-key'; delete process.env.ANTHROPIC_AUTH_TOKEN;
     vi.resetModules();
-    const create = vi.fn(async (params: { tools?: unknown[]; tool_choice?: unknown; system?: unknown }) => {
-      requests.push(params);
+    const create = vi.fn(async (
+      params: { tools?: unknown[]; tool_choice?: unknown; system?: unknown },
+      requestOptions?: { timeout?: number; maxRetries?: number; signal?: AbortSignal },
+    ) => {
+      requests.push({ ...params, requestOptions });
       const choice = params.tool_choice as { name?: string } | undefined;
       if (choice?.name === SUMMARY_V3_WRITER_TOOL_NAME) {
+        writerCalls += 1;
+        if (writerCalls === 1) {
+          options.onInitialWriterStarted?.();
+          if (options.initialWriterDelayMs) {
+            await new Promise((resolve) => setTimeout(resolve, options.initialWriterDelayMs));
+          }
+        }
         if (options.transportFailure) {
           const error = new Error('raw route provider message') as Error & Record<string, unknown>;
           error.status = 429; error.requestID = 'raw-route-request-id'; error.error = { code: 'rate_limit_error' };
           throw error;
         }
         if (options.malformedWriter) return { stop_reason: 'tool_use', content: [] };
-        return { stop_reason: 'tool_use', content: [{ type: 'tool_use', name: SUMMARY_V3_WRITER_TOOL_NAME, input: {
-          operationId: manifest.operationId, snapshotHash: manifest.sourceSnapshotHash, locale: manifest.targetLocale,
-          units: [
-            { slot: 'duration', entryId: null, factIds: [], text: 'I have professional experience.' },
-            ...manifest.selectedEntries.map((entry) => ({ slot: 'experience', entryId: entry.entryId,
-              factIds: entry.facts.map((fact) => fact.factId), text: `I work as ${entry.roleTitle} at ${entry.employer}.` })),
-          ],
-        } }] };
+        return validForcedWriterResponse(manifest);
       }
+      evaluatorCalls += 1;
+      if (evaluatorCalls === 1) {
+        options.onInitialEvaluatorStarted?.();
+        if (options.initialEvaluatorDelayMs) {
+          await new Promise((resolve) => setTimeout(resolve, options.initialEvaluatorDelayMs));
+        }
+      }
+      const rejected = options.forceRepair === true && evaluatorCalls === 1;
       return { stop_reason: 'tool_use', content: [{ type: 'tool_use', name: SUMMARY_V3_EVALUATOR_TOOL_NAME, input: {
         operationId: manifest.operationId, snapshotHash: manifest.sourceSnapshotHash, locale: manifest.targetLocale,
-        phases: { semantic: { status: 'passed', violations: [] }, language_quality: { status: 'passed', violations: [] } },
-        checks: Object.fromEntries(checks.map((check) => [check, true])),
+        phases: { semantic: rejected
+          ? { status: 'failed', violations: [{ code: 'repair_required', category: 'semantic', detail: 'bounded repair evidence' }] }
+          : { status: 'passed', violations: [] }, language_quality: { status: 'passed', violations: [] } },
+        checks: Object.fromEntries(checks.map((check) => [check, !rejected])),
       } }] };
     });
     vi.doMock('@anthropic-ai/sdk', () => { class MockAnthropic { readonly messages = { create }; } return { default: MockAnthropic }; });
-    vi.doMock('@/lib/pro-token', () => ({ verifyProToken: vi.fn(async () => ({ subject: 'm4' })) }));
+    vi.doMock('@/lib/pro-token', () => ({ verifyProToken: vi.fn(async () => {
+      if (options.routeEntryElapsedMs) vi.setSystemTime(Date.now() + options.routeEntryElapsedMs);
+      return { subject: 'm4' };
+    }) }));
     const core = await import('..'); core.resetAiCoreV3TestOverride();
     const manifest = core.captureSummaryV3GenerateOperationSnapshot({
       enabled: true, operationKind: 'summary_generate', operationId: 'route-m4', requestId: 'route-m4', cv: pageCv(),
@@ -343,5 +407,123 @@ describe('M4 actual page routing and direct server gate', () => {
     expect(JSON.stringify(run.body)).not.toContain('raw route provider message');
     expect(JSON.stringify(run.body)).not.toContain('raw-route-request-id');
     expect(run.requests).toHaveLength(1);
+  });
+});
+
+describe('M4 initial-writer timeout budget closure', () => {
+  it('proves the approved authorities and complete deadline ordering arithmetically', () => {
+    expect(SUMMARY_V3_INITIAL_WRITER_TIMEOUT_MS).toBe(11_500);
+    expect(SUMMARY_V3_SERVER_BUDGET_MS).toBe(27_000);
+    expect(SUMMARY_V3_POST_PROCESSING_HEADROOM_MS).toBe(3_000);
+    expect(computeSummaryV3ServerDeadline(1_000)).toBe(28_000);
+    expect(SUMMARY_V3_INITIAL_WRITER_TIMEOUT_MS + AI_PROVIDER_CALL_TIMEOUT_MS
+      + SUMMARY_V3_POST_PROCESSING_HEADROOM_MS).toBeLessThanOrEqual(SUMMARY_V3_SERVER_BUDGET_MS);
+    expect(SUMMARY_V3_SERVER_BUDGET_MS).toBeLessThan(AI_PLATFORM_MAX_DURATION_S * 1_000);
+    expect(AI_PLATFORM_MAX_DURATION_S * 1_000).toBeLessThan(AI_CLIENT_TIMEOUT_MS);
+  });
+
+  it('keeps the historical 8000ms seam timed out for the identical valid forced-tool response at 8001ms', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      const manifest = captureSummaryV3GenerateOperationSnapshot({
+        enabled: true, operationKind: 'summary_generate', operationId: 'historical-m4', requestId: 'historical-m4',
+        cv: pageCv(), requestedLocale: 'en', uiLocale: 'en', storedContentLocale: 'en', exactVisibleSummary: '',
+        referenceDateIso: '2026-08-28', jobContextHash: 'route-context', usageCountBefore: 0,
+      }).manifest;
+      const create = vi.fn(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 8_001));
+        return validForcedWriterResponse(manifest);
+      });
+      const pending = callProviderWithDeadline(create, null, AI_PROVIDER_CALL_TIMEOUT_MS, 'provider');
+      const rejected = expect(pending).rejects.toMatchObject({
+        deadlineOwner: 'provider_transport', configuredTimeoutMs: 8_000, effectiveTimeoutMs: 8_000,
+      });
+      await vi.advanceTimersByTimeAsync(8_001);
+      await rejected;
+      expect(create).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('lets the actual production initial-writer seam accept the valid forced tool at 8001ms', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      let started!: () => void;
+      const writerStarted = new Promise<void>((resolve) => { started = resolve; });
+      const pending = forcedToolDirectRoute({ initialWriterDelayMs: 8_001, onInitialWriterStarted: started });
+      await writerStarted;
+      await vi.advanceTimersByTimeAsync(8_001);
+      const run = await pending;
+      expect(run.response.status).toBe(200);
+      expect(run.requests).toHaveLength(2);
+      expect(run.requests[0].requestOptions).toMatchObject({ timeout: 11_500, maxRetries: 0 });
+      expect(run.requests[1].requestOptions).toMatchObject({ timeout: 8_000, maxRetries: 0 });
+      expect(run.body.providerOutput).toBeDefined();
+      expect(run.body.candidate).toBeDefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('still fails closed beyond 11500ms before evaluator, candidate, or provider status exists', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      let started!: () => void;
+      const writerStarted = new Promise<void>((resolve) => { started = resolve; });
+      const pending = forcedToolDirectRoute({ initialWriterDelayMs: 11_501, onInitialWriterStarted: started });
+      await writerStarted;
+      await vi.advanceTimersByTimeAsync(11_501);
+      const run = await pending;
+      expect(run.response.status).toBe(502);
+      expect(run.requests).toHaveLength(1);
+      expect(run.requests[0].requestOptions).toMatchObject({ timeout: 11_500, maxRetries: 0 });
+      expect(run.body).toMatchObject({ ok: false, typedReason: 'provider_request_failed',
+        m4ProviderFailure: { phase: 'initial_writer', failureStage: 'sdk_request',
+          providerErrorType: 'timeout', providerRetryable: false, providerHttpStatus: null } });
+      expect(run.body.candidate).toBeUndefined();
+      expect(run.body.repairAttempted).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps evaluator and repair phases on their unchanged 8000ms authorities', async () => {
+    const run = await forcedToolDirectRoute({ forceRepair: true });
+    expect(run.response.status).toBe(200);
+    expect(run.requests).toHaveLength(4);
+    expect(run.requests.map((request) => request.requestOptions?.timeout)).toEqual([11_500, 8_000, 8_000, 8_000]);
+    expect(run.requests.every((request) => request.requestOptions?.maxRetries === 0)).toBe(true);
+  });
+
+  it('uses the M4-specific 27000ms outer budget from route entry', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      let writerStartedResolve!: () => void;
+      let evaluatorStartedResolve!: () => void;
+      const writerStarted = new Promise<void>((resolve) => { writerStartedResolve = resolve; });
+      const evaluatorStarted = new Promise<void>((resolve) => { evaluatorStartedResolve = resolve; });
+      const pending = forcedToolDirectRoute({
+        routeEntryElapsedMs: 6_000,
+        initialWriterDelayMs: 8_001,
+        initialEvaluatorDelayMs: 7_999,
+        onInitialWriterStarted: writerStartedResolve,
+        onInitialEvaluatorStarted: evaluatorStartedResolve,
+      });
+      await writerStarted;
+      await vi.advanceTimersByTimeAsync(8_001);
+      await evaluatorStarted;
+      await vi.advanceTimersByTimeAsync(7_999);
+      const run = await pending;
+      expect(run.response.status).toBe(200);
+      expect(Date.now()).toBe(22_000);
+      expect(run.requests.map((request) => request.requestOptions?.timeout)).toEqual([11_500, 8_000]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

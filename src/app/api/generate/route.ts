@@ -101,8 +101,10 @@ import type {
   ExperienceV3EnhanceEvaluatorResponse,
   ExperienceV3EnhanceWriterResponse,
 } from '@/lib/ai-core-v3/experience-enhance-server';
-import type {
-  SummaryV3WriterResponse,
+import {
+  SUMMARY_V3_INITIAL_WRITER_TIMEOUT_MS,
+  computeSummaryV3ServerDeadline,
+  type SummaryV3WriterResponse,
 } from '@/lib/ai-core-v3/summary-generate-server';
 import type { SummaryV3ProviderPhase } from '@/lib/ai-core-v3/summary-generate';
 
@@ -2050,6 +2052,8 @@ Rules:
     }
 
     if (action === SUMMARY_V3_GENERATE_ACTION) {
+      // M4 starts at route entry and remains below both maxDuration and the client abort.
+      deadlineAt = computeSummaryV3ServerDeadline(serverReceivedAt);
       const v3Enabled = isAiCoreV3Enabled({
         AI_CORE_V3_ENABLED:
           process.env.AI_CORE_V3_ENABLED ?? process.env.NEXT_PUBLIC_AI_CORE_V3_ENABLED,
@@ -2079,7 +2083,10 @@ Rules:
           }
           let response: Anthropic.Messages.Message;
           try {
-            response = await callWithRetry(request, deadlineAt, undefined, AI_PROVIDER_CALL_TIMEOUT_MS, 'provider', undefined, false);
+            const timeoutMs = phase === 'initial_writer'
+              ? SUMMARY_V3_INITIAL_WRITER_TIMEOUT_MS
+              : AI_PROVIDER_CALL_TIMEOUT_MS;
+            response = await callWithRetry(request, deadlineAt, undefined, timeoutMs, 'provider', undefined, false);
           } catch (error) {
             throw createSummaryV3ProviderTransportError(error, phase, 'sdk_request');
           }
