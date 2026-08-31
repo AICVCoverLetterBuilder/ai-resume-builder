@@ -82,7 +82,11 @@ import {
   EXPERIENCE_V3_ENHANCE_WRITER_TOOL,
   EXPERIENCE_V3_ENHANCE_WRITER_TOOL_NAME,
   EXPERIENCE_V3_GENERATE_ACTION,
+  SUMMARY_V3_EVALUATOR_TOOL,
+  SUMMARY_V3_EVALUATOR_TOOL_NAME,
   SUMMARY_V3_GENERATE_ACTION,
+  SUMMARY_V3_WRITER_TOOL,
+  SUMMARY_V3_WRITER_TOOL_NAME,
   executeExperienceV3EnhanceServer,
   executeExperienceV3GenerateServer,
   executeSummaryV3GenerateServer,
@@ -96,6 +100,9 @@ import type {
   ExperienceV3EnhanceEvaluatorResponse,
   ExperienceV3EnhanceWriterResponse,
 } from '@/lib/ai-core-v3/experience-enhance-server';
+import type {
+  SummaryV3WriterResponse,
+} from '@/lib/ai-core-v3/summary-generate-server';
 
 /**
  * Explicit Vercel serverless function execution budget (seconds).
@@ -556,6 +563,15 @@ function getForcedToolResponse(response: Anthropic.Messages.Message): Experience
 }
 
 function getForcedEvaluatorResponse(response: Anthropic.Messages.Message): ExperienceV3EnhanceEvaluatorResponse {
+  return {
+    stopReason: response.stop_reason,
+    content: response.content.map((block) => block.type === 'tool_use'
+      ? { type: 'tool_use' as const, name: block.name, input: block.input }
+      : { type: block.type }),
+  };
+}
+
+function getForcedSummaryResponse(response: Anthropic.Messages.Message): SummaryV3WriterResponse {
   return {
     stopReason: response.stop_reason,
     content: response.content.map((block) => block.type === 'tool_use'
@@ -2044,26 +2060,30 @@ Rules:
         }, { status: 409 });
       }
       const result = await executeSummaryV3GenerateServer(params, {
-        write: async (prompt) => getText(await callWithRetry({
+        write: async (prompt) => getForcedSummaryResponse(await callWithRetry({
           model: MODEL,
           max_tokens: 1800,
           temperature: 0,
-          system: 'You are the AI Core V3 Summary prose writer. Follow the strict JSON contract exactly.',
+          system: `You are the single AI Core V3 Summary writer. Invoke only the ${SUMMARY_V3_WRITER_TOOL_NAME} tool and preserve every required identity and fact.`,
+          tools: [SUMMARY_V3_WRITER_TOOL],
+          tool_choice: { type: 'tool', name: SUMMARY_V3_WRITER_TOOL_NAME, disable_parallel_tool_use: true },
           messages: [{ role: 'user', content: prompt }],
         }, deadlineAt, undefined, AI_PROVIDER_CALL_TIMEOUT_MS, 'provider', undefined, false)),
-        evaluate: async (prompt) => getText(await callWithRetry({
+        evaluate: async (prompt) => getForcedSummaryResponse(await callWithRetry({
           model: MODEL,
           max_tokens: 1400,
           temperature: 0,
-          system: 'You are the independent non-writing AI Core V3 Summary evaluator. Return structured violations only.',
+          system: `You are the independent non-writing AI Core V3 Summary evaluator. Invoke only the ${SUMMARY_V3_EVALUATOR_TOOL_NAME} tool and return structured evidence only.`,
+          tools: [SUMMARY_V3_EVALUATOR_TOOL],
+          tool_choice: { type: 'tool', name: SUMMARY_V3_EVALUATOR_TOOL_NAME, disable_parallel_tool_use: true },
           messages: [{ role: 'user', content: prompt }],
         }, deadlineAt, undefined, AI_PROVIDER_CALL_TIMEOUT_MS, 'verifier', undefined, false)),
       });
       const status = result.ok
         ? 200
-        : result.typedReason === 'invalid_request_contract'
-          ? 400
-          : /provider|evaluator|validator/u.test(result.typedReason)
+          : result.typedReason === 'invalid_request_contract'
+            ? 400
+            : /provider|evaluator|validator|^writer_/u.test(result.typedReason)
             ? 502
             : 422;
       return jsonResponse(result, { status });

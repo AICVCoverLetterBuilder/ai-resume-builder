@@ -1,14 +1,17 @@
 import { createCandidateEnvelope } from './candidate-envelope';
+import type Anthropic from '@anthropic-ai/sdk';
 import type { AiCoreV3CandidateEnvelope } from './contracts';
 import { immutableCopy } from './immutability';
 import { INTERNAL_AI_RESET_ENABLED } from '../build-channel';
 import {
   SUMMARY_V3_GENERATE_ACTION,
   hashSummaryV3Value,
+  type SummaryV3DiagnosticAttempt,
   type SummaryV3GenerateResponse,
   type SummaryV3Manifest,
   type SummaryV3WriterOutput,
   type SummaryV3WriterUnit,
+  type SummaryV3TransportEvidence,
 } from './summary-generate';
 import {
   runAiCoreV3Validation,
@@ -19,9 +22,12 @@ import {
 } from './validators';
 
 export interface SummaryV3GenerateTransportSet {
-  readonly write: (prompt: string) => Promise<string>;
-  readonly evaluate: (prompt: string) => Promise<string>;
+  readonly write: (prompt: string) => Promise<SummaryV3WriterResponse>;
+  readonly evaluate: (prompt: string) => Promise<SummaryV3EvaluatorResponse>;
 }
+
+export const SUMMARY_V3_WRITER_TOOL_NAME = 'submit_summary_generation' as const;
+export const SUMMARY_V3_EVALUATOR_TOOL_NAME = 'submit_summary_validation' as const;
 
 type EvaluatedCategory = 'semantic' | 'language_quality';
 
@@ -44,6 +50,104 @@ const SUMMARY_EVALUATOR_CHECKS = [
 ] as const;
 type SummaryEvaluatorCheck = (typeof SUMMARY_EVALUATOR_CHECKS)[number];
 
+function evaluatorPhaseSchema(category: EvaluatedCategory) {
+  return {
+    type: 'object',
+    additionalProperties: false,
+    required: ['status', 'violations'],
+    properties: {
+      status: { type: 'string', enum: ['passed', 'failed'] },
+      violations: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['code', 'category', 'detail'],
+          properties: {
+            code: { type: 'string' },
+            category: { type: 'string', const: category },
+            detail: { type: 'string' },
+            factIds: { type: 'array', items: { type: 'string' } },
+            entryIds: { type: 'array', items: { type: 'string' } },
+          },
+        },
+      },
+    },
+  } as const;
+}
+
+export const SUMMARY_V3_WRITER_TOOL: Anthropic.Tool = {
+  name: SUMMARY_V3_WRITER_TOOL_NAME,
+  description: 'Submit only the fact-locked Summary units. This tool cannot authorize validation, apply, persistence, usage, retries, or repair.',
+  strict: true,
+  input_schema: {
+    type: 'object' as const,
+    additionalProperties: false,
+    required: ['operationId', 'snapshotHash', 'locale', 'units'],
+    properties: {
+      operationId: { type: 'string' },
+      snapshotHash: { type: 'string' },
+      locale: { type: 'string' },
+      units: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['slot', 'entryId', 'factIds', 'text'],
+          properties: {
+            slot: { type: 'string', enum: ['duration', 'experience'] },
+            entryId: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+            factIds: { type: 'array', items: { type: 'string' } },
+            text: { type: 'string' },
+          },
+        },
+      },
+    },
+  },
+};
+
+export const SUMMARY_V3_EVALUATOR_TOOL: Anthropic.Tool = {
+  name: SUMMARY_V3_EVALUATOR_TOOL_NAME,
+  description: 'Submit only independent Summary validation evidence. This tool cannot rewrite or authorize apply, persistence, usage, retries, or repair.',
+  strict: true,
+  input_schema: {
+    type: 'object' as const,
+    additionalProperties: false,
+    required: ['operationId', 'snapshotHash', 'locale', 'phases', 'checks'],
+    properties: {
+      operationId: { type: 'string' },
+      snapshotHash: { type: 'string' },
+      locale: { type: 'string' },
+      phases: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['semantic', 'language_quality'],
+        properties: {
+          semantic: evaluatorPhaseSchema('semantic'),
+          language_quality: evaluatorPhaseSchema('language_quality'),
+        },
+      },
+      checks: {
+        type: 'object',
+        additionalProperties: false,
+        required: [...SUMMARY_EVALUATOR_CHECKS],
+        properties: Object.fromEntries(SUMMARY_EVALUATOR_CHECKS.map((check) => [check, { type: 'boolean' }])),
+      },
+    },
+  },
+};
+
+export type SummaryV3ContentBlock =
+  | { readonly type: 'tool_use'; readonly name: string; readonly input: unknown }
+  | { readonly type: string; readonly text?: string };
+
+export interface SummaryV3WriterResponse {
+  readonly stopReason: string | null;
+  readonly content: readonly SummaryV3ContentBlock[];
+}
+
+export type SummaryV3EvaluatorResponse = SummaryV3WriterResponse;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
@@ -59,6 +163,7 @@ function failure(
   validation?: AggregateValidationResult,
   repairAttempted?: boolean,
   rejectedCandidate?: AiCoreV3CandidateEnvelope,
+  transportEvidence?: SummaryV3TransportEvidence,
 ): SummaryV3GenerateResponse {
   return immutableCopy({
     ok: false as const,
@@ -67,17 +172,8 @@ function failure(
     ...(validation ? { validation } : {}),
     ...(repairAttempted !== undefined ? { repairAttempted } : {}),
     ...(INTERNAL_AI_RESET_ENABLED && rejectedCandidate ? { rejectedCandidate } : {}),
+    ...(transportEvidence ? { transportEvidence } : {}),
   }) as SummaryV3GenerateResponse;
-}
-
-function parseStrictJson(raw: string): unknown {
-  const text = String(raw || '').trim();
-  if (!text || text.startsWith('```') || text.endsWith('```')) return null;
-  try {
-    return JSON.parse(text) as unknown;
-  } catch {
-    return null;
-  }
 }
 
 function parseDate(value: unknown): { readonly year: number; readonly month?: number; readonly day?: number } | null {
@@ -177,8 +273,7 @@ function safeUnitText(text: string): boolean {
   return Boolean(trimmed) && !/```|^#{1,6}\s|^(?:[-*•▪◦‣⁃]|\d+[.)])\s|^(?:summary|output|explanation|here(?:'s| is))\b/imu.test(trimmed);
 }
 
-export function parseSummaryV3WriterOutput(raw: string, manifest: SummaryV3Manifest): SummaryV3WriterOutput | null {
-  const value = parseStrictJson(raw);
+function parseSummaryV3WriterObject(value: unknown, manifest: SummaryV3Manifest): SummaryV3WriterOutput | null {
   if (!isRecord(value) || !exactKeys(value, ['operationId', 'snapshotHash', 'locale', 'units'])
     || value.operationId !== manifest.operationId || value.snapshotHash !== manifest.sourceSnapshotHash
     || value.locale !== manifest.targetLocale || !Array.isArray(value.units)
@@ -208,6 +303,126 @@ export function parseSummaryV3WriterOutput(raw: string, manifest: SummaryV3Manif
   if (new Set(all).size !== all.length) return null;
   return immutableCopy({ operationId: manifest.operationId, snapshotHash: manifest.sourceSnapshotHash,
     locale: manifest.targetLocale, units: typed }) as SummaryV3WriterOutput;
+}
+
+export function parseSummaryV3WriterOutput(value: unknown, manifest: SummaryV3Manifest): SummaryV3WriterOutput | null {
+  return parseSummaryV3WriterObject(value, manifest);
+}
+
+function emptyTransportAttempt(attempted: boolean, result: SummaryV3DiagnosticAttempt['result']): SummaryV3DiagnosticAttempt {
+  return {
+    attempted, result, stopReason: null,
+    contentBlockCount: null, textBlockCount: null, toolBlockCount: null,
+    expectedToolCount: null, toolNameMatched: null, toolInputObject: null,
+    toolInputSchemaPassed: null, identityPassed: null,
+  };
+}
+
+function responseTransportAttempt(
+  response: SummaryV3WriterResponse | SummaryV3EvaluatorResponse | null | undefined,
+  expectedToolName: string,
+  result: SummaryV3DiagnosticAttempt['result'],
+): SummaryV3DiagnosticAttempt {
+  if (!response || typeof response !== 'object' || !Array.isArray(response.content)) {
+    return emptyTransportAttempt(true, result);
+  }
+  const tools = response.content.filter((block): block is Extract<SummaryV3ContentBlock, { type: 'tool_use' }> => (
+    block.type === 'tool_use'
+  ));
+  const expected = tools.length === 1 ? tools[0] : null;
+  return {
+    attempted: true,
+    result,
+    stopReason: typeof response.stopReason === 'string' && /^[a-z][a-z0-9_-]{0,63}$/u.test(response.stopReason)
+      ? response.stopReason : null,
+    contentBlockCount: response.content.length,
+    textBlockCount: response.content.filter((block) => block.type === 'text').length,
+    toolBlockCount: tools.length,
+    expectedToolCount: 1,
+    toolNameMatched: expected ? expected.name === expectedToolName : null,
+    toolInputObject: expected ? isRecord(expected.input) : null,
+    toolInputSchemaPassed: null,
+    identityPassed: null,
+  };
+}
+
+function updateTransportAttempt(
+  response: SummaryV3WriterResponse | SummaryV3EvaluatorResponse,
+  expectedToolName: string,
+  result: SummaryV3DiagnosticAttempt['result'],
+  schemaPassed: boolean | null,
+  identityPassed: boolean | null,
+): SummaryV3DiagnosticAttempt {
+  return {
+    ...responseTransportAttempt(response, expectedToolName, result),
+    toolInputSchemaPassed: schemaPassed,
+    identityPassed,
+  };
+}
+
+function unavailableTransportEvidence(): SummaryV3TransportEvidence {
+  return { writer: emptyTransportAttempt(false, 'not_attempted'), evaluator: emptyTransportAttempt(false, 'not_attempted') };
+}
+
+function failedTransportEvidence(
+  evidence: SummaryV3TransportEvidence,
+  phase: 'writer' | 'evaluator',
+): SummaryV3TransportEvidence {
+  return { ...evidence, [phase]: emptyTransportAttempt(true, 'failed') } as SummaryV3TransportEvidence;
+}
+
+export type SummaryV3WriterToolParseResult =
+  | { readonly ok: true; readonly value: SummaryV3WriterOutput; readonly diagnosticMetadata: SummaryV3DiagnosticAttempt }
+  | { readonly ok: false; readonly typedReason: string; readonly diagnosticMetadata: SummaryV3DiagnosticAttempt };
+
+export function parseSummaryV3WriterToolResponse(
+  response: SummaryV3WriterResponse,
+  manifest: SummaryV3Manifest,
+): SummaryV3WriterToolParseResult {
+  const base = responseTransportAttempt(response, SUMMARY_V3_WRITER_TOOL_NAME, 'unknown');
+  if (!response || typeof response !== 'object' || !Array.isArray(response.content)) {
+    return { ok: false, typedReason: 'provider_output_malformed', diagnosticMetadata: { ...base, result: 'malformed' } };
+  }
+  if (response.stopReason === 'max_tokens') {
+    return { ok: false, typedReason: 'writer_max_tokens', diagnosticMetadata: { ...base, result: 'malformed' } };
+  }
+  if (response.stopReason !== 'tool_use') {
+    return { ok: false, typedReason: 'provider_output_malformed', diagnosticMetadata: { ...base, result: 'malformed' } };
+  }
+  const unexpected = response.content.find((block) => block.type !== 'tool_use');
+  if (unexpected?.type === 'text') {
+    return { ok: false, typedReason: 'writer_unexpected_text_block', diagnosticMetadata: { ...base, result: 'malformed' } };
+  }
+  if (unexpected) {
+    return { ok: false, typedReason: 'provider_output_malformed', diagnosticMetadata: { ...base, result: 'malformed' } };
+  }
+  const tools = response.content.filter((block): block is Extract<SummaryV3ContentBlock, { type: 'tool_use' }> => (
+    block.type === 'tool_use'
+  ));
+  if (tools.length === 0) return { ok: false, typedReason: 'writer_tool_missing', diagnosticMetadata: { ...base, result: 'malformed' } };
+  if (tools.length !== 1) return { ok: false, typedReason: 'writer_multiple_tools', diagnosticMetadata: { ...base, result: 'malformed' } };
+  const [tool] = tools;
+  if (tool.name !== SUMMARY_V3_WRITER_TOOL_NAME) {
+    return { ok: false, typedReason: 'writer_wrong_tool', diagnosticMetadata: { ...base, result: 'malformed' } };
+  }
+  const inputMetadata = { ...base, toolInputObject: isRecord(tool.input) };
+  if (!isRecord(tool.input)) {
+    return { ok: false, typedReason: 'writer_tool_input_malformed', diagnosticMetadata: { ...inputMetadata, result: 'malformed', toolInputSchemaPassed: false } };
+  }
+  if (!exactKeys(tool.input, ['operationId', 'snapshotHash', 'locale', 'units'])) {
+    return { ok: false, typedReason: 'writer_tool_input_malformed', diagnosticMetadata: { ...inputMetadata, result: 'malformed', toolInputSchemaPassed: false } };
+  }
+  if (tool.input.operationId !== manifest.operationId || tool.input.snapshotHash !== manifest.sourceSnapshotHash
+    || tool.input.locale !== manifest.targetLocale) {
+    return { ok: false, typedReason: 'writer_identity_mismatch', diagnosticMetadata: {
+      ...inputMetadata, result: 'malformed', toolInputSchemaPassed: true, identityPassed: false,
+    } };
+  }
+  const value = parseSummaryV3WriterObject(tool.input, manifest);
+  if (!value) {
+    return { ok: false, typedReason: 'writer_tool_input_malformed', diagnosticMetadata: { ...inputMetadata, result: 'malformed', toolInputSchemaPassed: false, identityPassed: true } };
+  }
+  return { ok: true, value, diagnosticMetadata: updateTransportAttempt(response, SUMMARY_V3_WRITER_TOOL_NAME, 'succeeded', true, true) };
 }
 
 function candidateFromOutput(manifest: SummaryV3Manifest, output: SummaryV3WriterOutput): AiCoreV3CandidateEnvelope {
@@ -250,8 +465,7 @@ function parseViolation(value: unknown, category: EvaluatedCategory): AiCoreV3Vi
     ...(value.entryIds !== undefined ? { entryIds: value.entryIds as string[] } : {}) }) as AiCoreV3Violation;
 }
 
-export function parseSummaryV3EvaluatorOutput(raw: string, manifest: SummaryV3Manifest): EvaluatorPayload | null {
-  const value = parseStrictJson(raw);
+function parseSummaryV3EvaluatorObject(value: unknown, manifest: SummaryV3Manifest): EvaluatorPayload | null {
   if (!isRecord(value) || !exactKeys(value, ['operationId', 'snapshotHash', 'locale', 'phases', 'checks'])
     || value.operationId !== manifest.operationId || value.snapshotHash !== manifest.sourceSnapshotHash
     || value.locale !== manifest.targetLocale || !isRecord(value.phases) || !isRecord(value.checks)
@@ -277,6 +491,66 @@ export function parseSummaryV3EvaluatorOutput(raw: string, manifest: SummaryV3Ma
     checks }) as unknown as EvaluatorPayload;
 }
 
+export function parseSummaryV3EvaluatorOutput(value: unknown, manifest: SummaryV3Manifest): EvaluatorPayload | null {
+  return parseSummaryV3EvaluatorObject(value, manifest);
+}
+
+export type SummaryV3EvaluatorToolParseResult =
+  | { readonly ok: true; readonly value: EvaluatorPayload; readonly diagnosticMetadata: SummaryV3DiagnosticAttempt }
+  | { readonly ok: false; readonly typedReason: string; readonly diagnosticMetadata: SummaryV3DiagnosticAttempt };
+
+export function parseSummaryV3EvaluatorToolResponse(
+  response: SummaryV3EvaluatorResponse,
+  manifest: SummaryV3Manifest,
+): SummaryV3EvaluatorToolParseResult {
+  const base = responseTransportAttempt(response, SUMMARY_V3_EVALUATOR_TOOL_NAME, 'unknown');
+  if (!response || typeof response !== 'object' || !Array.isArray(response.content)) {
+    return { ok: false, typedReason: 'evaluator_output_malformed', diagnosticMetadata: { ...base, result: 'malformed' } };
+  }
+  if (response.stopReason === 'max_tokens') {
+    return { ok: false, typedReason: 'evaluator_max_tokens', diagnosticMetadata: { ...base, result: 'malformed' } };
+  }
+  if (response.stopReason !== 'tool_use') {
+    return { ok: false, typedReason: 'evaluator_output_malformed', diagnosticMetadata: { ...base, result: 'malformed' } };
+  }
+  const unexpected = response.content.find((block) => block.type !== 'tool_use');
+  if (unexpected?.type === 'text') {
+    return { ok: false, typedReason: 'evaluator_unexpected_text_block', diagnosticMetadata: { ...base, result: 'malformed' } };
+  }
+  if (unexpected) {
+    return { ok: false, typedReason: 'evaluator_output_malformed', diagnosticMetadata: { ...base, result: 'malformed' } };
+  }
+  const tools = response.content.filter((block): block is Extract<SummaryV3ContentBlock, { type: 'tool_use' }> => (
+    block.type === 'tool_use'
+  ));
+  if (tools.length === 0) return { ok: false, typedReason: 'evaluator_tool_missing', diagnosticMetadata: { ...base, result: 'malformed' } };
+  if (tools.length !== 1) return { ok: false, typedReason: 'evaluator_multiple_tools', diagnosticMetadata: { ...base, result: 'malformed' } };
+  const [tool] = tools;
+  if (tool.name !== SUMMARY_V3_EVALUATOR_TOOL_NAME) {
+    return { ok: false, typedReason: 'evaluator_wrong_tool', diagnosticMetadata: { ...base, result: 'malformed' } };
+  }
+  const inputMetadata = { ...base, toolInputObject: isRecord(tool.input) };
+  if (!isRecord(tool.input)) {
+    return { ok: false, typedReason: 'evaluator_tool_input_malformed', diagnosticMetadata: { ...inputMetadata, result: 'malformed', toolInputSchemaPassed: false } };
+  }
+  if (!exactKeys(tool.input, ['operationId', 'snapshotHash', 'locale', 'phases', 'checks'])) {
+    return { ok: false, typedReason: 'evaluator_tool_input_malformed', diagnosticMetadata: { ...inputMetadata, result: 'malformed', toolInputSchemaPassed: false } };
+  }
+  if (tool.input.operationId !== manifest.operationId || tool.input.snapshotHash !== manifest.sourceSnapshotHash
+    || tool.input.locale !== manifest.targetLocale) {
+    return { ok: false, typedReason: 'evaluator_identity_mismatch', diagnosticMetadata: {
+      ...inputMetadata, result: 'malformed', toolInputSchemaPassed: true, identityPassed: false,
+    } };
+  }
+  const value = parseSummaryV3EvaluatorObject(tool.input, manifest);
+  if (!value) {
+    return { ok: false, typedReason: 'evaluator_tool_input_malformed', diagnosticMetadata: {
+      ...inputMetadata, result: 'malformed', toolInputSchemaPassed: false, identityPassed: true,
+    } };
+  }
+  return { ok: true, value, diagnosticMetadata: updateTransportAttempt(response, SUMMARY_V3_EVALUATOR_TOOL_NAME, 'succeeded', true, true) };
+}
+
 function aggregate(manifest: SummaryV3Manifest, candidate: AiCoreV3CandidateEnvelope,
   structural: ValidationPhaseResult, evaluator: EvaluatorPayload): AggregateValidationResult {
   return runAiCoreV3Validation({ manifest, candidate }, {
@@ -289,7 +563,8 @@ function aggregate(manifest: SummaryV3Manifest, candidate: AiCoreV3CandidateEnve
 export function buildSummaryV3WriterPrompt(manifest: SummaryV3Manifest): string {
   return [
     'Write one grounded professional first-person CV Summary in the requested locale and script.',
-    'Return strict JSON only with exactly operationId, snapshotHash, locale, and units.',
+    `Invoke only the ${SUMMARY_V3_WRITER_TOOL_NAME} tool. Do not emit text, Markdown, code fences, commentary, explanations, headings, or reasoning.`,
+    'The tool input has exactly operationId, snapshotHash, locale, and units.',
     'Return exactly one duration unit followed by one experience unit per selected entry in manifest order.',
     'Each unit has exactly slot, entryId, factIds, and text. Preserve owning entry and every factId exactly once.',
     'Use exactly one total-career duration representation. Keep current and prior roles separate and use correct current/past state.',
@@ -304,7 +579,8 @@ export function buildSummaryV3EvaluatorPrompt(manifest: SummaryV3Manifest, candi
     'Act only as an independent non-writing evaluator. Never rewrite, repair, suggest prose, or return authority.',
     'Evaluate entry/fact retention and ownership, current/prior separation, role/employer/state accuracy, unsupported claims, and duration meaning/scope.',
     'Evaluate target language/script, first-person perspective, current/past tense, grammar, clarity, duplication, degradation, and complete usability.',
-    'Return strict JSON only with operationId, snapshotHash, locale, phases, and checks.',
+    `Invoke only the ${SUMMARY_V3_EVALUATOR_TOOL_NAME} tool. Do not emit text, Markdown, code fences, commentary, explanations, headings, or reasoning.`,
+    'The tool input has exactly operationId, snapshotHash, locale, phases, and checks.',
     'phases has exactly semantic and language_quality. Each has status passed or failed and violations only.',
     `checks has exactly these boolean evidence fields: ${SUMMARY_EVALUATOR_CHECKS.join(', ')}. All must be true only when both phases pass.`,
     'Do not return candidate text, units, replacement prose, apply, persistence, usage, or acceptance authority.',
@@ -316,26 +592,32 @@ export function buildSummaryV3RepairPrompt(manifest: SummaryV3Manifest, candidat
   violations: readonly AiCoreV3Violation[]): string {
   return [
     'Repair the candidate once using only the unchanged manifest and finite violations. Add no facts.',
-    'Return the identical strict writer schema and identities. No commentary, diagnostics, authority, or fallback prose.',
+    `Invoke only the ${SUMMARY_V3_WRITER_TOOL_NAME} tool with the identical strict writer schema and identities. Do not emit text, Markdown, code fences, commentary, diagnostics, authority, or fallback prose.`,
     JSON.stringify({ operationId: manifest.operationId, snapshotHash: manifest.sourceSnapshotHash,
       locale: manifest.targetLocale, manifest, candidate, violations }),
   ].join('\n');
 }
 
+type EvaluateCandidateResult =
+  | { readonly ok: true; readonly candidate: AiCoreV3CandidateEnvelope; readonly validation: AggregateValidationResult; readonly evaluatorMetadata: SummaryV3DiagnosticAttempt }
+  | { readonly ok: false; readonly typedReason: string; readonly evaluatorMetadata: SummaryV3DiagnosticAttempt };
+
 async function evaluateCandidate(manifest: SummaryV3Manifest, output: SummaryV3WriterOutput,
-  transports: SummaryV3GenerateTransportSet): Promise<{ candidate: AiCoreV3CandidateEnvelope; validation: AggregateValidationResult } | string> {
+  transports: SummaryV3GenerateTransportSet): Promise<EvaluateCandidateResult> {
   const candidate = candidateFromOutput(manifest, output);
   const structural = structuralPhase(manifest, candidate, output);
-  if (structural.status !== 'passed') return 'structural_validation_failed';
-  let raw: string;
-  try {
-    raw = await transports.evaluate(buildSummaryV3EvaluatorPrompt(manifest, candidate));
-  } catch {
-    return 'validator_exception';
+  if (structural.status !== 'passed') {
+    return { ok: false, typedReason: 'structural_validation_failed', evaluatorMetadata: emptyTransportAttempt(false, 'not_attempted') };
   }
-  const evaluator = parseSummaryV3EvaluatorOutput(raw, manifest);
-  if (!evaluator) return 'evaluator_output_malformed';
-  return { candidate, validation: aggregate(manifest, candidate, structural, evaluator) };
+  let response: SummaryV3EvaluatorResponse;
+  try {
+    response = await transports.evaluate(buildSummaryV3EvaluatorPrompt(manifest, candidate));
+  } catch {
+    return { ok: false, typedReason: 'validator_exception', evaluatorMetadata: emptyTransportAttempt(true, 'failed') };
+  }
+  const evaluator = parseSummaryV3EvaluatorToolResponse(response, manifest);
+  if (!evaluator.ok) return { ok: false, typedReason: evaluator.typedReason, evaluatorMetadata: evaluator.diagnosticMetadata };
+  return { ok: true, candidate, validation: aggregate(manifest, candidate, structural, evaluator.value), evaluatorMetadata: evaluator.diagnosticMetadata };
 }
 
 export async function executeSummaryV3GenerateServer(
@@ -344,35 +626,40 @@ export async function executeSummaryV3GenerateServer(
 ): Promise<SummaryV3GenerateResponse> {
   const manifest = parseSummaryV3GenerateRequest(rawRequest);
   if (!manifest) return failure('invalid_request_contract', undefined, false);
-  let primaryRaw: string;
+  let transportEvidence = unavailableTransportEvidence();
+  let primaryResponse: SummaryV3WriterResponse;
   try {
-    primaryRaw = await transports.write(buildSummaryV3WriterPrompt(manifest));
+    primaryResponse = await transports.write(buildSummaryV3WriterPrompt(manifest));
   } catch {
-    return failure('provider_request_failed', undefined, false);
+    return failure('provider_request_failed', undefined, false, undefined, failedTransportEvidence(transportEvidence, 'writer'));
   }
-  const primaryOutput = parseSummaryV3WriterOutput(primaryRaw, manifest);
-  if (!primaryOutput) return failure('provider_output_malformed', undefined, false);
-  const primary = await evaluateCandidate(manifest, primaryOutput, transports);
-  if (typeof primary === 'string') return failure(primary, undefined, false);
+  const primaryOutput = parseSummaryV3WriterToolResponse(primaryResponse, manifest);
+  transportEvidence = { ...transportEvidence, writer: primaryOutput.diagnosticMetadata };
+  if (!primaryOutput.ok) return failure(primaryOutput.typedReason, undefined, false, undefined, transportEvidence);
+  const primary = await evaluateCandidate(manifest, primaryOutput.value, transports);
+  transportEvidence = { ...transportEvidence, evaluator: primary.evaluatorMetadata };
+  if (!primary.ok) return failure(primary.typedReason, undefined, false, undefined, transportEvidence);
   if (primary.validation.decision === 'accept') {
     return immutableCopy({ ok: true as const, action: SUMMARY_V3_GENERATE_ACTION,
-      providerOutput: primaryOutput, candidate: primary.candidate, validation: primary.validation,
-      repairAttempted: false }) as SummaryV3GenerateResponse;
+      providerOutput: primaryOutput.value, candidate: primary.candidate, validation: primary.validation,
+      repairAttempted: false, transportEvidence }) as SummaryV3GenerateResponse;
   }
   const violations = primary.validation.violations;
-  if (violations.length === 0) return failure('validation_rejected', primary.validation, false, primary.candidate);
-  let repairRaw: string;
+  if (violations.length === 0) return failure('validation_rejected', primary.validation, false, primary.candidate, transportEvidence);
+  let repairResponse: SummaryV3WriterResponse;
   try {
-    repairRaw = await transports.write(buildSummaryV3RepairPrompt(manifest, primary.candidate, violations));
+    repairResponse = await transports.write(buildSummaryV3RepairPrompt(manifest, primary.candidate, violations));
   } catch {
-    return failure('repair_provider_failed', primary.validation, true, primary.candidate);
+    return failure('repair_provider_failed', primary.validation, true, primary.candidate, failedTransportEvidence(transportEvidence, 'writer'));
   }
-  const repairOutput = parseSummaryV3WriterOutput(repairRaw, manifest);
-  if (!repairOutput) return failure('repair_output_malformed', primary.validation, true, primary.candidate);
-  const repair = await evaluateCandidate(manifest, repairOutput, transports);
-  if (typeof repair === 'string') return failure(`repair_${repair}`, primary.validation, true, primary.candidate);
-  if (repair.validation.decision !== 'accept') return failure('repair_validation_rejected', repair.validation, true, repair.candidate);
+  const repairOutput = parseSummaryV3WriterToolResponse(repairResponse, manifest);
+  transportEvidence = { ...transportEvidence, writer: repairOutput.diagnosticMetadata };
+  if (!repairOutput.ok) return failure('repair_output_malformed', primary.validation, true, primary.candidate, transportEvidence);
+  const repair = await evaluateCandidate(manifest, repairOutput.value, transports);
+  transportEvidence = { ...transportEvidence, evaluator: repair.evaluatorMetadata };
+  if (!repair.ok) return failure(`repair_${repair.typedReason}`, primary.validation, true, primary.candidate, transportEvidence);
+  if (repair.validation.decision !== 'accept') return failure('repair_validation_rejected', repair.validation, true, repair.candidate, transportEvidence);
   return immutableCopy({ ok: true as const, action: SUMMARY_V3_GENERATE_ACTION,
-    providerOutput: repairOutput, candidate: repair.candidate, validation: repair.validation,
-    repairAttempted: true }) as SummaryV3GenerateResponse;
+    providerOutput: repairOutput.value, candidate: repair.candidate, validation: repair.validation,
+    repairAttempted: true, transportEvidence }) as SummaryV3GenerateResponse;
 }

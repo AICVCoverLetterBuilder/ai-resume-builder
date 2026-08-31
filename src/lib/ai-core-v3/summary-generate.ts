@@ -74,6 +74,7 @@ export interface SummaryV3GenerateSuccessResponse {
   readonly candidate: AiCoreV3CandidateEnvelope;
   readonly validation: AggregateValidationResult;
   readonly repairAttempted: boolean;
+  readonly transportEvidence?: SummaryV3TransportEvidence;
 }
 
 export interface SummaryV3GenerateFailureResponse {
@@ -84,6 +85,7 @@ export interface SummaryV3GenerateFailureResponse {
   readonly repairAttempted?: boolean;
   /** Transient internal rejection evidence; never persisted by the client. */
   readonly rejectedCandidate?: AiCoreV3CandidateEnvelope;
+  readonly transportEvidence?: SummaryV3TransportEvidence;
 }
 
 export type SummaryV3GenerateResponse =
@@ -172,6 +174,12 @@ export type SummaryV3DiagnosticAttempt = {
   readonly toolInputSchemaPassed: boolean | null;
   readonly identityPassed: boolean | null;
 };
+
+/** Safe transport metadata projected from a forced-tool provider response. */
+export type SummaryV3TransportEvidence = Readonly<{
+  readonly writer: SummaryV3DiagnosticAttempt;
+  readonly evaluator: SummaryV3DiagnosticAttempt;
+}>;
 
 export type SummaryV3TerminalEvidence = {
   readonly candidatePresent: boolean;
@@ -700,6 +708,43 @@ function notAttemptedAttempt(): SummaryV3DiagnosticAttempt {
   return { ...unavailableAttempt(), attempted: false, result: 'not_attempted' };
 }
 
+function projectedTransportAttempt(value: unknown): SummaryV3DiagnosticAttempt | null {
+  if (!isRecord(value)) return null;
+  const results = new Set<SummaryV3DiagnosticAttempt['result']>([
+    'succeeded', 'failed', 'malformed', 'not_attempted', 'unknown',
+  ]);
+  const boolOrNull = (item: unknown): item is boolean | null => item === null || typeof item === 'boolean';
+  const countOrNull = (item: unknown): item is number | null => item === null
+    || (typeof item === 'number' && Number.isInteger(item) && item >= 0 && item <= 100);
+  if ((value.attempted !== null && typeof value.attempted !== 'boolean')
+    || typeof value.result !== 'string' || !results.has(value.result as SummaryV3DiagnosticAttempt['result'])
+    || (value.stopReason !== null && typeof value.stopReason !== 'string')
+    || !countOrNull(value.contentBlockCount) || !countOrNull(value.textBlockCount)
+    || !countOrNull(value.toolBlockCount) || !countOrNull(value.expectedToolCount)
+    || !boolOrNull(value.toolNameMatched) || !boolOrNull(value.toolInputObject)
+    || !boolOrNull(value.toolInputSchemaPassed) || !boolOrNull(value.identityPassed)) return null;
+  return {
+    attempted: value.attempted,
+    result: value.result as SummaryV3DiagnosticAttempt['result'],
+    stopReason: value.stopReason === null ? null : safeReason(value.stopReason),
+    contentBlockCount: value.contentBlockCount,
+    textBlockCount: value.textBlockCount,
+    toolBlockCount: value.toolBlockCount,
+    expectedToolCount: value.expectedToolCount,
+    toolNameMatched: value.toolNameMatched,
+    toolInputObject: value.toolInputObject,
+    toolInputSchemaPassed: value.toolInputSchemaPassed,
+    identityPassed: value.identityPassed,
+  };
+}
+
+function responseTransportEvidence(value: unknown): SummaryV3TransportEvidence | null {
+  if (!isRecord(value) || !isRecord(value.transportEvidence)) return null;
+  const writer = projectedTransportAttempt(value.transportEvidence.writer);
+  const evaluator = projectedTransportAttempt(value.transportEvidence.evaluator);
+  return writer && evaluator ? { writer, evaluator } : null;
+}
+
 function attemptedAttempt(result: SummaryV3DiagnosticAttempt['result'], reason: string | null): SummaryV3DiagnosticAttempt {
   return { ...unavailableAttempt(), attempted: true, result, stopReason: safeReason(reason) };
 }
@@ -780,6 +825,7 @@ function responseEvidence(value: unknown, reason: string | null): SummaryV3Termi
   const accepted = isRecord(value) && value.ok === true;
   const repairAttempted = isRecord(value) && value.repairAttempted === true;
   const attempts = diagnosticAttempts(reason, value !== undefined && value !== null, accepted);
+  const transport = responseTransportEvidence(value);
   return immutableCopy({
     candidatePresent: Boolean(candidate),
     candidateHash: candidate ? hashSummaryV3Value(candidate.text) : null,
@@ -787,8 +833,8 @@ function responseEvidence(value: unknown, reason: string | null): SummaryV3Termi
     candidateUnitCount: candidate ? (candidate.units || []).length : null,
     candidateUnitHashes: candidate ? (candidate.units || []).map((unit) => hashSummaryV3Value(unit.text)) : [],
     candidateUnitLengths: candidate ? (candidate.units || []).map((unit) => unit.text.length) : [],
-    writer: attempts.writer,
-    evaluator: attempts.evaluator,
+    writer: transport?.writer ?? attempts.writer,
+    evaluator: transport?.evaluator ?? attempts.evaluator,
     phases: {
       structural: diagnosticPhaseStatus(validation, 'structural'),
       semantic: diagnosticPhaseStatus(validation, 'semantic'),

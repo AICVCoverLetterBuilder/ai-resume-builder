@@ -10,17 +10,20 @@ import {
   classifySummaryV3GenerateRouting,
   executeSummaryV3GenerateServer,
   hashSummaryV3Value,
-  parseSummaryV3EvaluatorOutput,
+  parseSummaryV3EvaluatorToolResponse,
+  parseSummaryV3WriterToolResponse,
   parseSummaryV3GenerateRequest,
-  parseSummaryV3WriterOutput,
   projectSummaryV3ImmediatePreviewModel,
   runSummaryV3GenerateAdapter,
   type SummaryV3GenerateAdapterInput,
   type SummaryV3GenerateSuccessResponse,
   type SummaryV3Manifest,
   type SummaryV3WriterOutput,
+  SUMMARY_V3_EVALUATOR_TOOL_NAME,
+  SUMMARY_V3_WRITER_TOOL_NAME,
 } from '..';
 import { M4_SUMMARY_GENERATE_DEVICE_OBSERVATION } from '../fixtures/m4-summary-generate-device-observation';
+import { M4_SUMMARY_GENERATE_AAB545_OBSERVATION } from '../fixtures/m4-summary-generate-aab545-observation';
 
 function cv(): CVData {
   return {
@@ -88,9 +91,24 @@ function evaluatorJson(manifest: SummaryV3Manifest, category?: 'semantic' | 'lan
     } });
 }
 
+function writerResponse(manifest: SummaryV3Manifest, suffix = '') {
+  return {
+    stopReason: 'tool_use',
+    content: [{ type: 'tool_use' as const, name: SUMMARY_V3_WRITER_TOOL_NAME, input: output(manifest, suffix) }],
+  };
+}
+
+function evaluatorResponse(manifest: SummaryV3Manifest, category?: 'semantic' | 'language_quality', code = 'rejected') {
+  return {
+    stopReason: 'tool_use',
+    content: [{ type: 'tool_use' as const, name: SUMMARY_V3_EVALUATOR_TOOL_NAME,
+      input: JSON.parse(evaluatorJson(manifest, category, code)) }],
+  };
+}
+
 async function accepted(manifest = snapshot().manifest): Promise<SummaryV3GenerateSuccessResponse> {
   const result = await executeSummaryV3GenerateServer({ manifest }, {
-    write: vi.fn(async () => writerJson(manifest)), evaluate: vi.fn(async () => evaluatorJson(manifest)),
+    write: vi.fn(async () => writerResponse(manifest)), evaluate: vi.fn(async () => evaluatorResponse(manifest)),
   });
   if (!result.ok) throw new Error(result.typedReason);
   return result;
@@ -231,7 +249,8 @@ describe('M4 strict writer, evaluator, and repair server', () => {
 
   it('29. strict writer accepts exactly one duration and ordered owned Experience units', () => {
     const manifest = snapshot().manifest;
-    expect(parseSummaryV3WriterOutput(writerJson(manifest), manifest)?.units).toHaveLength(3);
+    const parsed = parseSummaryV3WriterToolResponse(writerResponse(manifest), manifest);
+    expect(parsed.ok && parsed.value.units).toHaveLength(3);
   });
 
   it.each([
@@ -249,12 +268,17 @@ describe('M4 strict writer, evaluator, and repair server', () => {
     ['bullet prose', (m: SummaryV3Manifest) => JSON.stringify({ ...output(m), units: output(m).units.map((u, i) => i === 0 ? { ...u, text: '• Six years' } : u) })],
   ])('30-41. strict writer rejects %s', (_name, factory) => {
     const manifest = snapshot().manifest;
-    expect(parseSummaryV3WriterOutput(factory(manifest), manifest)).toBeNull();
+    const raw = factory(manifest);
+    const response = typeof raw === 'string'
+      ? { stopReason: 'end_turn', content: [{ type: 'text' as const, text: raw }] }
+      : { stopReason: 'tool_use', content: [{ type: 'tool_use' as const, name: SUMMARY_V3_WRITER_TOOL_NAME, input: raw }] };
+    expect(parseSummaryV3WriterToolResponse(response, manifest).ok).toBe(false);
   });
 
   it('42. evaluator accepts violations-only phase evidence', () => {
     const manifest = snapshot().manifest;
-    expect(parseSummaryV3EvaluatorOutput(evaluatorJson(manifest), manifest)?.phases.semantic.status).toBe('passed');
+    const parsed = parseSummaryV3EvaluatorToolResponse(evaluatorResponse(manifest), manifest);
+    expect(parsed.ok && parsed.value.phases.semantic.status).toBe('passed');
   });
 
   it.each([
@@ -265,18 +289,83 @@ describe('M4 strict writer, evaluator, and repair server', () => {
     const manifest = snapshot().manifest;
     const parsed = JSON.parse(evaluatorJson(manifest));
     Object.assign(parsed, extra);
-    expect(parseSummaryV3EvaluatorOutput(JSON.stringify(parsed), manifest)).toBeNull();
+    expect(parseSummaryV3EvaluatorToolResponse({ stopReason: 'tool_use', content: [{ type: 'tool_use', name: SUMMARY_V3_EVALUATOR_TOOL_NAME, input: parsed }] }, manifest).ok).toBe(false);
   });
 
-  it('46. structurally invalid primary invokes evaluator zero times', async () => {
+  describe('forced structured transport seam', () => {
+    it('46a. valid writer tool input preserves the existing logical output', () => {
+      const manifest = snapshot().manifest;
+      const result = parseSummaryV3WriterToolResponse(writerResponse(manifest), manifest);
+      expect(result.ok).toBe(true);
+      expect(result.ok && result.value.units).toHaveLength(3);
+      expect(result.ok && result.diagnosticMetadata.toolNameMatched).toBe(true);
+    });
+
+    it.each([
+      ['valid raw JSON text (pre-fix text seam)', { stopReason: 'tool_use', content: [{ type: 'text' as const, text: writerJson(snapshot().manifest) }] }, 'writer_unexpected_text_block'],
+      ['text-only JSON', { stopReason: 'tool_use', content: [{ type: 'text' as const, text: writerJson(snapshot().manifest) }] }, 'writer_unexpected_text_block'],
+      ['fenced JSON', { stopReason: 'tool_use', content: [{ type: 'text' as const, text: `\`\`\`json\n${writerJson(snapshot().manifest)}\n\`\`\`` }] }, 'writer_unexpected_text_block'],
+      ['commentary plus JSON', { stopReason: 'tool_use', content: [{ type: 'text' as const, text: `commentary\n${writerJson(snapshot().manifest)}` }] }, 'writer_unexpected_text_block'],
+      ['multiple JSON objects', { stopReason: 'tool_use', content: [{ type: 'text' as const, text: `${writerJson(snapshot().manifest)}${writerJson(snapshot().manifest)}` }] }, 'writer_unexpected_text_block'],
+      ['multiple text blocks', { stopReason: 'tool_use', content: [{ type: 'text' as const, text: 'one' }, { type: 'text' as const, text: 'two' }] }, 'writer_unexpected_text_block'],
+      ['empty text', { stopReason: 'tool_use', content: [{ type: 'text' as const, text: '' }] }, 'writer_unexpected_text_block'],
+      ['truncated JSON', { stopReason: 'tool_use', content: [{ type: 'text' as const, text: '{"operationId"' }] }, 'writer_unexpected_text_block'],
+      ['zero tool blocks', { stopReason: 'tool_use', content: [] }, 'writer_tool_missing'],
+      ['multiple tool blocks', { stopReason: 'tool_use', content: [writerResponse(snapshot().manifest).content[0], writerResponse(snapshot().manifest).content[0]] }, 'writer_multiple_tools'],
+      ['wrong tool', { stopReason: 'tool_use', content: [{ type: 'tool_use' as const, name: 'wrong_summary_tool', input: output(snapshot().manifest) }] }, 'writer_wrong_tool'],
+      ['text plus tool', { stopReason: 'tool_use', content: [{ type: 'text' as const, text: 'commentary' }, writerResponse(snapshot().manifest).content[0]] }, 'writer_unexpected_text_block'],
+      ['malformed tool input', { stopReason: 'tool_use', content: [{ type: 'tool_use' as const, name: SUMMARY_V3_WRITER_TOOL_NAME, input: null }] }, 'writer_tool_input_malformed'],
+      ['max_tokens', { stopReason: 'max_tokens', content: [writerResponse(snapshot().manifest).content[0]] }, 'writer_max_tokens'],
+    ])('46b-46k. writer rejects %s', (_name, response, reason) => {
+      const manifest = snapshot().manifest;
+      const result = parseSummaryV3WriterToolResponse(response, manifest);
+      expect(result).toMatchObject({ ok: false, typedReason: reason });
+    });
+
+    it('46l. writer identity mismatch is rejected without changing the schema', () => {
+      const manifest = snapshot().manifest;
+      const input = { ...output(manifest), operationId: 'foreign-operation' };
+      const result = parseSummaryV3WriterToolResponse({ stopReason: 'tool_use', content: [{ type: 'tool_use', name: SUMMARY_V3_WRITER_TOOL_NAME, input }] }, manifest);
+      expect(result).toMatchObject({ ok: false, typedReason: 'writer_identity_mismatch', diagnosticMetadata: { toolInputSchemaPassed: true, identityPassed: false } });
+    });
+
+    it.each([
+      ['valid raw JSON text (pre-fix text seam)', { stopReason: 'tool_use', content: [{ type: 'text' as const, text: evaluatorJson(snapshot().manifest) }] }, 'evaluator_unexpected_text_block'],
+      ['text-only JSON', { stopReason: 'tool_use', content: [{ type: 'text' as const, text: evaluatorJson(snapshot().manifest) }] }, 'evaluator_unexpected_text_block'],
+      ['fenced JSON', { stopReason: 'tool_use', content: [{ type: 'text' as const, text: `\`\`\`json\n${evaluatorJson(snapshot().manifest)}\n\`\`\`` }] }, 'evaluator_unexpected_text_block'],
+      ['commentary plus JSON', { stopReason: 'tool_use', content: [{ type: 'text' as const, text: `commentary\n${evaluatorJson(snapshot().manifest)}` }] }, 'evaluator_unexpected_text_block'],
+      ['multiple text blocks', { stopReason: 'tool_use', content: [{ type: 'text' as const, text: 'one' }, { type: 'text' as const, text: 'two' }] }, 'evaluator_unexpected_text_block'],
+      ['empty text', { stopReason: 'tool_use', content: [{ type: 'text' as const, text: '' }] }, 'evaluator_unexpected_text_block'],
+      ['truncated JSON', { stopReason: 'tool_use', content: [{ type: 'text' as const, text: '{"operationId"' }] }, 'evaluator_unexpected_text_block'],
+      ['zero tool blocks', { stopReason: 'tool_use', content: [] }, 'evaluator_tool_missing'],
+      ['multiple tool blocks', { stopReason: 'tool_use', content: [evaluatorResponse(snapshot().manifest).content[0], evaluatorResponse(snapshot().manifest).content[0]] }, 'evaluator_multiple_tools'],
+      ['wrong tool', { stopReason: 'tool_use', content: [{ type: 'tool_use' as const, name: 'wrong_summary_validator', input: JSON.parse(evaluatorJson(snapshot().manifest)) }] }, 'evaluator_wrong_tool'],
+      ['text plus tool', { stopReason: 'tool_use', content: [{ type: 'text' as const, text: 'commentary' }, evaluatorResponse(snapshot().manifest).content[0]] }, 'evaluator_unexpected_text_block'],
+      ['malformed tool input', { stopReason: 'tool_use', content: [{ type: 'tool_use' as const, name: SUMMARY_V3_EVALUATOR_TOOL_NAME, input: null }] }, 'evaluator_tool_input_malformed'],
+      ['max_tokens', { stopReason: 'max_tokens', content: [evaluatorResponse(snapshot().manifest).content[0]] }, 'evaluator_max_tokens'],
+    ])('46m-46u. evaluator rejects %s', (_name, response, reason) => {
+      const manifest = snapshot().manifest;
+      const result = parseSummaryV3EvaluatorToolResponse(response, manifest);
+      expect(result).toMatchObject({ ok: false, typedReason: reason });
+    });
+
+    it('46v. evaluator identity mismatch is rejected without changing validation meaning', () => {
+      const manifest = snapshot().manifest;
+      const input = { ...JSON.parse(evaluatorJson(manifest)), locale: 'de' };
+      const result = parseSummaryV3EvaluatorToolResponse({ stopReason: 'tool_use', content: [{ type: 'tool_use', name: SUMMARY_V3_EVALUATOR_TOOL_NAME, input }] }, manifest);
+      expect(result).toMatchObject({ ok: false, typedReason: 'evaluator_identity_mismatch', diagnosticMetadata: { toolInputSchemaPassed: true, identityPassed: false } });
+    });
+  });
+
+  it('47. structurally invalid primary invokes evaluator zero times', async () => {
     const manifest = snapshot().manifest; const evaluate = vi.fn();
-    const result = await executeSummaryV3GenerateServer({ manifest }, { write: vi.fn(async () => '{}'), evaluate });
+    const result = await executeSummaryV3GenerateServer({ manifest }, { write: vi.fn(async () => ({ stopReason: 'tool_use', content: [] })), evaluate });
     expect(result.ok).toBe(false); expect(evaluate).toHaveBeenCalledTimes(0);
   });
 
-  it('47. structurally valid primary invokes one writer and one independent evaluator', async () => {
-    const manifest = snapshot().manifest; const write = vi.fn(async () => writerJson(manifest));
-    const evaluate = vi.fn(async () => evaluatorJson(manifest));
+  it('48. structurally valid primary invokes one writer and one independent evaluator', async () => {
+    const manifest = snapshot().manifest; const write = vi.fn(async () => writerResponse(manifest));
+    const evaluate = vi.fn(async () => evaluatorResponse(manifest));
     const result = await executeSummaryV3GenerateServer({ manifest }, { write, evaluate });
     expect(result.ok).toBe(true); expect(write).toHaveBeenCalledTimes(1); expect(evaluate).toHaveBeenCalledTimes(1);
   });
@@ -286,9 +375,9 @@ describe('M4 strict writer, evaluator, and repair server', () => {
   });
 
   it('49. eligible primary rejection invokes exactly one repair writer and repair evaluator', async () => {
-    const manifest = snapshot().manifest; const write = vi.fn(async () => writerJson(manifest, write.mock.calls.length ? ' repaired' : ''));
+    const manifest = snapshot().manifest; const write = vi.fn(async () => writerResponse(manifest, write.mock.calls.length ? ' repaired' : ''));
     const evaluate = vi.fn(async () => evaluate.mock.calls.length === 1
-      ? evaluatorJson(manifest, 'semantic', 'unsupported_metric') : evaluatorJson(manifest));
+      ? evaluatorResponse(manifest, 'semantic', 'unsupported_metric') : evaluatorResponse(manifest));
     const result = await executeSummaryV3GenerateServer({ manifest }, { write, evaluate });
     expect(result.ok).toBe(true); expect(write).toHaveBeenCalledTimes(2); expect(evaluate).toHaveBeenCalledTimes(2);
     expect(result.repairAttempted).toBe(true);
@@ -296,9 +385,9 @@ describe('M4 strict writer, evaluator, and repair server', () => {
 
   it('50. repair receives exact manifest, candidate, violations, and identities', async () => {
     const manifest = snapshot().manifest; const prompts: string[] = [];
-    const write = vi.fn(async (prompt: string) => { prompts.push(prompt); return writerJson(manifest, prompts.length > 1 ? ' repaired' : ''); });
+    const write = vi.fn(async (prompt: string) => { prompts.push(prompt); return writerResponse(manifest, prompts.length > 1 ? ' repaired' : ''); });
     let calls = 0; const evaluate = vi.fn(async () => (++calls === 1
-      ? evaluatorJson(manifest, 'semantic', 'duration_mismatch') : evaluatorJson(manifest)));
+      ? evaluatorResponse(manifest, 'semantic', 'duration_mismatch') : evaluatorResponse(manifest, undefined)));
     await executeSummaryV3GenerateServer({ manifest }, { write, evaluate });
     expect(prompts[1]).toContain(manifest.manifestHash); expect(prompts[1]).toContain('duration_mismatch');
     expect(prompts[1]).toContain(manifest.operationId);
@@ -306,15 +395,15 @@ describe('M4 strict writer, evaluator, and repair server', () => {
 
   it('51. malformed repair invokes repair evaluator zero additional times and no third writer', async () => {
     const manifest = snapshot().manifest; let writes = 0;
-    const write = vi.fn(async () => (++writes === 1 ? writerJson(manifest) : '{}'));
-    const evaluate = vi.fn(async () => evaluatorJson(manifest, 'semantic', 'unsupported_claim'));
+    const write = vi.fn(async () => (++writes === 1 ? writerResponse(manifest) : ({ stopReason: 'tool_use', content: [{ type: 'text' as const }] })));
+    const evaluate = vi.fn(async () => evaluatorResponse(manifest, 'semantic', 'unsupported_claim'));
     const result = await executeSummaryV3GenerateServer({ manifest }, { write, evaluate });
     expect(result.ok).toBe(false); expect(write).toHaveBeenCalledTimes(2); expect(evaluate).toHaveBeenCalledTimes(1);
   });
 
   it('52. repair rejection stops after two writers with no deterministic or V2 fallback', async () => {
-    const manifest = snapshot().manifest; const write = vi.fn(async () => writerJson(manifest));
-    const evaluate = vi.fn(async () => evaluatorJson(manifest, 'language_quality', 'wrong_perspective'));
+    const manifest = snapshot().manifest; const write = vi.fn(async () => writerResponse(manifest));
+    const evaluate = vi.fn(async () => evaluatorResponse(manifest, 'language_quality', 'wrong_perspective'));
     const result = await executeSummaryV3GenerateServer({ manifest }, { write, evaluate });
     expect(result.ok).toBe(false); expect(write).toHaveBeenCalledTimes(2); expect(evaluate).toHaveBeenCalledTimes(2);
   });
@@ -331,8 +420,8 @@ describe('M4 strict writer, evaluator, and repair server', () => {
     ['near-duplicate clauses', 'duplicate_clause', 'language_quality'], ['duration mismatch', 'duration_mismatch', 'semantic'],
     ['current-employer-only duration', 'duration_scope', 'semantic'], ['conflicting duration', 'duration_conflict', 'semantic'],
   ])('53-72. %s is rejected unless one bounded repair independently passes', async (_name, code, category) => {
-    const manifest = snapshot().manifest; const write = vi.fn(async () => writerJson(manifest));
-    const evaluate = vi.fn(async () => evaluatorJson(manifest, category as 'semantic' | 'language_quality', code));
+    const manifest = snapshot().manifest; const write = vi.fn(async () => writerResponse(manifest));
+    const evaluate = vi.fn(async () => evaluatorResponse(manifest, category as 'semantic' | 'language_quality', code));
     const result = await executeSummaryV3GenerateServer({ manifest }, { write, evaluate });
     expect(result.ok).toBe(false); expect(result.repairAttempted).toBe(true);
   });
@@ -340,7 +429,7 @@ describe('M4 strict writer, evaluator, and repair server', () => {
   it('73. evaluator exception fails closed with validator_exception and no repair', async () => {
     const manifest = snapshot().manifest;
     const result = await executeSummaryV3GenerateServer({ manifest }, {
-      write: vi.fn(async () => writerJson(manifest)), evaluate: vi.fn(async () => { throw new Error('validator'); }),
+      write: vi.fn(async () => writerResponse(manifest)), evaluate: vi.fn(async () => { throw new Error('validator'); }),
     });
     expect(result).toMatchObject({ ok: false, typedReason: 'validator_exception', repairAttempted: false });
   });
@@ -436,6 +525,28 @@ describe('M4 transactional apply, preview, rollback, and usage', () => {
     expect(writeCv).not.toHaveBeenCalled(); expect(persistCv).not.toHaveBeenCalled(); expect(incrementUsage).not.toHaveBeenCalled();
   });
 
+  it('86b. initial malformed writer fails closed before evaluator, repair, apply, persistence, usage, or fallthrough', async () => {
+    const captured = snapshot(); const write = vi.fn(async () => ({ stopReason: 'tool_use', content: [] }));
+    const evaluate = vi.fn(); const writeCv = vi.fn(); const persistCv = vi.fn(); const incrementUsage = vi.fn();
+    const events: unknown[] = [];
+    const result = await runSummaryV3GenerateAdapter(input(), {
+      request: vi.fn(async () => executeSummaryV3GenerateServer({ manifest: captured.manifest }, { write, evaluate })),
+      getLiveState: () => ({ cv: cv(), requestedLocale: 'en', uiLocale: 'en', storedContentLocale: 'en', exactVisibleSummary: '',
+        referenceDateIso: captured.referenceDateIso, jobContextHash: 'context-m4' }),
+      getActiveOperationId: () => 'm4-operation', writeCv, projectPreviewSummary: (next) => next.summary,
+      persistCv, incrementUsage, onTerminal: (event) => events.push(event),
+    });
+    expect(result).toEqual({ kind: 'handled_failure', typedReason: 'writer_tool_missing' });
+    expect(write).toHaveBeenCalledTimes(1); expect(evaluate).not.toHaveBeenCalled();
+    expect(writeCv).not.toHaveBeenCalled(); expect(persistCv).not.toHaveBeenCalled(); expect(incrementUsage).not.toHaveBeenCalled();
+    expect(events).toHaveLength(1);
+    const event = events[0] as import('../summary-generate').SummaryV3GenerateTerminalEvent;
+    expect(event.evidence.candidatePresent).toBe(false);
+    expect(event.evidence.writer).toMatchObject({ attempted: true, result: 'malformed', stopReason: 'tool_use', contentBlockCount: 0, toolBlockCount: 0, expectedToolCount: 1 });
+    expect(event.evidence.evaluator).toMatchObject({ attempted: false, result: 'not_attempted' });
+    expect(event.applyCommitted).toBe(false);
+  });
+
   it('87. M4 terminal seam emits one safe success record with candidate evidence', async () => {
     const captured = snapshot(); const events: unknown[] = []; let live = cv();
     const result = await runSummaryV3GenerateAdapter(input(), {
@@ -462,8 +573,8 @@ describe('M4 transactional apply, preview, rollback, and usage', () => {
     const captured = snapshot(); const events: unknown[] = [];
     const result = await runSummaryV3GenerateAdapter(input(), {
       request: vi.fn(async () => executeSummaryV3GenerateServer({ manifest: captured.manifest }, {
-        write: vi.fn(async () => writerJson(captured.manifest)),
-        evaluate: vi.fn(async () => evaluatorJson(captured.manifest, 'semantic', 'unsupported_metric')),
+        write: vi.fn(async () => writerResponse(captured.manifest)),
+        evaluate: vi.fn(async () => evaluatorResponse(captured.manifest, 'semantic', 'unsupported_metric')),
       })),
       getLiveState: () => ({ cv: cv(), requestedLocale: 'en', uiLocale: 'en', storedContentLocale: 'en', exactVisibleSummary: '',
         referenceDateIso: captured.referenceDateIso, jobContextHash: 'context-m4' }),
@@ -489,5 +600,14 @@ describe('M4 transactional apply, preview, rollback, and usage', () => {
     expect(M4_SUMMARY_GENERATE_DEVICE_OBSERVATION.operation).toBe('summary_v3_generate');
     expect(M4_SUMMARY_GENERATE_DEVICE_OBSERVATION.diagnosticPresentBeforeToast).toBe(false);
     expect(JSON.stringify(M4_SUMMARY_GENERATE_DEVICE_OBSERVATION)).not.toMatch(/@|Ana|Example|Current/u);
+  });
+
+  it('90. AAB 545 physical fixture maps to owned malformed-writer terminal truth', () => {
+    expect(M4_SUMMARY_GENERATE_AAB545_OBSERVATION).toMatchObject({
+      ownershipResult: 'owned', writer: { attempted: true, result: 'malformed' },
+      evaluator: { attempted: false, result: 'not_attempted' }, candidatePresent: false,
+      usageDelta: 0, v2FallthroughCount: 0, apply: false,
+    });
+    expect(JSON.stringify(M4_SUMMARY_GENERATE_AAB545_OBSERVATION)).not.toMatch(/@|Ana|Example|Current|employer|role/u);
   });
 });

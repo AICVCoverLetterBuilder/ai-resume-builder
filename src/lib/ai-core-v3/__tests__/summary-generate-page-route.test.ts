@@ -6,7 +6,9 @@ import { translations, type Locale } from '../../i18n/translations';
 import type { CVData } from '../../types';
 import { SUMMARY_AI_DIAG_STORAGE_KEY } from '../../cv-summary-ai-diagnostics';
 import {
+  SUMMARY_V3_EVALUATOR_TOOL_NAME,
   SUMMARY_V3_GENERATE_ACTION,
+  SUMMARY_V3_WRITER_TOOL_NAME,
   captureSummaryV3GenerateOperationSnapshot,
   classifySummaryV3GenerateRouting,
   type SummaryV3GenerateAdapterInput,
@@ -178,6 +180,57 @@ async function disabledDirectRoute() {
   }
 }
 
+async function forcedToolDirectRoute(options: { malformedWriter?: boolean } = {}) {
+  const keys = ['AI_CORE_V3_ENABLED', 'NEXT_PUBLIC_AI_CORE_V3_ENABLED', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'] as const;
+  const saved = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  const requests: Array<{ tools?: unknown[]; tool_choice?: unknown; system?: unknown }> = [];
+  const checks = ['factRetention', 'entryOwnership', 'currentPriorSeparation', 'unsupportedClaimsAbsent',
+    'roleEmployerStateAccurate', 'durationMeaningAndScope', 'optionalAuthorityRespected', 'targetLanguageAndScript',
+    'firstPersonPerspective', 'currentRoleTense', 'priorRoleTense', 'grammarAndClarity',
+    'duplicationAndDegradationAbsent', 'completeSummaryUsable'];
+  try {
+    process.env.AI_CORE_V3_ENABLED = 'true'; process.env.NEXT_PUBLIC_AI_CORE_V3_ENABLED = 'true';
+    process.env.ANTHROPIC_API_KEY = 'm4-route-key'; delete process.env.ANTHROPIC_AUTH_TOKEN;
+    vi.resetModules();
+    const create = vi.fn(async (params: { tools?: unknown[]; tool_choice?: unknown; system?: unknown }) => {
+      requests.push(params);
+      const choice = params.tool_choice as { name?: string } | undefined;
+      if (choice?.name === SUMMARY_V3_WRITER_TOOL_NAME) {
+        if (options.malformedWriter) return { stop_reason: 'tool_use', content: [] };
+        return { stop_reason: 'tool_use', content: [{ type: 'tool_use', name: SUMMARY_V3_WRITER_TOOL_NAME, input: {
+          operationId: manifest.operationId, snapshotHash: manifest.sourceSnapshotHash, locale: manifest.targetLocale,
+          units: [
+            { slot: 'duration', entryId: null, factIds: [], text: 'I have professional experience.' },
+            ...manifest.selectedEntries.map((entry) => ({ slot: 'experience', entryId: entry.entryId,
+              factIds: entry.facts.map((fact) => fact.factId), text: `I work as ${entry.roleTitle} at ${entry.employer}.` })),
+          ],
+        } }] };
+      }
+      return { stop_reason: 'tool_use', content: [{ type: 'tool_use', name: SUMMARY_V3_EVALUATOR_TOOL_NAME, input: {
+        operationId: manifest.operationId, snapshotHash: manifest.sourceSnapshotHash, locale: manifest.targetLocale,
+        phases: { semantic: { status: 'passed', violations: [] }, language_quality: { status: 'passed', violations: [] } },
+        checks: Object.fromEntries(checks.map((check) => [check, true])),
+      } }] };
+    });
+    vi.doMock('@anthropic-ai/sdk', () => { class MockAnthropic { readonly messages = { create }; } return { default: MockAnthropic }; });
+    vi.doMock('@/lib/pro-token', () => ({ verifyProToken: vi.fn(async () => ({ subject: 'm4' })) }));
+    const core = await import('..'); core.resetAiCoreV3TestOverride();
+    const manifest = core.captureSummaryV3GenerateOperationSnapshot({
+      enabled: true, operationKind: 'summary_generate', operationId: 'route-m4', requestId: 'route-m4', cv: pageCv(),
+      requestedLocale: 'en', uiLocale: 'en', storedContentLocale: 'en', exactVisibleSummary: '',
+      referenceDateIso: '2026-08-28', jobContextHash: 'route-context', usageCountBefore: 0,
+    }).manifest;
+    const request = new Request('http://localhost/api/generate', { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: SUMMARY_V3_GENERATE_ACTION, proToken: 'token', requestId: 'route-m4', manifest }) });
+    const { POST } = await import('@/app/api/generate/route');
+    const response = await POST(request as Parameters<typeof POST>[0]);
+    return { response, body: await response.json(), requests };
+  } finally {
+    vi.restoreAllMocks(); vi.doUnmock('@anthropic-ai/sdk'); vi.doUnmock('@/lib/pro-token'); vi.resetModules();
+    for (const key of keys) { if (saved[key] === undefined) delete process.env[key]; else process.env[key] = saved[key]; }
+  }
+}
+
 afterEach(() => { cleanup(); });
 
 describe('M4 actual page routing and direct server gate', () => {
@@ -256,5 +309,23 @@ describe('M4 actual page routing and direct server gate', () => {
       expect(classifySummaryV3GenerateRouting({ enabled: true, operationKind, cv: data, requestedLocale: 'en', uiLocale: 'en',
         storedContentLocale: 'en', exactVisibleSummary: '', referenceDateIso: '2026-08-28', jobContextHash: 'context' })).toBe('not_applicable');
     }
+  });
+
+  it('21. enabled M4 route sends exactly one forced writer and evaluator tool', async () => {
+    const run = await forcedToolDirectRoute();
+    expect(run.response.status).toBe(200);
+    expect(run.requests).toHaveLength(2);
+    expect(run.requests[0].tools).toHaveLength(1);
+    expect(run.requests[0].tool_choice).toEqual({ type: 'tool', name: SUMMARY_V3_WRITER_TOOL_NAME, disable_parallel_tool_use: true });
+    expect(run.requests[1].tools).toHaveLength(1);
+    expect(run.requests[1].tool_choice).toEqual({ type: 'tool', name: SUMMARY_V3_EVALUATOR_TOOL_NAME, disable_parallel_tool_use: true });
+    expect(run.body.providerOutput).toBeDefined();
+  });
+
+  it('22. forced writer transport rejection retains the application 502 boundary', async () => {
+    const run = await forcedToolDirectRoute({ malformedWriter: true });
+    expect(run.response.status).toBe(502);
+    expect(run.body).toMatchObject({ ok: false, typedReason: 'writer_tool_missing' });
+    expect(run.requests).toHaveLength(1);
   });
 });
