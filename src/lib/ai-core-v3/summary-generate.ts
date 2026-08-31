@@ -12,7 +12,8 @@ import type {
 } from './contracts';
 import { immutableCopy } from './immutability';
 import { createSummaryFactManifest } from './summary-manifest';
-import type { AggregateValidationResult } from './validators';
+import { INTERNAL_AI_RESET_ENABLED } from '../build-channel';
+import type { AggregateValidationResult, AiCoreV3Violation } from './validators';
 
 export const SUMMARY_V3_GENERATE_ACTION = 'summary_v3_generate' as const;
 
@@ -81,6 +82,8 @@ export interface SummaryV3GenerateFailureResponse {
   readonly typedReason: string;
   readonly validation?: AggregateValidationResult;
   readonly repairAttempted?: boolean;
+  /** Transient internal rejection evidence; never persisted by the client. */
+  readonly rejectedCandidate?: AiCoreV3CandidateEnvelope;
 }
 
 export type SummaryV3GenerateResponse =
@@ -148,6 +151,80 @@ export interface SummaryV3GenerateAdapterDependencies {
   readonly projectPreviewSummary: (next: CVData) => string;
   readonly persistCv: (next: CVData) => boolean;
   readonly incrementUsage: () => void;
+  /** Optional terminal seam. It is observational and cannot affect routing/apply. */
+  readonly onTerminal?: (event: SummaryV3GenerateTerminalEvent) => void;
+  readonly getUsageCount?: () => number;
+  readonly getRouteHttpStatus?: () => number | null;
+}
+
+export type SummaryV3DiagnosticPhaseStatus = 'passed' | 'failed' | 'not_evaluated';
+
+export type SummaryV3DiagnosticAttempt = {
+  readonly attempted: boolean | null;
+  readonly result: 'succeeded' | 'failed' | 'malformed' | 'not_attempted' | 'unknown';
+  readonly stopReason: string | null;
+  readonly contentBlockCount: number | null;
+  readonly textBlockCount: number | null;
+  readonly toolBlockCount: number | null;
+  readonly expectedToolCount: number | null;
+  readonly toolNameMatched: boolean | null;
+  readonly toolInputObject: boolean | null;
+  readonly toolInputSchemaPassed: boolean | null;
+  readonly identityPassed: boolean | null;
+};
+
+export type SummaryV3TerminalEvidence = {
+  readonly candidatePresent: boolean;
+  readonly candidateHash: string | null;
+  readonly candidateLength: number | null;
+  readonly candidateUnitCount: number | null;
+  readonly candidateUnitHashes: readonly string[];
+  readonly candidateUnitLengths: readonly number[];
+  readonly writer: SummaryV3DiagnosticAttempt;
+  readonly evaluator: SummaryV3DiagnosticAttempt;
+  readonly phases: Readonly<Record<'structural' | 'semantic' | 'language_quality', SummaryV3DiagnosticPhaseStatus>>;
+  readonly semanticViolationCount: number | null;
+  readonly semanticViolationCodes: readonly string[];
+  readonly languageQualityViolationCount: number | null;
+  readonly languageQualityViolationCodes: readonly string[];
+  readonly violationFactIdHashesByCode: Readonly<Record<string, readonly string[]>>;
+  readonly violationEntryIdHashesByCode: Readonly<Record<string, readonly string[]>>;
+  readonly primaryValidationRejectionCode: string | null;
+  readonly repairAttempted: boolean;
+  readonly providerResponseKind: 'provider' | 'repair' | 'none' | 'unknown';
+};
+
+/** Exact candidate text is transient internal evidence only. */
+export interface SummaryV3InternalRejectionAudit {
+  readonly operationId: string;
+  readonly snapshotHash: string;
+  readonly locale: string;
+  readonly candidate: Readonly<{
+    readonly candidateId: string;
+    readonly text: string;
+    readonly units: readonly Readonly<{ readonly unitId: string; readonly text: string }>[];
+  }>;
+  readonly phases: Readonly<Record<'structural' | 'semantic' | 'language_quality', SummaryV3DiagnosticPhaseStatus>>;
+  readonly evaluator: Readonly<{
+    readonly semanticViolations: readonly AiCoreV3Violation[];
+    readonly languageQualityViolations: readonly AiCoreV3Violation[];
+  }>;
+  readonly transport: Readonly<{
+    readonly writer: SummaryV3DiagnosticAttempt;
+    readonly evaluator: SummaryV3DiagnosticAttempt;
+  }>;
+}
+
+export interface SummaryV3GenerateTerminalEvent {
+  readonly input: SummaryV3GenerateAdapterInput;
+  readonly snapshot: SummaryV3GenerateOperationSnapshot | null;
+  readonly kind: 'handled_success' | 'handled_failure';
+  readonly typedReason: string | null;
+  readonly evidence: SummaryV3TerminalEvidence;
+  readonly internalRejectionAudit?: SummaryV3InternalRejectionAudit;
+  readonly applyCommitted: boolean;
+  readonly usageAfter: number;
+  readonly routeHttpStatus: number | null;
 }
 
 function normalizeLocale(value: string): string {
@@ -593,6 +670,227 @@ function responseFailureReason(value: unknown): string {
     : 'invalid_v3_summary_response';
 }
 
+function safeDiagnosticCode(value: unknown): string | null {
+  return typeof value === 'string' && /^[a-z][a-z0-9_]{0,63}$/u.test(value) ? value : null;
+}
+
+function safeReason(value: string | null): string | null {
+  const normalized = String(value || '').trim().toLowerCase();
+  return /^[a-z][a-z0-9_-]{0,63}$/u.test(normalized) ? normalized : null;
+}
+
+function diagnosticPhaseStatus(
+  validation: AggregateValidationResult | null,
+  phase: 'structural' | 'semantic' | 'language_quality',
+): SummaryV3DiagnosticPhaseStatus {
+  const status = validation?.phases?.[phase]?.status;
+  return status === 'passed' || status === 'failed' || status === 'not_evaluated' ? status : 'not_evaluated';
+}
+
+function unavailableAttempt(): SummaryV3DiagnosticAttempt {
+  return {
+    attempted: null, result: 'unknown', stopReason: null,
+    contentBlockCount: null, textBlockCount: null, toolBlockCount: null,
+    expectedToolCount: null, toolNameMatched: null, toolInputObject: null,
+    toolInputSchemaPassed: null, identityPassed: null,
+  };
+}
+
+function notAttemptedAttempt(): SummaryV3DiagnosticAttempt {
+  return { ...unavailableAttempt(), attempted: false, result: 'not_attempted' };
+}
+
+function attemptedAttempt(result: SummaryV3DiagnosticAttempt['result'], reason: string | null): SummaryV3DiagnosticAttempt {
+  return { ...unavailableAttempt(), attempted: true, result, stopReason: safeReason(reason) };
+}
+
+function diagnosticAttempts(
+  reason: string | null,
+  serverResponseReceived: boolean,
+  acceptedResponse: boolean,
+): { writer: SummaryV3DiagnosticAttempt; evaluator: SummaryV3DiagnosticAttempt } {
+  const none = notAttemptedAttempt();
+  const succeeded = attemptedAttempt('succeeded', null);
+  if (acceptedResponse || [
+    'candidate_or_validation_mismatch', 'stale_snapshot', 'visible_readback_failed',
+    'rollback_failed', 'persistence_failed', 'usage_increment_failed',
+    'client_verification_exception', 'state_write_failed', 'preview_projection_failed',
+  ].includes(String(reason))) return { writer: succeeded, evaluator: succeeded };
+  if (reason === 'provider_request_failed') return { writer: attemptedAttempt('failed', reason), evaluator: none };
+  if (reason === 'provider_output_malformed') return { writer: attemptedAttempt('malformed', reason), evaluator: none };
+  if (reason === 'structural_validation_failed') return { writer: succeeded, evaluator: none };
+  if (reason === 'validator_exception') return { writer: succeeded, evaluator: attemptedAttempt('failed', reason) };
+  if (reason === 'evaluator_output_malformed') return { writer: succeeded, evaluator: attemptedAttempt('malformed', reason) };
+  if (reason === 'validation_rejected' || reason === 'repair_provider_failed'
+    || reason === 'repair_output_malformed' || reason === 'repair_validation_rejected') {
+    return { writer: succeeded, evaluator: succeeded };
+  }
+  if (reason === 'invalid_request_contract' || reason === 'snapshot_capture_failed') return { writer: none, evaluator: none };
+  if (!serverResponseReceived) return { writer: unavailableAttempt(), evaluator: unavailableAttempt() };
+  return { writer: unavailableAttempt(), evaluator: unavailableAttempt() };
+}
+
+function validationViolations(
+  validation: AggregateValidationResult | null,
+  category: 'semantic' | 'language_quality',
+): readonly AiCoreV3Violation[] {
+  const phase = validation?.phases?.[category];
+  return phase && Array.isArray(phase.violations) ? phase.violations : [];
+}
+
+function violationCodes(violations: readonly AiCoreV3Violation[]): readonly string[] {
+  return violations.map((item) => safeDiagnosticCode(item.code)).filter((item): item is string => Boolean(item));
+}
+
+function violationHashMap(
+  violations: readonly AiCoreV3Violation[],
+  field: 'factIds' | 'entryIds',
+): Readonly<Record<string, readonly string[]>> {
+  const map: Record<string, readonly string[]> = {};
+  for (const violation of violations) {
+    const code = safeDiagnosticCode(violation.code);
+    if (!code) continue;
+    const ids = Array.isArray(violation[field]) ? violation[field] as readonly string[] : [];
+    map[code] = ids.map((id) => hashSummaryV3Value(id));
+  }
+  return map;
+}
+
+function responseCandidate(value: unknown): AiCoreV3CandidateEnvelope | null {
+  if (!isRecord(value)) return null;
+  const candidate = isRecord(value.candidate) ? value.candidate : value.rejectedCandidate;
+  if (!isRecord(candidate) || typeof candidate.text !== 'string' || !Array.isArray(candidate.units)) return null;
+  try {
+    return createCandidateEnvelope(candidate as unknown as AiCoreV3CandidateEnvelope);
+  } catch {
+    return null;
+  }
+}
+
+function responseValidation(value: unknown): AggregateValidationResult | null {
+  if (!isRecord(value) || !isRecord(value.validation) || !isRecord(value.validation.phases)) return null;
+  return value.validation as unknown as AggregateValidationResult;
+}
+
+function responseEvidence(value: unknown, reason: string | null): SummaryV3TerminalEvidence {
+  const validation = responseValidation(value);
+  const candidate = responseCandidate(value);
+  const semantic = validationViolations(validation, 'semantic');
+  const language = validationViolations(validation, 'language_quality');
+  const accepted = isRecord(value) && value.ok === true;
+  const repairAttempted = isRecord(value) && value.repairAttempted === true;
+  const attempts = diagnosticAttempts(reason, value !== undefined && value !== null, accepted);
+  return immutableCopy({
+    candidatePresent: Boolean(candidate),
+    candidateHash: candidate ? hashSummaryV3Value(candidate.text) : null,
+    candidateLength: candidate ? candidate.text.length : null,
+    candidateUnitCount: candidate ? (candidate.units || []).length : null,
+    candidateUnitHashes: candidate ? (candidate.units || []).map((unit) => hashSummaryV3Value(unit.text)) : [],
+    candidateUnitLengths: candidate ? (candidate.units || []).map((unit) => unit.text.length) : [],
+    writer: attempts.writer,
+    evaluator: attempts.evaluator,
+    phases: {
+      structural: diagnosticPhaseStatus(validation, 'structural'),
+      semantic: diagnosticPhaseStatus(validation, 'semantic'),
+      language_quality: diagnosticPhaseStatus(validation, 'language_quality'),
+    },
+    semanticViolationCount: validation?.phases?.semantic ? semantic.length : null,
+    semanticViolationCodes: violationCodes(semantic),
+    languageQualityViolationCount: validation?.phases?.language_quality ? language.length : null,
+    languageQualityViolationCodes: violationCodes(language),
+    violationFactIdHashesByCode: violationHashMap([...semantic, ...language], 'factIds'),
+    violationEntryIdHashesByCode: violationHashMap([...semantic, ...language], 'entryIds'),
+    primaryValidationRejectionCode: safeDiagnosticCode(
+      [...semantic, ...language].map((item) => item.code).find((code) => safeDiagnosticCode(code)) || null,
+    ),
+    repairAttempted,
+    providerResponseKind: repairAttempted ? 'repair' : candidate ? 'provider' : 'none',
+  }) as SummaryV3TerminalEvidence;
+}
+
+function internalRejectionAudit(
+  value: unknown,
+  snapshot: SummaryV3GenerateOperationSnapshot | null,
+): SummaryV3InternalRejectionAudit | undefined {
+  if (!INTERNAL_AI_RESET_ENABLED || !snapshot || !isRecord(value) || value.ok === true) return undefined;
+  const candidate = responseCandidate(value);
+  const validation = responseValidation(value);
+  if (!candidate || !validation) return undefined;
+  const semantic = validationViolations(validation, 'semantic');
+  const language = validationViolations(validation, 'language_quality');
+  const evidence = responseEvidence(value, responseFailureReason(value));
+  return immutableCopy({
+    operationId: snapshot.operationId,
+    snapshotHash: snapshot.manifest.sourceSnapshotHash,
+    locale: snapshot.requestedLocale,
+    candidate: {
+      candidateId: candidate.candidateId,
+      text: candidate.text,
+      units: (candidate.units || []).map((unit) => ({ unitId: unit.unitId, text: unit.text })),
+    },
+    phases: {
+      structural: diagnosticPhaseStatus(validation, 'structural'),
+      semantic: diagnosticPhaseStatus(validation, 'semantic'),
+      language_quality: diagnosticPhaseStatus(validation, 'language_quality'),
+    },
+    evaluator: { semanticViolations: semantic, languageQualityViolations: language },
+    transport: {
+      writer: evidence.writer,
+      evaluator: evidence.evaluator,
+    },
+  }) as SummaryV3InternalRejectionAudit;
+}
+
+function routeHttpStatus(dependencies: SummaryV3GenerateAdapterDependencies): number | null {
+  try {
+    const status = dependencies.getRouteHttpStatus?.();
+    return Number.isInteger(status) && Number(status) >= 100 && Number(status) <= 599 ? Number(status) : null;
+  } catch {
+    return null;
+  }
+}
+
+function usageAfter(
+  input: SummaryV3GenerateAdapterInput,
+  dependencies: SummaryV3GenerateAdapterDependencies,
+  kind: 'handled_success' | 'handled_failure',
+): number {
+  try {
+    const count = dependencies.getUsageCount?.();
+    if (Number.isFinite(count) && Number(count) >= 0) return Number(count);
+  } catch { /* diagnostics only */ }
+  return input.usageCountBefore + (kind === 'handled_success' ? 1 : 0);
+}
+
+function emitTerminal(
+  input: SummaryV3GenerateAdapterInput,
+  dependencies: SummaryV3GenerateAdapterDependencies,
+  snapshot: SummaryV3GenerateOperationSnapshot | null,
+  result: { kind: 'handled_success' | 'handled_failure'; typedReason?: string },
+  rawResponse: unknown,
+): void {
+  try {
+    dependencies.onTerminal?.({
+      input,
+      snapshot,
+      kind: result.kind,
+      typedReason: result.kind === 'handled_failure' ? result.typedReason || 'unknown' : null,
+      evidence: responseEvidence(rawResponse, result.kind === 'handled_failure' ? result.typedReason || null : null),
+      ...(result.kind === 'handled_failure'
+        ? (() => {
+          const audit = internalRejectionAudit(rawResponse, snapshot);
+          return audit ? { internalRejectionAudit: audit } : {};
+        })()
+        : {}),
+      applyCommitted: result.kind === 'handled_success',
+      usageAfter: usageAfter(input, dependencies, result.kind),
+      routeHttpStatus: routeHttpStatus(dependencies),
+    });
+  } catch {
+    /* Terminal diagnostics are strictly observational. */
+  }
+}
+
 export async function runSummaryV3GenerateAdapter(
   input: SummaryV3GenerateAdapterInput,
   dependencies: SummaryV3GenerateAdapterDependencies,
@@ -602,19 +900,32 @@ export async function runSummaryV3GenerateAdapter(
   try {
     snapshot = captureSummaryV3GenerateOperationSnapshot(input);
   } catch (error) {
-    return { kind: 'handled_failure', typedReason: error instanceof Error ? error.message : 'snapshot_capture_failed' };
+    const result = { kind: 'handled_failure' as const, typedReason: error instanceof Error ? error.message : 'snapshot_capture_failed' };
+    emitTerminal(input, dependencies, null, result, undefined);
+    return result;
   }
   let raw: unknown;
   try {
     raw = await dependencies.request({ action: SUMMARY_V3_GENERATE_ACTION, manifest: snapshot.manifest });
   } catch {
-    return { kind: 'handled_failure', typedReason: 'provider_request_failed' };
+    const result = { kind: 'handled_failure' as const, typedReason: 'provider_request_failed' };
+    emitTerminal(input, dependencies, snapshot, result, undefined);
+    return result;
   }
   const response = parseSummaryV3GenerateSuccessResponse(raw);
-  if (!response) return { kind: 'handled_failure', typedReason: responseFailureReason(raw) };
+  if (!response) {
+    const result = { kind: 'handled_failure' as const, typedReason: responseFailureReason(raw) };
+    emitTerminal(input, dependencies, snapshot, result, raw);
+    return result;
+  }
   try {
-    return applySummaryV3GenerateTransaction(snapshot, response, dependencies);
+    const result = applySummaryV3GenerateTransaction(snapshot, response, dependencies);
+    if (result.kind === 'not_applicable') return result;
+    emitTerminal(input, dependencies, snapshot, result, raw);
+    return result;
   } catch {
-    return { kind: 'handled_failure', typedReason: 'client_verification_exception' };
+    const result = { kind: 'handled_failure' as const, typedReason: 'client_verification_exception' };
+    emitTerminal(input, dependencies, snapshot, result, raw);
+    return result;
   }
 }

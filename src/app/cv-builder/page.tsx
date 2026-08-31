@@ -52,7 +52,11 @@ import {
   ExperienceAiDiagnosticSession,
   routeExperienceV3PageTerminal,
 } from '@/lib/cv-experience-ai-diagnostics';
-import { SummaryAiDiagnosticSession, resolveAuthoritativeVisibleSummaryText } from '@/lib/cv-summary-ai-diagnostics';
+import {
+  SummaryAiDiagnosticSession,
+  clearSummaryV3InternalRejectionAudit,
+  resolveAuthoritativeVisibleSummaryText,
+} from '@/lib/cv-summary-ai-diagnostics';
 import { resolveSummaryFinalizeClientOutcome } from '@/lib/cv-summary-noop-ui';
 import { INTERNAL_AI_RESET_ENABLED } from '@/lib/build-channel';
 import {
@@ -1250,6 +1254,24 @@ export default function CVBuilderPage() {
     const summaryV3Enabled = isAiCoreV3Enabled({
       AI_CORE_V3_ENABLED: process.env.NEXT_PUBLIC_AI_CORE_V3_ENABLED,
     });
+    // One Summary diagnostic session owns the entire button press, including
+    // an M4 terminal outcome. This must exist before the adapter can finish so
+    // persistence is complete before the user-facing toast.
+    clearSummaryV3InternalRejectionAudit();
+    const summaryDiag = new SummaryAiDiagnosticSession({
+      uiLocale: locale,
+      requestedLocale,
+      contentLocale: previousContentLocale || liveCvAtPress.contentLocale || null,
+      templateId: String(liveCvAtPress.templateId || ''),
+      gender: liveCvAtPress.personal.gender || '',
+      requestId: reqCtx.requestId,
+      usageCountBefore: countBefore,
+      operationMode,
+      jobContextHash: summaryJobContext.key,
+    });
+    summaryDiag.recordCvSnapshot(liveCvAtPress, liveSummaryAtPress);
+    let summaryV3RouteHttpStatus: number | null = null;
+    let summaryV3TerminalEvent: import('@/lib/ai-core-v3/summary-generate').SummaryV3GenerateTerminalEvent | null = null;
     const summaryV3Result = summaryV3Enabled
       ? await runSummaryV3GenerateAdapter({
         enabled: true,
@@ -1267,7 +1289,7 @@ export default function CVBuilderPage() {
         usageCountBefore: countBefore,
       }, {
         request: async ({ manifest }) => {
-          const { data } = await apiFetch<unknown>('/api/generate', {
+          const { data, response } = await apiFetch<unknown>('/api/generate', {
             body: {
               action: SUMMARY_V3_GENERATE_ACTION,
               proToken,
@@ -1276,6 +1298,7 @@ export default function CVBuilderPage() {
             },
             signal: controller.signal,
           });
+          summaryV3RouteHttpStatus = response.status;
           return data;
         },
         getLiveState: () => ({
@@ -1307,6 +1330,11 @@ export default function CVBuilderPage() {
         },
         persistCv: persistCurrentCvTransactionally,
         incrementUsage: recordProAiSuccess,
+        getUsageCount: getProAiUsageCount,
+        getRouteHttpStatus: () => summaryV3RouteHttpStatus,
+        onTerminal: (event) => {
+          summaryV3TerminalEvent = event;
+        },
       })
       : { kind: 'not_applicable' as const };
     if (summaryV3Result.kind !== 'not_applicable') {
@@ -1322,23 +1350,30 @@ export default function CVBuilderPage() {
           : { code: 'generation_validation_failed', httpStatus: 422 },
         responseSource: summaryV3Result.kind === 'handled_success' ? 'provider' : 'blocked',
       });
+      if (summaryV3TerminalEvent) {
+        summaryDiag.recordM4Terminal(summaryV3TerminalEvent);
+      } else {
+        summaryDiag.patch({
+          m4Operation: 'summary_v3_generate',
+          m4SourceWasEmpty: liveSummaryAtPress === '',
+          m4OwnershipResult: 'owned',
+          m4RouteHttpStatus: summaryV3RouteHttpStatus,
+          m4V2FallthroughCount: 0,
+          finalTypedFailureReason: summaryV3Result.kind === 'handled_failure' ? summaryV3Result.typedReason : null,
+          countedAsSuccess: summaryV3Result.kind === 'handled_success',
+          visibleApplySucceeded: summaryV3Result.kind === 'handled_success',
+          usageCountAfter: summaryV3Result.kind === 'handled_success' ? countBefore + 1 : countBefore,
+          finalCandidateSource: summaryV3Result.kind === 'handled_success' ? 'v3_writer_evaluator' : 'none',
+          finalPostconditionsPassed: summaryV3Result.kind === 'handled_success',
+        });
+        summaryDiag.stage('m4_terminal', 'ok');
+      }
+      await terminalizeAiDiagnosticSession(summaryDiag);
       setIsSummaryGenerating(false);
       if (summaryV3Result.kind === 'handled_success') toast.success(t.cv.genSuccess);
       else toast.error(aiErrorMessage('generation_validation_failed', locale));
       return;
     }
-    const summaryDiag = new SummaryAiDiagnosticSession({
-      uiLocale: locale,
-      requestedLocale,
-      contentLocale: previousContentLocale || liveCvAtPress.contentLocale || null,
-      templateId: String(liveCvAtPress.templateId || ''),
-      gender: liveCvAtPress.personal.gender || '',
-      requestId: reqCtx.requestId,
-      usageCountBefore: countBefore,
-      operationMode,
-      jobContextHash: summaryJobContext.key,
-    });
-    summaryDiag.recordCvSnapshot(liveCvAtPress, liveSummaryAtPress);
     try {
       // Shared deterministic duration — never let each locale estimate independently.
       const durationSnapshot = buildExperienceDurationSnapshot(liveCvAtPress.experience, referenceDateIso);

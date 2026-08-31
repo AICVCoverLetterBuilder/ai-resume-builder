@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { translations, type Locale } from '../../i18n/translations';
 import type { CVData } from '../../types';
+import { SUMMARY_AI_DIAG_STORAGE_KEY } from '../../cv-summary-ai-diagnostics';
 import {
   SUMMARY_V3_GENERATE_ACTION,
   captureSummaryV3GenerateOperationSnapshot,
@@ -76,6 +77,7 @@ async function actualGeneralSummaryFlow(options: {
   cleanup(); localStorage.clear(); sessionStorage.clear();
   testLocale = options.locale ?? 'en'; runtimeCv = pageCv(options.summary ?? '', options.contentLocale ?? 'en'); writes = [];
   const kind = options.kind ?? 'handled_failure';
+  let toastSawSummaryRecord = false;
   m4Adapter.mockReset().mockResolvedValue(kind === 'handled_failure'
     ? { kind, typedReason: 'page_m4_rejected' } : { kind });
   m2Adapter.mockReset().mockResolvedValue({ kind: 'not_applicable' });
@@ -85,6 +87,9 @@ async function actualGeneralSummaryFlow(options: {
     response: { ok: false, status: 502, headers: { get: () => null } },
   });
   usageIncrement.mockReset(); toastSuccess.mockReset(); toastError.mockReset();
+  toastError.mockImplementation(() => {
+    toastSawSummaryRecord = Boolean(localStorage.getItem(SUMMARY_AI_DIAG_STORAGE_KEY));
+  });
   process.env.NEXT_PUBLIC_AI_CORE_V3_ENABLED = options.enabled === false ? 'false' : 'true';
   process.env.AI_CORE_V3_ENABLED = process.env.NEXT_PUBLIC_AI_CORE_V3_ENABLED;
   Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
@@ -110,6 +115,7 @@ async function actualGeneralSummaryFlow(options: {
       usageCalls: usageIncrement.mock.calls.length,
       writes: writes.length,
       visible: editor.value,
+      toastSawSummaryRecord,
     };
   } finally {
     cleanup();
@@ -224,6 +230,10 @@ describe('M4 actual page routing and direct server gate', () => {
   });
   it('15. M4 handled_success terminates actual page flow before V2', async () => {
     const run = await actualGeneralSummaryFlow({ kind: 'handled_success' }); expect(run.legacyCalls).toBe(0);
+  });
+  it('15b. M4 failure persists the Summary terminal record before the toast', async () => {
+    const run = await actualGeneralSummaryFlow({ kind: 'handled_failure' });
+    expect(run.toastSawSummaryRecord).toBe(true);
   });
   it('16. only not_applicable reaches the real legacy continuation seam exactly once', async () => {
     const run = await actualGeneralSummaryFlow({ kind: 'not_applicable' }); expect(run.adapterCalls).toBe(1); expect(run.legacyCalls).toBe(1);

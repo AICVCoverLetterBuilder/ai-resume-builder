@@ -3,18 +3,18 @@
 /**
  * Internal-only Summary AI diagnostics UI. Same DCE pattern as Experience panel.
  */
-import { useCallback, useMemo, useSyncExternalStore } from 'react';
+import { useCallback, useMemo, useState, useSyncExternalStore } from 'react';
 import { toast } from 'sonner';
 import {
   clearSummaryAiDiagnostics,
+  clearSummaryAiDiagnosticHistory,
   copySummaryAiDiagnosticsToClipboard,
+  copySummaryV3InternalRejectionAuditToClipboard,
+  getLatestSummaryV3InternalRejectionAudit,
   getLatestSummaryAiDiagnostic,
   summarizeSummaryAiDiagnostic,
 } from '@/lib/cv-summary-ai-diagnostics';
-import {
-  clearCvAiDiagnosticHistory,
-  getCvAiDiagnosticHistory,
-} from '@/lib/cv-ai-diagnostics-contract';
+import { getCvAiDiagnosticHistory } from '@/lib/cv-ai-diagnostics-contract';
 import {
   CV_AI_DIAGNOSTICS_LIFECYCLE_MARKER,
   getCvAiDiagnosticsLifecycleRevision,
@@ -60,6 +60,12 @@ export function InternalSummaryAiDiagnosticsPanel({
     return getLatestSummaryAiDiagnostic();
   }, [refreshToken, rev]);
   const summary = useMemo(() => summarizeSummaryAiDiagnostic(full), [full]);
+  const rejectedAudit = useMemo(() => {
+    void rev;
+    void refreshToken;
+    return getLatestSummaryV3InternalRejectionAudit();
+  }, [rev, refreshToken]);
+  const [showRejectedAudit, setShowRejectedAudit] = useState(false);
   const history = useMemo(() => {
     void rev;
     void refreshToken;
@@ -79,8 +85,15 @@ export function InternalSummaryAiDiagnosticsPanel({
   }, []);
 
   const onClearHistory = useCallback(() => {
-    clearCvAiDiagnosticHistory('summary');
+    clearSummaryAiDiagnosticHistory();
     toast.success('Summary diagnostic history cleared');
+  }, []);
+
+  const onCopyRejectedAudit = useCallback(async () => {
+    const ok = await copySummaryV3InternalRejectionAuditToClipboard(
+      'Warning: this copy contains CV text and must not be posted publicly.',
+    );
+    toast[ok ? 'success' : 'error'](ok ? 'Rejected Summary AI audit copied' : 'Could not copy rejected Summary AI audit');
   }, []);
 
   const warnings: string[] = [];
@@ -118,7 +131,7 @@ export function InternalSummaryAiDiagnosticsPanel({
         <dl className="mt-2 space-y-1 text-xs text-muted-foreground">
           <div>
             <dt className="inline font-medium text-foreground">operation: </dt>
-            <dd className="inline">summary</dd>
+            <dd className="inline">{summary.operationKind === 'summary' && full?.m4Operation ? full.m4Operation : summary.operationKind}</dd>
           </div>
           <div>
             <dt className="inline font-medium text-foreground">timestamp: </dt>
@@ -178,6 +191,17 @@ export function InternalSummaryAiDiagnosticsPanel({
             <dt className="inline font-medium text-foreground">applied: </dt>
             <dd className="inline">{summary.applied ? 'yes' : 'no'}</dd>
           </div>
+          {full?.m4Operation ? (
+            <>
+              <div><dt className="inline font-medium text-foreground">M4 writer: </dt><dd className="inline">{full.m4Writer?.result || 'unknown'} ({full.m4Writer?.attempted === true ? 'attempted' : full.m4Writer?.attempted === false ? 'not attempted' : 'unknown'})</dd></div>
+              <div><dt className="inline font-medium text-foreground">M4 evaluator: </dt><dd className="inline">{full.m4Evaluator?.result || 'unknown'} ({full.m4Evaluator?.attempted === true ? 'attempted' : full.m4Evaluator?.attempted === false ? 'not attempted' : 'unknown'})</dd></div>
+              <div><dt className="inline font-medium text-foreground">M4 phases: </dt><dd className="inline">structural {full.m4Phases?.structural || 'n/a'} · semantic {full.m4Phases?.semantic || 'n/a'} · language {full.m4Phases?.language_quality || 'n/a'}</dd></div>
+              <div><dt className="inline font-medium text-foreground">M4 candidate evidence: </dt><dd className="inline">{full.m4CandidatePresent ? `${full.m4CandidateUnitCount ?? 0} units / ${full.m4CandidateLength ?? 0} chars` : 'none'}</dd></div>
+              <div><dt className="inline font-medium text-foreground">M4 available/required/covered: </dt><dd className="inline">{full.m4AvailableFactCount ?? 'n/a'} / {full.m4RequiredFactCount ?? 'n/a'} / {full.m4CoveredFactCount ?? 'n/a'}</dd></div>
+              <div><dt className="inline font-medium text-foreground">M4 apply/persistence/fallthrough: </dt><dd className="inline">{full.m4ApplyCommitted ? 'committed' : 'not committed'} / {full.m4PersistenceResult || 'n/a'} / {full.m4V2FallthroughCount ?? 0}</dd></div>
+              <div><dt className="inline font-medium text-foreground">M4 usage: </dt><dd className="inline">{full.usageCountBefore} → {full.usageCountAfter} (Δ {full.m4UsageDelta ?? (full.usageCountAfter - full.usageCountBefore)})</dd></div>
+            </>
+          ) : null}
         </dl>
       ) : (
         <p className="mt-2 text-xs text-muted-foreground">
@@ -206,6 +230,29 @@ export function InternalSummaryAiDiagnosticsPanel({
         >
           {SUMMARY_AI_COPY_DIAGNOSTICS_LABEL}
         </button>
+      ) : null}
+      {rejectedAudit ? (
+        <div className="mt-3" data-testid="summary-ai-rejected-audit">
+          <button
+            type="button"
+            className="min-h-11 w-full rounded-md border border-border px-3 py-2 text-left text-xs font-medium pointer-events-auto"
+            onClick={() => setShowRejectedAudit((value) => !value)}
+          >
+            {showRejectedAudit ? 'Hide rejected Summary AI audit' : 'Show rejected Summary AI audit'}
+          </button>
+          {showRejectedAudit ? (
+            <div className="mt-2 text-xs text-amber-800 dark:text-amber-300">
+              <p>Warning: this audit contains CV text and must not be posted publicly.</p>
+              <button
+                type="button"
+                className="mt-2 min-h-11 w-full rounded-md border border-border px-3 py-2 text-left text-xs font-medium pointer-events-auto"
+                onClick={onCopyRejectedAudit}
+              >
+                Copy rejected Summary AI audit — contains CV text
+              </button>
+            </div>
+          ) : null}
+        </div>
       ) : null}
       <button
         type="button"

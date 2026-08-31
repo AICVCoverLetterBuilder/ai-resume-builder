@@ -1,6 +1,7 @@
 import { createCandidateEnvelope } from './candidate-envelope';
 import type { AiCoreV3CandidateEnvelope } from './contracts';
 import { immutableCopy } from './immutability';
+import { INTERNAL_AI_RESET_ENABLED } from '../build-channel';
 import {
   SUMMARY_V3_GENERATE_ACTION,
   hashSummaryV3Value,
@@ -57,6 +58,7 @@ function failure(
   typedReason: string,
   validation?: AggregateValidationResult,
   repairAttempted?: boolean,
+  rejectedCandidate?: AiCoreV3CandidateEnvelope,
 ): SummaryV3GenerateResponse {
   return immutableCopy({
     ok: false as const,
@@ -64,6 +66,7 @@ function failure(
     typedReason,
     ...(validation ? { validation } : {}),
     ...(repairAttempted !== undefined ? { repairAttempted } : {}),
+    ...(INTERNAL_AI_RESET_ENABLED && rejectedCandidate ? { rejectedCandidate } : {}),
   }) as SummaryV3GenerateResponse;
 }
 
@@ -357,18 +360,18 @@ export async function executeSummaryV3GenerateServer(
       repairAttempted: false }) as SummaryV3GenerateResponse;
   }
   const violations = primary.validation.violations;
-  if (violations.length === 0) return failure('validation_rejected', primary.validation, false);
+  if (violations.length === 0) return failure('validation_rejected', primary.validation, false, primary.candidate);
   let repairRaw: string;
   try {
     repairRaw = await transports.write(buildSummaryV3RepairPrompt(manifest, primary.candidate, violations));
   } catch {
-    return failure('repair_provider_failed', primary.validation, true);
+    return failure('repair_provider_failed', primary.validation, true, primary.candidate);
   }
   const repairOutput = parseSummaryV3WriterOutput(repairRaw, manifest);
-  if (!repairOutput) return failure('repair_output_malformed', primary.validation, true);
+  if (!repairOutput) return failure('repair_output_malformed', primary.validation, true, primary.candidate);
   const repair = await evaluateCandidate(manifest, repairOutput, transports);
-  if (typeof repair === 'string') return failure(`repair_${repair}`, primary.validation, true);
-  if (repair.validation.decision !== 'accept') return failure('repair_validation_rejected', repair.validation, true);
+  if (typeof repair === 'string') return failure(`repair_${repair}`, primary.validation, true, primary.candidate);
+  if (repair.validation.decision !== 'accept') return failure('repair_validation_rejected', repair.validation, true, repair.candidate);
   return immutableCopy({ ok: true as const, action: SUMMARY_V3_GENERATE_ACTION,
     providerOutput: repairOutput, candidate: repair.candidate, validation: repair.validation,
     repairAttempted: true }) as SummaryV3GenerateResponse;

@@ -166,9 +166,14 @@ import {
   maybeTruncateDiagnosticPayload,
   sanitizeCvAiDiagnosticMarkerPatch,
   SUMMARY_AI_DIAG_MARKER,
+  clearCvAiDiagnosticHistory,
   type CvAiCandidateLineageRecord,
 } from './cv-ai-diagnostics-contract';
 import { INTERNAL_AI_RESET_ENABLED } from './build-channel';
+import type {
+  SummaryV3GenerateTerminalEvent,
+  SummaryV3InternalRejectionAudit,
+} from './ai-core-v3/summary-generate';
 import { getApiBaseUrl } from './api';
 import {
   emitCvAiDiagnosticsChanged,
@@ -672,9 +677,41 @@ export type SummaryAiDiagnosticTrace = {
   diagnosticPayloadTruncated?: boolean;
   diagnosticPrivacyViolations?: string[];
   privacyCheckPassed?: boolean;
+  /** M4 Summary V3 terminal evidence; safe metadata only. */
+  m4Operation?: 'summary_v3_generate';
+  m4SourceWasEmpty?: boolean;
+  m4AvailableFactCount?: number | null;
+  m4RequiredFactCount?: number | null;
+  m4CoveredFactCount?: number | null;
+  m4OwnershipResult?: 'owned';
+  m4RouteHttpStatus?: number | null;
+  m4Writer?: SummaryV3GenerateTerminalEvent['evidence']['writer'];
+  m4Evaluator?: SummaryV3GenerateTerminalEvent['evidence']['evaluator'];
+  m4Phases?: SummaryV3GenerateTerminalEvent['evidence']['phases'];
+  m4CandidatePresent?: boolean;
+  m4CandidateHash?: string | null;
+  m4CandidateLength?: number | null;
+  m4CandidateUnitCount?: number | null;
+  m4CandidateUnitHashes?: readonly string[];
+  m4CandidateUnitLengths?: readonly number[];
+  m4SemanticViolationCount?: number | null;
+  m4SemanticViolationCodes?: readonly string[];
+  m4LanguageQualityViolationCount?: number | null;
+  m4LanguageQualityViolationCodes?: readonly string[];
+  m4ViolationFactIdHashesByCode?: Readonly<Record<string, readonly string[]>>;
+  m4ViolationEntryIdHashesByCode?: Readonly<Record<string, readonly string[]>>;
+  m4PrimaryValidationRejectionCode?: string | null;
+  m4RepairAttempted?: boolean;
+  m4ApplyAuthorized?: boolean;
+  m4ApplyAttempted?: boolean;
+  m4ApplyCommitted?: boolean;
+  m4PersistenceResult?: 'succeeded' | 'failed' | 'not_attempted' | 'unknown';
+  m4V2FallthroughCount?: 0;
+  m4UsageDelta?: number;
 };
 
 let latestSummaryTrace: SummaryAiDiagnosticTrace | null = null;
+let latestSummaryV3InternalRejectionAudit: SummaryV3InternalRejectionAudit | null = null;
 
 export type SummaryAiDiagSessionInput = {
   uiLocale: string;
@@ -2423,6 +2460,101 @@ export class SummaryAiDiagnosticSession {
   }
 
   /**
+   * Records one complete M4 Summary V3 terminal outcome. Only bounded hashes,
+   * counts, statuses, and finite codes enter the persisted trace; any exact
+   * rejected candidate is routed to the separate memory-only audit below.
+   */
+  recordM4Terminal(event: SummaryV3GenerateTerminalEvent): void {
+    const rawReason = event.kind === 'handled_failure' ? String(event.typedReason || '') : '';
+    const reason = rawReason && /^[a-z][a-z0-9_-]{0,63}$/u.test(rawReason)
+      ? rawReason
+      : rawReason
+        ? 'unknown_terminal_failure'
+        : null;
+    const acceptedResponse = event.evidence.candidatePresent
+      && event.evidence.writer.attempted === true
+      && event.evidence.evaluator.attempted === true;
+    const applyFailure = ['visible_readback_failed', 'rollback_failed', 'persistence_failed',
+      'usage_increment_failed', 'state_write_failed', 'preview_projection_failed'].includes(reason || '');
+    const applyAuthorized = acceptedResponse && (event.kind === 'handled_success' || applyFailure);
+    const applyAttempted = applyAuthorized && (event.kind === 'handled_success' || applyFailure);
+    const persistenceResult: SummaryAiDiagnosticTrace['m4PersistenceResult'] = event.kind === 'handled_success'
+      ? 'succeeded'
+      : reason === 'persistence_failed' || reason === 'rollback_failed'
+        ? 'failed'
+        : applyAttempted
+          ? 'unknown'
+          : 'not_attempted';
+    const phaseStatus = event.evidence.phases;
+    const writerStatus = event.evidence.writer.result;
+    const evaluatorStatus = event.evidence.evaluator.result;
+    this.patch({
+      m4Operation: 'summary_v3_generate',
+      m4SourceWasEmpty: String(event.input.exactVisibleSummary || '').trim() === '',
+      m4AvailableFactCount: event.snapshot
+        ? event.snapshot.manifest.selectedEntries.reduce((sum, entry) => sum + entry.facts.length, 0)
+        : null,
+      m4RequiredFactCount: event.snapshot
+        ? event.snapshot.manifest.selectedEntries.reduce((sum, entry) => sum + entry.facts.length, 0)
+        : null,
+      m4CoveredFactCount: null,
+      m4OwnershipResult: 'owned',
+      m4RouteHttpStatus: event.routeHttpStatus,
+      m4Writer: event.evidence.writer,
+      m4Evaluator: event.evidence.evaluator,
+      m4Phases: phaseStatus,
+      m4CandidatePresent: event.evidence.candidatePresent,
+      m4CandidateHash: event.evidence.candidateHash,
+      m4CandidateLength: event.evidence.candidateLength,
+      m4CandidateUnitCount: event.evidence.candidateUnitCount,
+      m4CandidateUnitHashes: [...event.evidence.candidateUnitHashes],
+      m4CandidateUnitLengths: [...event.evidence.candidateUnitLengths],
+      m4SemanticViolationCount: event.evidence.semanticViolationCount,
+      m4SemanticViolationCodes: [...event.evidence.semanticViolationCodes],
+      m4LanguageQualityViolationCount: event.evidence.languageQualityViolationCount,
+      m4LanguageQualityViolationCodes: [...event.evidence.languageQualityViolationCodes],
+      m4ViolationFactIdHashesByCode: event.evidence.violationFactIdHashesByCode,
+      m4ViolationEntryIdHashesByCode: event.evidence.violationEntryIdHashesByCode,
+      m4PrimaryValidationRejectionCode: event.evidence.primaryValidationRejectionCode,
+      m4RepairAttempted: event.evidence.repairAttempted,
+      m4ApplyAuthorized: applyAuthorized,
+      m4ApplyAttempted: applyAttempted,
+      m4ApplyCommitted: event.applyCommitted,
+      m4PersistenceResult: persistenceResult,
+      m4V2FallthroughCount: 0,
+      m4UsageDelta: event.usageAfter - Number(this.draft.usageCountBefore ?? 0),
+      finalCandidateSource: event.applyCommitted ? 'v3_writer_evaluator' : 'none',
+      providerCandidatePresent: event.evidence.candidatePresent,
+      providerCandidateHash: event.evidence.candidateHash,
+      providerResponseKind: event.evidence.providerResponseKind,
+      providerHttpStatus: event.routeHttpStatus,
+      repairAttempted: event.evidence.repairAttempted,
+      visibleApplySucceeded: event.applyCommitted,
+      countedAsSuccess: event.applyCommitted,
+      usageCountAfter: event.usageAfter,
+      finalPostconditionsPassed: event.applyCommitted,
+      finalTypedFailureReason: reason,
+      rejectionStage: event.applyCommitted ? null : (reason || 'm4_terminal'),
+      raceGuardResult: event.applyCommitted ? 'ok' : 'skipped',
+    });
+    this.stage('m4_route', 'ok');
+    this.stage('m4_writer', writerStatus === 'succeeded' ? 'ok' : writerStatus === 'not_attempted' ? 'skipped' : 'fail', writerStatus);
+    this.stage('m4_evaluator', evaluatorStatus === 'succeeded' ? 'ok' : evaluatorStatus === 'not_attempted' ? 'skipped' : 'fail', evaluatorStatus);
+    const phaseFailed = phaseStatus.structural === 'failed' || phaseStatus.semantic === 'failed' || phaseStatus.language_quality === 'failed';
+    const phaseEvaluated = phaseStatus.structural !== 'not_evaluated'
+      || phaseStatus.semantic !== 'not_evaluated'
+      || phaseStatus.language_quality !== 'not_evaluated';
+    this.stage('m4_validation', phaseFailed ? 'fail' : phaseEvaluated ? 'ok' : 'skipped', phaseFailed ? reason || undefined : undefined);
+    this.stage('visible_apply', event.applyCommitted ? 'ok' : 'skipped', event.applyCommitted ? undefined : (reason || 'not_reached'));
+    this.stage('post_write_validation', event.applyCommitted ? 'ok' : 'skipped', event.applyCommitted ? undefined : (reason || 'not_reached'));
+    this.stage('usage_accounting', event.applyCommitted ? 'ok' : 'skipped', event.applyCommitted ? undefined : 'not_reached');
+    this.stage('m4_terminal', 'ok', reason || undefined);
+    if (event.kind === 'handled_failure' && event.internalRejectionAudit) {
+      recordSummaryV3InternalRejectionAudit(event.internalRejectionAudit);
+    }
+  }
+
+  /**
    * Truthful terminal state when localization fails before any Summary candidate
    * exists. Candidate/apply-only stages are skipped, not failed.
    */
@@ -3553,6 +3685,74 @@ export function formatSummaryAiDiagnosticForCopy(trace: SummaryAiDiagnosticTrace
   return JSON.stringify(trace, null, 2);
 }
 
+/** Memory-only rejected Summary evidence; compiled away from public builds. */
+export function recordSummaryV3InternalRejectionAudit(
+  audit: SummaryV3InternalRejectionAudit,
+): SummaryV3InternalRejectionAudit | null {
+  if (!INTERNAL_AI_RESET_ENABLED) return null;
+  latestSummaryV3InternalRejectionAudit = audit;
+  try {
+    emitCvAiDiagnosticsChanged({ kind: 'summary', action: 'commit' });
+  } catch {
+    /* diagnostics only */
+  }
+  return audit;
+}
+
+export function getLatestSummaryV3InternalRejectionAudit(): SummaryV3InternalRejectionAudit | null {
+  return INTERNAL_AI_RESET_ENABLED ? latestSummaryV3InternalRejectionAudit : null;
+}
+
+/** Clears sensitive in-memory rejection evidence without touching persisted trace/history. */
+export function clearSummaryV3InternalRejectionAudit(): void {
+  const hadAudit = latestSummaryV3InternalRejectionAudit !== null;
+  latestSummaryV3InternalRejectionAudit = null;
+  if (hadAudit) {
+    try {
+      emitCvAiDiagnosticsChanged({ kind: 'summary', action: 'clear_latest' });
+    } catch {
+      /* diagnostics only */
+    }
+  }
+}
+
+export function formatSummaryV3InternalRejectionAuditForCopy(
+  audit: SummaryV3InternalRejectionAudit,
+  warning: string,
+): string {
+  return `${warning}\n\n${JSON.stringify(audit, null, 2)}\n`;
+}
+
+export async function copySummaryV3InternalRejectionAuditToClipboard(
+  warning: string,
+): Promise<boolean> {
+  const audit = getLatestSummaryV3InternalRejectionAudit();
+  if (!audit) return false;
+  const text = formatSummaryV3InternalRejectionAuditForCopy(audit, warning);
+  try {
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    /* fall through */
+  }
+  try {
+    if (typeof document === 'undefined') return false;
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.left = '-9999px';
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
 export async function copySummaryAiDiagnosticsToClipboard(): Promise<boolean> {
   const trace = getLatestSummaryAiDiagnostic();
   if (!trace) return false;
@@ -3570,6 +3770,7 @@ export async function copySummaryAiDiagnosticsToClipboard(): Promise<boolean> {
 
 export function clearSummaryAiDiagnosticsForTests(): void {
   latestSummaryTrace = null;
+  latestSummaryV3InternalRejectionAudit = null;
   try {
     if (typeof localStorage !== 'undefined') {
       localStorage.removeItem(SUMMARY_AI_DIAG_STORAGE_KEY);
@@ -3587,6 +3788,12 @@ export function clearSummaryAiDiagnostics(): void {
   } catch {
     /* ignore */
   }
+}
+
+/** Clear Summary history and the memory-only rejected-candidate audit together. */
+export function clearSummaryAiDiagnosticHistory(): void {
+  clearSummaryV3InternalRejectionAudit();
+  clearCvAiDiagnosticHistory('summary');
 }
 
 export function summarizeSummaryAiDiagnostic(trace: SummaryAiDiagnosticTrace | null): {

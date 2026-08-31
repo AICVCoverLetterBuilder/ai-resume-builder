@@ -20,6 +20,7 @@ import {
   type SummaryV3Manifest,
   type SummaryV3WriterOutput,
 } from '..';
+import { M4_SUMMARY_GENERATE_DEVICE_OBSERVATION } from '../fixtures/m4-summary-generate-device-observation';
 
 function cv(): CVData {
   return {
@@ -433,5 +434,60 @@ describe('M4 transactional apply, preview, rollback, and usage', () => {
     });
     expect(result).toEqual({ kind: 'handled_failure', typedReason: 'validation_rejected' });
     expect(writeCv).not.toHaveBeenCalled(); expect(persistCv).not.toHaveBeenCalled(); expect(incrementUsage).not.toHaveBeenCalled();
+  });
+
+  it('87. M4 terminal seam emits one safe success record with candidate evidence', async () => {
+    const captured = snapshot(); const events: unknown[] = []; let live = cv();
+    const result = await runSummaryV3GenerateAdapter(input(), {
+      request: vi.fn(async () => accepted(captured.manifest)),
+      getLiveState: () => ({ cv: live, requestedLocale: 'en', uiLocale: 'en', storedContentLocale: 'en', exactVisibleSummary: live.summary,
+        referenceDateIso: captured.referenceDateIso, jobContextHash: 'context-m4' }),
+      getActiveOperationId: () => 'm4-operation', writeCv: (next) => { live = next; }, projectPreviewSummary: (next) => next.summary,
+      persistCv: vi.fn(() => true), incrementUsage: vi.fn(), getUsageCount: () => 5,
+      getRouteHttpStatus: () => 200, onTerminal: (event) => events.push(event),
+    });
+    expect(result).toEqual({ kind: 'handled_success' });
+    expect(events).toHaveLength(1);
+    const event = events[0] as import('../summary-generate').SummaryV3GenerateTerminalEvent;
+    expect(event.evidence.candidatePresent).toBe(true);
+    expect(event.evidence.candidateUnitCount).toBe(3);
+    expect(event.evidence.writer.result).toBe('succeeded');
+    expect(event.evidence.evaluator.result).toBe('succeeded');
+    expect(event.applyCommitted).toBe(true);
+    expect(event.routeHttpStatus).toBe(200);
+    expect(JSON.stringify(event.evidence)).not.toContain(event.internalRejectionAudit?.candidate.text || 'never');
+  });
+
+  it('88. M4 validation rejection emits candidate audit without leaking prose into safe evidence', async () => {
+    const captured = snapshot(); const events: unknown[] = [];
+    const result = await runSummaryV3GenerateAdapter(input(), {
+      request: vi.fn(async () => executeSummaryV3GenerateServer({ manifest: captured.manifest }, {
+        write: vi.fn(async () => writerJson(captured.manifest)),
+        evaluate: vi.fn(async () => evaluatorJson(captured.manifest, 'semantic', 'unsupported_metric')),
+      })),
+      getLiveState: () => ({ cv: cv(), requestedLocale: 'en', uiLocale: 'en', storedContentLocale: 'en', exactVisibleSummary: '',
+        referenceDateIso: captured.referenceDateIso, jobContextHash: 'context-m4' }),
+      getActiveOperationId: () => 'm4-operation', writeCv: vi.fn(), projectPreviewSummary: (next) => next.summary,
+      persistCv: vi.fn(() => true), incrementUsage: vi.fn(), onTerminal: (event) => events.push(event),
+    });
+    expect(result).toEqual({ kind: 'handled_failure', typedReason: 'repair_validation_rejected' });
+    expect(events).toHaveLength(1);
+    const event = events[0] as import('../summary-generate').SummaryV3GenerateTerminalEvent;
+    expect(event.evidence.semanticViolationCodes).toContain('unsupported_metric');
+    expect(event.applyCommitted).toBe(false);
+    if (event.internalRejectionAudit) {
+      expect(event.evidence.candidatePresent).toBe(true);
+      expect(event.internalRejectionAudit.candidate.text).toBeTruthy();
+      expect(event.internalRejectionAudit.evaluator.semanticViolations[0]?.code).toBe('unsupported_metric');
+      expect(JSON.stringify(event.evidence)).not.toContain(event.internalRejectionAudit.candidate.text);
+    } else {
+      expect(event.evidence.candidatePresent).toBe(false);
+    }
+  });
+
+  it('89. device observation fixture is non-PII and captures the pre-fix false-green', () => {
+    expect(M4_SUMMARY_GENERATE_DEVICE_OBSERVATION.operation).toBe('summary_v3_generate');
+    expect(M4_SUMMARY_GENERATE_DEVICE_OBSERVATION.diagnosticPresentBeforeToast).toBe(false);
+    expect(JSON.stringify(M4_SUMMARY_GENERATE_DEVICE_OBSERVATION)).not.toMatch(/@|Ana|Example|Current/u);
   });
 });

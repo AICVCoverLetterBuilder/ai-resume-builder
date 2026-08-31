@@ -10,10 +10,12 @@ import React from 'react';
 import {
   clearSummaryAiDiagnostics,
   clearSummaryAiDiagnosticsForTests,
+  getLatestSummaryV3InternalRejectionAudit,
   getLatestSummaryAiDiagnostic,
   SummaryAiDiagnosticSession,
   SUMMARY_AI_DIAG_STORAGE_KEY,
 } from '@/lib/cv-summary-ai-diagnostics';
+import type { SummaryV3GenerateTerminalEvent } from '@/lib/ai-core-v3/summary-generate';
 import {
   clearExperienceAiDiagnostics,
   clearExperienceAiDiagnosticsForTests,
@@ -337,6 +339,46 @@ describe('CV AI diagnostics lifecycle', () => {
     commitMinimalSummary({ requestId: 'fail', reason: 'network_error' });
     await waitFor(() => expect(screen.getByTestId('summary-ai-diagnostics-copy')).toBeTruthy());
     expect(getLatestSummaryAiDiagnostic()?.finalTypedFailureReason).toBe('network_error');
+  });
+
+  it('M4 Summary terminal record persists safe evidence before UI copy and keeps rejected prose memory-only', () => {
+    const session = new SummaryAiDiagnosticSession({
+      uiLocale: 'de', requestedLocale: 'de', contentLocale: 'de', templateId: 'modern',
+      requestId: 'm4-terminal', usageCountBefore: 1, operationMode: 'summary_generate',
+    });
+    session.recordCvSnapshot({
+      id: 'm4', name: 'internal', personal: { fullName: '', email: '', phone: '', address: '', jobTitle: '', gender: '' },
+      summary: '', contentLocale: 'de', experience: [], education: [], skills: [], certifications: [], languages: [],
+    } as never, '');
+    const privateCandidate = 'PRIVATE CANDIDATE PROSE MUST NOT PERSIST';
+    const event = {
+      input: { exactVisibleSummary: '', operationId: 'm4-terminal', requestId: 'm4-terminal' },
+      snapshot: null,
+      kind: 'handled_failure', typedReason: 'validation_rejected',
+      evidence: {
+        candidatePresent: true, candidateHash: 'v3s-deadbeef', candidateLength: privateCandidate.length,
+        candidateUnitCount: 1, candidateUnitHashes: ['v3s-deadbeef'], candidateUnitLengths: [privateCandidate.length],
+        writer: { attempted: true, result: 'succeeded', stopReason: null, contentBlockCount: null, textBlockCount: null, toolBlockCount: null, expectedToolCount: null, toolNameMatched: null, toolInputObject: null, toolInputSchemaPassed: null, identityPassed: null },
+        evaluator: { attempted: true, result: 'succeeded', stopReason: null, contentBlockCount: null, textBlockCount: null, toolBlockCount: null, expectedToolCount: null, toolNameMatched: null, toolInputObject: null, toolInputSchemaPassed: null, identityPassed: null },
+        phases: { structural: 'passed', semantic: 'failed', language_quality: 'passed' },
+        semanticViolationCount: 1, semanticViolationCodes: ['unsupported_metric'], languageQualityViolationCount: 0, languageQualityViolationCodes: [],
+        violationFactIdHashesByCode: {}, violationEntryIdHashesByCode: {}, primaryValidationRejectionCode: 'unsupported_metric', repairAttempted: true,
+      },
+      internalRejectionAudit: {
+        operationId: 'm4-terminal', snapshotHash: 'v3s-deadbeef', locale: 'de',
+        candidate: { candidateId: 'candidate', text: privateCandidate, units: [{ unitId: 'unit', text: privateCandidate }] },
+        phases: { structural: 'passed', semantic: 'failed', language_quality: 'passed' },
+        evaluator: { semanticViolations: [], languageQualityViolations: [] },
+      },
+      applyCommitted: false, usageAfter: 1, routeHttpStatus: 422,
+    } as unknown as SummaryV3GenerateTerminalEvent;
+    session.recordM4Terminal(event);
+    const trace = session.commit();
+    expect(trace.m4Operation).toBe('summary_v3_generate');
+    expect(trace.m4PrimaryValidationRejectionCode).toBe('unsupported_metric');
+    expect(JSON.stringify(trace)).not.toContain(privateCandidate);
+    expect(localStorage.getItem(SUMMARY_AI_DIAG_STORAGE_KEY)).not.toContain(privateCandidate);
+    expect(getLatestSummaryV3InternalRejectionAudit() === null || getLatestSummaryV3InternalRejectionAudit()?.candidate.text === privateCandidate).toBe(true);
   });
 
   it('clear → Experience success/no-op restores Copy without touching Summary', async () => {
