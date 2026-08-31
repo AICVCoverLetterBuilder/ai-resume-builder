@@ -180,7 +180,7 @@ async function disabledDirectRoute() {
   }
 }
 
-async function forcedToolDirectRoute(options: { malformedWriter?: boolean } = {}) {
+async function forcedToolDirectRoute(options: { malformedWriter?: boolean; transportFailure?: boolean } = {}) {
   const keys = ['AI_CORE_V3_ENABLED', 'NEXT_PUBLIC_AI_CORE_V3_ENABLED', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'] as const;
   const saved = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
   const requests: Array<{ tools?: unknown[]; tool_choice?: unknown; system?: unknown }> = [];
@@ -196,6 +196,11 @@ async function forcedToolDirectRoute(options: { malformedWriter?: boolean } = {}
       requests.push(params);
       const choice = params.tool_choice as { name?: string } | undefined;
       if (choice?.name === SUMMARY_V3_WRITER_TOOL_NAME) {
+        if (options.transportFailure) {
+          const error = new Error('raw route provider message') as Error & Record<string, unknown>;
+          error.status = 429; error.requestID = 'raw-route-request-id'; error.error = { code: 'rate_limit_error' };
+          throw error;
+        }
         if (options.malformedWriter) return { stop_reason: 'tool_use', content: [] };
         return { stop_reason: 'tool_use', content: [{ type: 'tool_use', name: SUMMARY_V3_WRITER_TOOL_NAME, input: {
           operationId: manifest.operationId, snapshotHash: manifest.sourceSnapshotHash, locale: manifest.targetLocale,
@@ -326,6 +331,17 @@ describe('M4 actual page routing and direct server gate', () => {
     const run = await forcedToolDirectRoute({ malformedWriter: true });
     expect(run.response.status).toBe(502);
     expect(run.body).toMatchObject({ ok: false, typedReason: 'writer_tool_missing' });
+    expect(run.requests).toHaveLength(1);
+  });
+
+  it('23. route transport catch returns safe phase evidence without raw SDK details', async () => {
+    const run = await forcedToolDirectRoute({ transportFailure: true });
+    expect(run.response.status).toBe(502);
+    expect(run.body).toMatchObject({ ok: false, typedReason: 'provider_request_failed',
+      m4ProviderFailure: { phase: 'initial_writer', failureStage: 'sdk_request', providerHttpStatus: 429,
+        providerErrorType: 'rate_limit', providerErrorCode: 'rate_limit_error' } });
+    expect(JSON.stringify(run.body)).not.toContain('raw route provider message');
+    expect(JSON.stringify(run.body)).not.toContain('raw-route-request-id');
     expect(run.requests).toHaveLength(1);
   });
 });

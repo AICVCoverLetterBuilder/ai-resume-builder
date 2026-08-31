@@ -17,6 +17,59 @@ import type { AggregateValidationResult, AiCoreV3Violation } from './validators'
 
 export const SUMMARY_V3_GENERATE_ACTION = 'summary_v3_generate' as const;
 
+/** Finite, release-safe attribution for one M4 provider phase. */
+export type SummaryV3ProviderPhase =
+  | 'initial_writer'
+  | 'initial_evaluator'
+  | 'repair_writer'
+  | 'post_repair_evaluator';
+
+export type SummaryV3ProviderFailureStage =
+  | 'request_construction'
+  | 'sdk_request'
+  | 'response_extraction'
+  | 'tool_validation'
+  | 'orchestration'
+  | 'unknown';
+
+export type SummaryV3ProviderErrorType =
+  | 'invalid_request'
+  | 'authentication'
+  | 'permission'
+  | 'rate_limit'
+  | 'provider_5xx'
+  | 'timeout'
+  | 'connection/network'
+  | 'response_extraction'
+  | 'unknown';
+
+export type SummaryV3ProviderErrorClass =
+  | 'APIError'
+  | 'APIUserAbortError'
+  | 'APIConnectionError'
+  | 'APIConnectionTimeoutError'
+  | 'BadRequestError'
+  | 'AuthenticationError'
+  | 'PermissionDeniedError'
+  | 'RateLimitError'
+  | 'InternalServerError'
+  | 'Error';
+
+/** Safe M4 provider failure evidence. Raw errors/messages/IDs never cross this boundary. */
+export interface SummaryV3ProviderFailureEnvelope {
+  readonly phase: SummaryV3ProviderPhase;
+  readonly failureStage: SummaryV3ProviderFailureStage;
+  readonly errorClass: SummaryV3ProviderErrorClass | null;
+  readonly providerHttpStatus: number | null;
+  readonly providerErrorType: SummaryV3ProviderErrorType | null;
+  readonly providerErrorCode: string | null;
+  readonly providerRequestIdHash: string | null;
+  readonly providerRetryable: boolean | null;
+  readonly providerMessageFingerprint: string | null;
+  readonly providerStructuralFieldPath: string | null;
+  readonly providerHttpResponseReceived: boolean | null;
+}
+
 export type SummaryV3GenerateRoutingResult =
   | { readonly kind: 'not_applicable' }
   | { readonly kind: 'handled_success' }
@@ -75,6 +128,7 @@ export interface SummaryV3GenerateSuccessResponse {
   readonly validation: AggregateValidationResult;
   readonly repairAttempted: boolean;
   readonly transportEvidence?: SummaryV3TransportEvidence;
+  readonly m4ProviderFailure?: SummaryV3ProviderFailureEnvelope | null;
 }
 
 export interface SummaryV3GenerateFailureResponse {
@@ -86,6 +140,7 @@ export interface SummaryV3GenerateFailureResponse {
   /** Transient internal rejection evidence; never persisted by the client. */
   readonly rejectedCandidate?: AiCoreV3CandidateEnvelope;
   readonly transportEvidence?: SummaryV3TransportEvidence;
+  readonly m4ProviderFailure?: SummaryV3ProviderFailureEnvelope | null;
 }
 
 export type SummaryV3GenerateResponse =
@@ -200,6 +255,7 @@ export type SummaryV3TerminalEvidence = {
   readonly primaryValidationRejectionCode: string | null;
   readonly repairAttempted: boolean;
   readonly providerResponseKind: 'provider' | 'repair' | 'none' | 'unknown';
+  readonly m4ProviderFailure?: SummaryV3ProviderFailureEnvelope | null;
 };
 
 /** Exact candidate text is transient internal evidence only. */
@@ -493,6 +549,70 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
+const SUMMARY_V3_PROVIDER_PHASES = new Set<SummaryV3ProviderPhase>([
+  'initial_writer', 'initial_evaluator', 'repair_writer', 'post_repair_evaluator',
+]);
+const SUMMARY_V3_PROVIDER_FAILURE_STAGES = new Set<SummaryV3ProviderFailureStage>([
+  'request_construction', 'sdk_request', 'response_extraction', 'tool_validation', 'orchestration', 'unknown',
+]);
+const SUMMARY_V3_PROVIDER_ERROR_TYPES = new Set<SummaryV3ProviderErrorType>([
+  'invalid_request', 'authentication', 'permission', 'rate_limit', 'provider_5xx', 'timeout',
+  'connection/network', 'response_extraction', 'unknown',
+]);
+const SUMMARY_V3_PROVIDER_ERROR_CLASSES = new Set<SummaryV3ProviderErrorClass>([
+  'APIError', 'APIUserAbortError', 'APIConnectionError', 'APIConnectionTimeoutError',
+  'BadRequestError', 'AuthenticationError', 'PermissionDeniedError', 'RateLimitError',
+  'InternalServerError', 'Error',
+]);
+
+function safeEvidenceHash(value: unknown): string | null {
+  return typeof value === 'string' && /^v3s-[a-z0-9_-]{8,128}$/u.test(value) ? value : null;
+}
+
+function safeEvidenceCode(value: unknown): string | null {
+  return typeof value === 'string' && /^[a-z][a-z0-9_.-]{0,63}$/u.test(value) ? value : null;
+}
+
+/** Parse the release-safe envelope received from the M4 server route. */
+export function parseSummaryV3ProviderFailureEnvelope(value: unknown): SummaryV3ProviderFailureEnvelope | null {
+  if (!isRecord(value)
+    || typeof value.phase !== 'string' || !SUMMARY_V3_PROVIDER_PHASES.has(value.phase as SummaryV3ProviderPhase)
+    || typeof value.failureStage !== 'string' || !SUMMARY_V3_PROVIDER_FAILURE_STAGES.has(value.failureStage as SummaryV3ProviderFailureStage)) return null;
+  const nullableString = (item: unknown): item is string | null => item === null || typeof item === 'string';
+  const status = value.providerHttpStatus;
+  if (!(status === null || (typeof status === 'number' && Number.isInteger(status) && status >= 100 && status <= 599))) return null;
+  if (!(value.errorClass === null || (typeof value.errorClass === 'string' && SUMMARY_V3_PROVIDER_ERROR_CLASSES.has(value.errorClass as SummaryV3ProviderErrorClass)))) return null;
+  if (!(value.providerErrorType === null || (typeof value.providerErrorType === 'string' && SUMMARY_V3_PROVIDER_ERROR_TYPES.has(value.providerErrorType as SummaryV3ProviderErrorType)))) return null;
+  if (!(value.providerRetryable === null || typeof value.providerRetryable === 'boolean')) return null;
+  if (!(value.providerHttpResponseReceived === null || typeof value.providerHttpResponseReceived === 'boolean')) return null;
+  if (!nullableString(value.providerErrorCode) || !nullableString(value.providerRequestIdHash)
+    || !nullableString(value.providerMessageFingerprint) || !nullableString(value.providerStructuralFieldPath)) return null;
+  const providerErrorCode = value.providerErrorCode === null ? null : safeEvidenceCode(value.providerErrorCode);
+  const providerRequestIdHash = value.providerRequestIdHash === null ? null : safeEvidenceHash(value.providerRequestIdHash);
+  const providerMessageFingerprint = value.providerMessageFingerprint === null ? null : safeEvidenceHash(value.providerMessageFingerprint);
+  const providerStructuralFieldPath = value.providerStructuralFieldPath === null
+    ? null
+    : typeof value.providerStructuralFieldPath === 'string' && /^[a-z][a-z0-9_.-]{0,127}$/u.test(value.providerStructuralFieldPath)
+      ? value.providerStructuralFieldPath : null;
+  if (value.providerErrorCode !== null && !providerErrorCode
+    || value.providerRequestIdHash !== null && !providerRequestIdHash
+    || value.providerMessageFingerprint !== null && !providerMessageFingerprint
+    || value.providerStructuralFieldPath !== null && !providerStructuralFieldPath) return null;
+  return immutableCopy({
+    phase: value.phase as SummaryV3ProviderPhase,
+    failureStage: value.failureStage as SummaryV3ProviderFailureStage,
+    errorClass: value.errorClass as SummaryV3ProviderFailureEnvelope['errorClass'],
+    providerHttpStatus: status as number | null,
+    providerErrorType: value.providerErrorType as SummaryV3ProviderFailureEnvelope['providerErrorType'],
+    providerErrorCode,
+    providerRequestIdHash,
+    providerRetryable: value.providerRetryable as boolean | null,
+    providerMessageFingerprint,
+    providerStructuralFieldPath,
+    providerHttpResponseReceived: value.providerHttpResponseReceived as boolean | null,
+  }) as SummaryV3ProviderFailureEnvelope;
+}
+
 function explicitAccept(validation: AggregateValidationResult): boolean {
   return validation.decision === 'accept'
     && (['structural', 'semantic', 'language_quality'] as const).every(
@@ -513,6 +633,9 @@ export function parseSummaryV3GenerateSuccessResponse(value: unknown): SummaryV3
       candidate: createCandidateEnvelope(value.candidate as unknown as AiCoreV3CandidateEnvelope),
       validation: value.validation as unknown as AggregateValidationResult,
       repairAttempted: value.repairAttempted,
+      ...(value.m4ProviderFailure !== undefined
+        ? { m4ProviderFailure: parseSummaryV3ProviderFailureEnvelope(value.m4ProviderFailure) }
+        : {}),
     }) as SummaryV3GenerateSuccessResponse;
     return explicitAccept(response.validation) ? response : null;
   } catch {
@@ -826,6 +949,9 @@ function responseEvidence(value: unknown, reason: string | null): SummaryV3Termi
   const repairAttempted = isRecord(value) && value.repairAttempted === true;
   const attempts = diagnosticAttempts(reason, value !== undefined && value !== null, accepted);
   const transport = responseTransportEvidence(value);
+  const m4ProviderFailure = isRecord(value)
+    ? parseSummaryV3ProviderFailureEnvelope(value.m4ProviderFailure)
+    : null;
   return immutableCopy({
     candidatePresent: Boolean(candidate),
     candidateHash: candidate ? hashSummaryV3Value(candidate.text) : null,
@@ -851,6 +977,7 @@ function responseEvidence(value: unknown, reason: string | null): SummaryV3Termi
     ),
     repairAttempted,
     providerResponseKind: repairAttempted ? 'repair' : candidate ? 'provider' : 'none',
+    m4ProviderFailure,
   }) as SummaryV3TerminalEvidence;
 }
 

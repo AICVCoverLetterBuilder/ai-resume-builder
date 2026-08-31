@@ -90,6 +90,7 @@ import {
   executeExperienceV3EnhanceServer,
   executeExperienceV3GenerateServer,
   executeSummaryV3GenerateServer,
+  createSummaryV3ProviderTransportError,
   createExperienceV3EnhanceProviderTransportError,
   createExperienceV3EnhanceWriterTransportError,
   isAiCoreV3Enabled,
@@ -103,6 +104,7 @@ import type {
 import type {
   SummaryV3WriterResponse,
 } from '@/lib/ai-core-v3/summary-generate-server';
+import type { SummaryV3ProviderPhase } from '@/lib/ai-core-v3/summary-generate';
 
 /**
  * Explicit Vercel serverless function execution budget (seconds).
@@ -2060,24 +2062,60 @@ Rules:
         }, { status: 409 });
       }
       const result = await executeSummaryV3GenerateServer(params, {
-        write: async (prompt) => getForcedSummaryResponse(await callWithRetry({
-          model: MODEL,
-          max_tokens: 1800,
-          temperature: 0,
-          system: `You are the single AI Core V3 Summary writer. Invoke only the ${SUMMARY_V3_WRITER_TOOL_NAME} tool and preserve every required identity and fact.`,
-          tools: [SUMMARY_V3_WRITER_TOOL],
-          tool_choice: { type: 'tool', name: SUMMARY_V3_WRITER_TOOL_NAME, disable_parallel_tool_use: true },
-          messages: [{ role: 'user', content: prompt }],
-        }, deadlineAt, undefined, AI_PROVIDER_CALL_TIMEOUT_MS, 'provider', undefined, false)),
-        evaluate: async (prompt) => getForcedSummaryResponse(await callWithRetry({
-          model: MODEL,
-          max_tokens: 1400,
-          temperature: 0,
-          system: `You are the independent non-writing AI Core V3 Summary evaluator. Invoke only the ${SUMMARY_V3_EVALUATOR_TOOL_NAME} tool and return structured evidence only.`,
-          tools: [SUMMARY_V3_EVALUATOR_TOOL],
-          tool_choice: { type: 'tool', name: SUMMARY_V3_EVALUATOR_TOOL_NAME, disable_parallel_tool_use: true },
-          messages: [{ role: 'user', content: prompt }],
-        }, deadlineAt, undefined, AI_PROVIDER_CALL_TIMEOUT_MS, 'verifier', undefined, false)),
+        write: async (prompt, phase: SummaryV3ProviderPhase = 'initial_writer') => {
+          let request: Parameters<Anthropic['messages']['create']>[0];
+          try {
+            request = {
+              model: MODEL,
+              max_tokens: 1800,
+              temperature: 0,
+              system: `You are the single AI Core V3 Summary writer. Invoke only the ${SUMMARY_V3_WRITER_TOOL_NAME} tool and preserve every required identity and fact.`,
+              tools: [SUMMARY_V3_WRITER_TOOL],
+              tool_choice: { type: 'tool', name: SUMMARY_V3_WRITER_TOOL_NAME, disable_parallel_tool_use: true },
+              messages: [{ role: 'user', content: prompt }],
+            };
+          } catch (error) {
+            throw createSummaryV3ProviderTransportError(error, phase, 'request_construction');
+          }
+          let response: Anthropic.Messages.Message;
+          try {
+            response = await callWithRetry(request, deadlineAt, undefined, AI_PROVIDER_CALL_TIMEOUT_MS, 'provider', undefined, false);
+          } catch (error) {
+            throw createSummaryV3ProviderTransportError(error, phase, 'sdk_request');
+          }
+          try {
+            return getForcedSummaryResponse(response);
+          } catch (error) {
+            throw createSummaryV3ProviderTransportError(error, phase, 'response_extraction');
+          }
+        },
+        evaluate: async (prompt, phase: SummaryV3ProviderPhase = 'initial_evaluator') => {
+          let request: Parameters<Anthropic['messages']['create']>[0];
+          try {
+            request = {
+              model: MODEL,
+              max_tokens: 1400,
+              temperature: 0,
+              system: `You are the independent non-writing AI Core V3 Summary evaluator. Invoke only the ${SUMMARY_V3_EVALUATOR_TOOL_NAME} tool and return structured evidence only.`,
+              tools: [SUMMARY_V3_EVALUATOR_TOOL],
+              tool_choice: { type: 'tool', name: SUMMARY_V3_EVALUATOR_TOOL_NAME, disable_parallel_tool_use: true },
+              messages: [{ role: 'user', content: prompt }],
+            };
+          } catch (error) {
+            throw createSummaryV3ProviderTransportError(error, phase, 'request_construction');
+          }
+          let response: Anthropic.Messages.Message;
+          try {
+            response = await callWithRetry(request, deadlineAt, undefined, AI_PROVIDER_CALL_TIMEOUT_MS, 'verifier', undefined, false);
+          } catch (error) {
+            throw createSummaryV3ProviderTransportError(error, phase, 'sdk_request');
+          }
+          try {
+            return getForcedSummaryResponse(response);
+          } catch (error) {
+            throw createSummaryV3ProviderTransportError(error, phase, 'response_extraction');
+          }
+        },
       });
       const status = result.ok
         ? 200

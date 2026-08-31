@@ -12,6 +12,11 @@ import {
   type SummaryV3WriterOutput,
   type SummaryV3WriterUnit,
   type SummaryV3TransportEvidence,
+  type SummaryV3ProviderPhase,
+  type SummaryV3ProviderFailureStage,
+  type SummaryV3ProviderFailureEnvelope,
+  type SummaryV3ProviderErrorClass,
+  type SummaryV3ProviderErrorType,
 } from './summary-generate';
 import {
   runAiCoreV3Validation,
@@ -22,8 +27,8 @@ import {
 } from './validators';
 
 export interface SummaryV3GenerateTransportSet {
-  readonly write: (prompt: string) => Promise<SummaryV3WriterResponse>;
-  readonly evaluate: (prompt: string) => Promise<SummaryV3EvaluatorResponse>;
+  readonly write: (prompt: string, phase?: SummaryV3ProviderPhase) => Promise<SummaryV3WriterResponse>;
+  readonly evaluate: (prompt: string, phase?: SummaryV3ProviderPhase) => Promise<SummaryV3EvaluatorResponse>;
 }
 
 export const SUMMARY_V3_WRITER_TOOL_NAME = 'submit_summary_generation' as const;
@@ -49,6 +54,129 @@ const SUMMARY_EVALUATOR_CHECKS = [
   'grammarAndClarity', 'duplicationAndDegradationAbsent', 'completeSummaryUsable',
 ] as const;
 type SummaryEvaluatorCheck = (typeof SUMMARY_EVALUATOR_CHECKS)[number];
+
+const SAFE_PROVIDER_ERROR_CODES = new Set([
+  'invalid_request', 'invalid_request_error', 'invalid_param', 'invalid_api_key',
+  'authentication_error', 'permission_denied', 'permission_error', 'rate_limit',
+  'rate_limit_error', 'overloaded', 'overloaded_error', 'internal_server_error',
+  'model_not_found', 'billing_error', 'quota_exceeded', 'timeout', 'connection_error',
+]);
+
+function providerStatus(error: unknown): number | null {
+  if (!error || typeof error !== 'object') return null;
+  const status = (error as Record<string, unknown>).status;
+  return Number.isInteger(status) && Number(status) >= 100 && Number(status) <= 599 ? Number(status) : null;
+}
+
+function errorClassName(error: unknown): string | null {
+  return error && typeof error === 'object' && error.constructor && typeof error.constructor === 'function'
+    ? error.constructor.name
+    : error instanceof Error ? 'Error' : null;
+}
+
+function providerErrorClass(error: unknown): SummaryV3ProviderErrorClass | null {
+  const name = errorClassName(error);
+  return name && ['APIError', 'APIUserAbortError', 'APIConnectionError', 'APIConnectionTimeoutError',
+    'BadRequestError', 'AuthenticationError', 'PermissionDeniedError', 'RateLimitError',
+    'InternalServerError', 'Error'].includes(name) ? name as SummaryV3ProviderErrorClass : null;
+}
+
+function isDeadlineOrAbortError(error: unknown): boolean {
+  if (error instanceof Error && (error.name === 'AbortError' || error.name === 'APIUserAbortError'
+    || error.name === 'APIConnectionTimeoutError')) return true;
+  if (!error || typeof error !== 'object') return false;
+  const owner = (error as Record<string, unknown>).deadlineOwner;
+  return owner === 'provider_transport' || owner === 'verifier_transport'
+    || owner === 'route_deadline' || owner === 'client_abort';
+}
+
+function providerErrorType(error: unknown, status: number | null, stage: SummaryV3ProviderFailureStage): SummaryV3ProviderErrorType {
+  if (stage === 'response_extraction') return 'response_extraction';
+  if (status === 400) return 'invalid_request';
+  if (status === 401) return 'authentication';
+  if (status === 403) return 'permission';
+  if (status === 429) return 'rate_limit';
+  if (status !== null && status >= 500) return 'provider_5xx';
+  if (isDeadlineOrAbortError(error) || errorClassName(error) === 'APIConnectionTimeoutError'
+    || errorClassName(error) === 'APIUserAbortError') return 'timeout';
+  if (errorClassName(error) === 'APIConnectionError') return 'connection/network';
+  return 'unknown';
+}
+
+function retryableForType(type: SummaryV3ProviderErrorType): boolean | null {
+  if (type === 'rate_limit' || type === 'provider_5xx' || type === 'connection/network') return true;
+  if (type === 'invalid_request' || type === 'authentication' || type === 'permission'
+    || type === 'timeout' || type === 'response_extraction') return false;
+  return null;
+}
+
+function safeProviderCode(value: unknown): string | null {
+  return typeof value === 'string' && /^[a-z][a-z0-9_.-]{0,63}$/u.test(value) && SAFE_PROVIDER_ERROR_CODES.has(value) ? value : null;
+}
+
+function safeStructuralPath(value: string | null | undefined): string | null {
+  return typeof value === 'string' && /^[a-z][a-z0-9_.-]{0,127}$/u.test(value) ? value : null;
+}
+
+function safeHash(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 ? hashSummaryV3Value(value) : null;
+}
+
+/** Build finite provider evidence without serializing raw SDK errors. */
+export function classifySummaryV3ProviderFailure(
+  error: unknown,
+  phase: SummaryV3ProviderPhase,
+  stage: SummaryV3ProviderFailureStage = 'sdk_request',
+  fieldPath?: string | null,
+): SummaryV3ProviderFailureEnvelope {
+  if (error instanceof SummaryV3ProviderTransportError) return error.envelope;
+  const status = providerStatus(error);
+  const type = providerErrorType(error, status, stage);
+  const record = error && typeof error === 'object' ? error as Record<string, unknown> : null;
+  const body = record?.error && typeof record.error === 'object' ? record.error as Record<string, unknown> : null;
+  const message = error instanceof Error && error.message.trim() ? error.message : null;
+  const requestId = typeof record?.requestID === 'string' ? record.requestID : null;
+  return immutableCopy({
+    phase,
+    failureStage: stage,
+    errorClass: providerErrorClass(error),
+    providerHttpStatus: status,
+    providerErrorType: type === 'unknown' ? null : type,
+    providerErrorCode: safeProviderCode(body?.code),
+    providerRequestIdHash: safeHash(requestId),
+    providerRetryable: retryableForType(type),
+    providerMessageFingerprint: safeHash(message),
+    providerStructuralFieldPath: safeStructuralPath(fieldPath),
+    providerHttpResponseReceived: stage === 'response_extraction' || stage === 'tool_validation'
+      ? true : status !== null ? true : null,
+  }) as SummaryV3ProviderFailureEnvelope;
+}
+
+function toolValidationFailure(phase: SummaryV3ProviderPhase, reason: string): SummaryV3ProviderFailureEnvelope {
+  const base = classifySummaryV3ProviderFailure(new Error(reason), phase, 'tool_validation');
+  return immutableCopy({ ...base, errorClass: null, providerErrorType: null, providerRetryable: false,
+    providerHttpResponseReceived: true }) as SummaryV3ProviderFailureEnvelope;
+}
+
+/** Error wrapper preserves the original Error in memory while exposing only safe evidence. */
+export class SummaryV3ProviderTransportError extends Error {
+  readonly envelope: SummaryV3ProviderFailureEnvelope;
+  constructor(envelope: SummaryV3ProviderFailureEnvelope, cause?: unknown) {
+    super('M4 provider transport failure');
+    this.name = 'SummaryV3ProviderTransportError';
+    this.envelope = immutableCopy(envelope);
+    if (cause !== undefined) Object.defineProperty(this, 'cause', { value: cause, enumerable: false, configurable: true });
+  }
+}
+
+export function createSummaryV3ProviderTransportError(
+  error: unknown,
+  phase: SummaryV3ProviderPhase,
+  stage: SummaryV3ProviderFailureStage = 'sdk_request',
+  fieldPath?: string | null,
+): SummaryV3ProviderTransportError {
+  return new SummaryV3ProviderTransportError(classifySummaryV3ProviderFailure(error, phase, stage, fieldPath), error);
+}
 
 function evaluatorPhaseSchema(category: EvaluatedCategory) {
   return {
@@ -164,6 +292,7 @@ function failure(
   repairAttempted?: boolean,
   rejectedCandidate?: AiCoreV3CandidateEnvelope,
   transportEvidence?: SummaryV3TransportEvidence,
+  m4ProviderFailure?: SummaryV3ProviderFailureEnvelope | null,
 ): SummaryV3GenerateResponse {
   return immutableCopy({
     ok: false as const,
@@ -173,6 +302,7 @@ function failure(
     ...(repairAttempted !== undefined ? { repairAttempted } : {}),
     ...(INTERNAL_AI_RESET_ENABLED && rejectedCandidate ? { rejectedCandidate } : {}),
     ...(transportEvidence ? { transportEvidence } : {}),
+    ...(m4ProviderFailure ? { m4ProviderFailure } : {}),
   }) as SummaryV3GenerateResponse;
 }
 
@@ -600,23 +730,34 @@ export function buildSummaryV3RepairPrompt(manifest: SummaryV3Manifest, candidat
 
 type EvaluateCandidateResult =
   | { readonly ok: true; readonly candidate: AiCoreV3CandidateEnvelope; readonly validation: AggregateValidationResult; readonly evaluatorMetadata: SummaryV3DiagnosticAttempt }
-  | { readonly ok: false; readonly typedReason: string; readonly evaluatorMetadata: SummaryV3DiagnosticAttempt };
+  | { readonly ok: false; readonly typedReason: string; readonly evaluatorMetadata: SummaryV3DiagnosticAttempt; readonly m4ProviderFailure?: SummaryV3ProviderFailureEnvelope | null };
 
 async function evaluateCandidate(manifest: SummaryV3Manifest, output: SummaryV3WriterOutput,
-  transports: SummaryV3GenerateTransportSet): Promise<EvaluateCandidateResult> {
+  transports: SummaryV3GenerateTransportSet,
+  phase: Extract<SummaryV3ProviderPhase, 'initial_evaluator' | 'post_repair_evaluator'> = 'initial_evaluator',
+): Promise<EvaluateCandidateResult> {
   const candidate = candidateFromOutput(manifest, output);
   const structural = structuralPhase(manifest, candidate, output);
   if (structural.status !== 'passed') {
     return { ok: false, typedReason: 'structural_validation_failed', evaluatorMetadata: emptyTransportAttempt(false, 'not_attempted') };
   }
+  let prompt: string;
+  try {
+    prompt = buildSummaryV3EvaluatorPrompt(manifest, candidate);
+  } catch (error) {
+    return { ok: false, typedReason: 'validator_exception', evaluatorMetadata: emptyTransportAttempt(false, 'not_attempted'),
+      m4ProviderFailure: classifySummaryV3ProviderFailure(error, phase, 'request_construction') };
+  }
   let response: SummaryV3EvaluatorResponse;
   try {
-    response = await transports.evaluate(buildSummaryV3EvaluatorPrompt(manifest, candidate));
-  } catch {
-    return { ok: false, typedReason: 'validator_exception', evaluatorMetadata: emptyTransportAttempt(true, 'failed') };
+    response = await transports.evaluate(prompt, phase);
+  } catch (error) {
+    return { ok: false, typedReason: 'validator_exception', evaluatorMetadata: emptyTransportAttempt(true, 'failed'),
+      m4ProviderFailure: classifySummaryV3ProviderFailure(error, phase, 'sdk_request') };
   }
   const evaluator = parseSummaryV3EvaluatorToolResponse(response, manifest);
-  if (!evaluator.ok) return { ok: false, typedReason: evaluator.typedReason, evaluatorMetadata: evaluator.diagnosticMetadata };
+  if (!evaluator.ok) return { ok: false, typedReason: evaluator.typedReason, evaluatorMetadata: evaluator.diagnosticMetadata,
+    m4ProviderFailure: toolValidationFailure(phase, evaluator.typedReason) };
   return { ok: true, candidate, validation: aggregate(manifest, candidate, structural, evaluator.value), evaluatorMetadata: evaluator.diagnosticMetadata };
 }
 
@@ -628,17 +769,26 @@ export async function executeSummaryV3GenerateServer(
   if (!manifest) return failure('invalid_request_contract', undefined, false);
   let transportEvidence = unavailableTransportEvidence();
   let primaryResponse: SummaryV3WriterResponse;
+  let primaryPrompt: string;
   try {
-    primaryResponse = await transports.write(buildSummaryV3WriterPrompt(manifest));
-  } catch {
-    return failure('provider_request_failed', undefined, false, undefined, failedTransportEvidence(transportEvidence, 'writer'));
+    primaryPrompt = buildSummaryV3WriterPrompt(manifest);
+  } catch (error) {
+    return failure('provider_request_failed', undefined, false, undefined, failedTransportEvidence(transportEvidence, 'writer'),
+      classifySummaryV3ProviderFailure(error, 'initial_writer', 'request_construction'));
+  }
+  try {
+    primaryResponse = await transports.write(primaryPrompt, 'initial_writer');
+  } catch (error) {
+    return failure('provider_request_failed', undefined, false, undefined, failedTransportEvidence(transportEvidence, 'writer'),
+      classifySummaryV3ProviderFailure(error, 'initial_writer', 'sdk_request'));
   }
   const primaryOutput = parseSummaryV3WriterToolResponse(primaryResponse, manifest);
   transportEvidence = { ...transportEvidence, writer: primaryOutput.diagnosticMetadata };
-  if (!primaryOutput.ok) return failure(primaryOutput.typedReason, undefined, false, undefined, transportEvidence);
+  if (!primaryOutput.ok) return failure(primaryOutput.typedReason, undefined, false, undefined, transportEvidence,
+    toolValidationFailure('initial_writer', primaryOutput.typedReason));
   const primary = await evaluateCandidate(manifest, primaryOutput.value, transports);
   transportEvidence = { ...transportEvidence, evaluator: primary.evaluatorMetadata };
-  if (!primary.ok) return failure(primary.typedReason, undefined, false, undefined, transportEvidence);
+  if (!primary.ok) return failure(primary.typedReason, undefined, false, undefined, transportEvidence, primary.m4ProviderFailure);
   if (primary.validation.decision === 'accept') {
     return immutableCopy({ ok: true as const, action: SUMMARY_V3_GENERATE_ACTION,
       providerOutput: primaryOutput.value, candidate: primary.candidate, validation: primary.validation,
@@ -647,17 +797,26 @@ export async function executeSummaryV3GenerateServer(
   const violations = primary.validation.violations;
   if (violations.length === 0) return failure('validation_rejected', primary.validation, false, primary.candidate, transportEvidence);
   let repairResponse: SummaryV3WriterResponse;
+  let repairPrompt: string;
   try {
-    repairResponse = await transports.write(buildSummaryV3RepairPrompt(manifest, primary.candidate, violations));
-  } catch {
-    return failure('repair_provider_failed', primary.validation, true, primary.candidate, failedTransportEvidence(transportEvidence, 'writer'));
+    repairPrompt = buildSummaryV3RepairPrompt(manifest, primary.candidate, violations);
+  } catch (error) {
+    return failure('repair_provider_failed', primary.validation, true, primary.candidate, failedTransportEvidence(transportEvidence, 'writer'),
+      classifySummaryV3ProviderFailure(error, 'repair_writer', 'request_construction'));
+  }
+  try {
+    repairResponse = await transports.write(repairPrompt, 'repair_writer');
+  } catch (error) {
+    return failure('repair_provider_failed', primary.validation, true, primary.candidate, failedTransportEvidence(transportEvidence, 'writer'),
+      classifySummaryV3ProviderFailure(error, 'repair_writer', 'sdk_request'));
   }
   const repairOutput = parseSummaryV3WriterToolResponse(repairResponse, manifest);
   transportEvidence = { ...transportEvidence, writer: repairOutput.diagnosticMetadata };
-  if (!repairOutput.ok) return failure('repair_output_malformed', primary.validation, true, primary.candidate, transportEvidence);
-  const repair = await evaluateCandidate(manifest, repairOutput.value, transports);
+  if (!repairOutput.ok) return failure('repair_output_malformed', primary.validation, true, primary.candidate, transportEvidence,
+    toolValidationFailure('repair_writer', repairOutput.typedReason));
+  const repair = await evaluateCandidate(manifest, repairOutput.value, transports, 'post_repair_evaluator');
   transportEvidence = { ...transportEvidence, evaluator: repair.evaluatorMetadata };
-  if (!repair.ok) return failure(`repair_${repair.typedReason}`, primary.validation, true, primary.candidate, transportEvidence);
+  if (!repair.ok) return failure(`repair_${repair.typedReason}`, primary.validation, true, primary.candidate, transportEvidence, repair.m4ProviderFailure);
   if (repair.validation.decision !== 'accept') return failure('repair_validation_rejected', repair.validation, true, repair.candidate, transportEvidence);
   return immutableCopy({ ok: true as const, action: SUMMARY_V3_GENERATE_ACTION,
     providerOutput: repairOutput.value, candidate: repair.candidate, validation: repair.validation,

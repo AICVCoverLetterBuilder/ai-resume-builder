@@ -9,6 +9,8 @@ import {
   captureSummaryV3GenerateOperationSnapshot,
   classifySummaryV3GenerateRouting,
   executeSummaryV3GenerateServer,
+  classifySummaryV3ProviderFailure,
+  createSummaryV3ProviderTransportError,
   hashSummaryV3Value,
   parseSummaryV3EvaluatorToolResponse,
   parseSummaryV3WriterToolResponse,
@@ -24,6 +26,8 @@ import {
 } from '..';
 import { M4_SUMMARY_GENERATE_DEVICE_OBSERVATION } from '../fixtures/m4-summary-generate-device-observation';
 import { M4_SUMMARY_GENERATE_AAB545_OBSERVATION } from '../fixtures/m4-summary-generate-aab545-observation';
+import { M4_SUMMARY_GENERATE_AAB546_OBSERVATION } from '../fixtures/m4-summary-generate-aab546-observation';
+import { SummaryAiDiagnosticSession, formatSummaryAiDiagnosticForCopy } from '../../cv-summary-ai-diagnostics';
 
 function cv(): CVData {
   return {
@@ -609,5 +613,115 @@ describe('M4 transactional apply, preview, rollback, and usage', () => {
       usageDelta: 0, v2FallthroughCount: 0, apply: false,
     });
     expect(JSON.stringify(M4_SUMMARY_GENERATE_AAB545_OBSERVATION)).not.toMatch(/@|Ana|Example|Current|employer|role/u);
+  });
+
+  it('91. both AAB 546 physical observations remain terminal provider failures', () => {
+    expect(M4_SUMMARY_GENERATE_AAB546_OBSERVATION).toMatchObject({
+      attemptCount: 2, ownershipResult: 'owned', writer: { attempted: true, result: 'failed' },
+      evaluator: { attempted: false, result: 'not_attempted' }, candidatePresent: false,
+      usageDelta: 0, v2FallthroughCount: 0, apply: false, exactProviderCauseAvailable: false,
+      application502ProvenProvider502: false,
+    });
+    expect(M4_SUMMARY_GENERATE_AAB546_OBSERVATION.attempts).toHaveLength(2);
+    expect(M4_SUMMARY_GENERATE_AAB546_OBSERVATION.attempts.every((attempt) => attempt.routeHttpStatus === 502)).toBe(true);
+    expect(JSON.stringify(M4_SUMMARY_GENERATE_AAB546_OBSERVATION)).not.toMatch(/@|Ana|Example|Current|employer|role|prompt|token/u);
+  });
+});
+
+describe('M4 provider-failure observability envelope', () => {
+  function providerError(status?: number, code = 'invalid_request'): Error {
+    const error = new Error('raw provider message must never persist') as Error & Record<string, unknown>;
+    if (status !== undefined) error.status = status;
+    error.requestID = 'raw-provider-request-id';
+    error.error = { code };
+    return error;
+  }
+
+  it('maps every safe provider boundary without copying route status', () => {
+    const cases: Array<[number, string, boolean | null]> = [
+      [400, 'invalid_request', false], [401, 'authentication', false], [403, 'permission', false],
+      [429, 'rate_limit', true], [500, 'provider_5xx', true],
+    ];
+    for (const [status, type, retryable] of cases) {
+      const envelope = classifySummaryV3ProviderFailure(providerError(status), 'initial_writer', 'sdk_request');
+      expect(envelope).toMatchObject({ phase: 'initial_writer', failureStage: 'sdk_request', providerHttpStatus: status,
+        providerErrorType: type, providerRetryable: retryable, providerHttpResponseReceived: true });
+      expect(JSON.stringify(envelope)).not.toContain('raw provider message');
+      expect(JSON.stringify(envelope)).not.toContain('raw-provider-request-id');
+    }
+    const unknown = classifySummaryV3ProviderFailure(new Error('unknown provider'), 'initial_writer', 'sdk_request');
+    expect(unknown).toMatchObject({ providerHttpStatus: null, providerErrorType: null, providerRetryable: null,
+      providerHttpResponseReceived: null });
+    const timeout = new DOMException('aborted', 'AbortError');
+    expect(classifySummaryV3ProviderFailure(timeout, 'initial_writer', 'sdk_request')).toMatchObject({ providerErrorType: 'timeout', providerRetryable: false });
+    const extraction = classifySummaryV3ProviderFailure(providerError(502), 'initial_writer', 'response_extraction');
+    expect(extraction).toMatchObject({ failureStage: 'response_extraction', providerErrorType: 'response_extraction', providerHttpStatus: 502 });
+  });
+
+  it('preserves the original cause in memory but serializes only the envelope', () => {
+    const cause = providerError(429, 'rate_limit_error');
+    const wrapped = createSummaryV3ProviderTransportError(cause, 'repair_writer', 'sdk_request');
+    expect((wrapped as Error & { cause?: unknown }).cause).toBe(cause);
+    expect(JSON.stringify(wrapped)).not.toContain('raw provider message');
+    expect(wrapped.envelope.phase).toBe('repair_writer');
+  });
+
+  it('attributes initial writer, initial evaluator, repair writer, and post-repair evaluator failures', async () => {
+    const manifest = snapshot().manifest;
+    const initialWriter = await executeSummaryV3GenerateServer({ manifest }, {
+      write: vi.fn(async () => { throw providerError(400); }), evaluate: vi.fn(),
+    });
+    expect(initialWriter).toMatchObject({ ok: false, typedReason: 'provider_request_failed', m4ProviderFailure: { phase: 'initial_writer', failureStage: 'sdk_request', providerHttpStatus: 400 } });
+
+    const initialEvaluator = await executeSummaryV3GenerateServer({ manifest }, {
+      write: vi.fn(async () => writerResponse(manifest)), evaluate: vi.fn(async () => { throw providerError(401); }),
+    });
+    expect(initialEvaluator).toMatchObject({ ok: false, typedReason: 'validator_exception', m4ProviderFailure: { phase: 'initial_evaluator', providerHttpStatus: 401 } });
+
+    let writes = 0;
+    const repairWriter = await executeSummaryV3GenerateServer({ manifest }, {
+      write: vi.fn(async () => { writes += 1; if (writes === 2) throw providerError(500); return writerResponse(manifest); }),
+      evaluate: vi.fn(async () => evaluatorResponse(manifest, 'semantic', 'unsupported_metric')),
+    });
+    expect(repairWriter).toMatchObject({ ok: false, typedReason: 'repair_provider_failed', m4ProviderFailure: { phase: 'repair_writer', providerHttpStatus: 500 } });
+
+    let evaluations = 0;
+    const postRepairEvaluator = await executeSummaryV3GenerateServer({ manifest }, {
+      write: vi.fn(async () => writerResponse(manifest)),
+      evaluate: vi.fn(async () => { evaluations += 1; if (evaluations === 2) throw providerError(403); return evaluatorResponse(manifest, 'semantic', 'unsupported_metric'); }),
+    });
+    expect(postRepairEvaluator).toMatchObject({ ok: false, typedReason: 'repair_validator_exception', m4ProviderFailure: { phase: 'post_repair_evaluator', providerHttpStatus: 403 } });
+  });
+
+  it('retains typed tool-validation rejection without rewriting it as provider request failure', async () => {
+    const manifest = snapshot().manifest;
+    const result = await executeSummaryV3GenerateServer({ manifest }, {
+      write: vi.fn(async () => ({ stopReason: 'tool_use', content: [] })), evaluate: vi.fn(),
+    });
+    expect(result).toMatchObject({ ok: false, typedReason: 'writer_tool_missing', m4ProviderFailure: { phase: 'initial_writer', failureStage: 'tool_validation', providerHttpStatus: null } });
+  });
+
+  it('keeps route HTTP status separate from provider status in terminal diagnostics and copy', async () => {
+    const captured = snapshot();
+    const events: import('../summary-generate').SummaryV3GenerateTerminalEvent[] = [];
+    const envelope = classifySummaryV3ProviderFailure(providerError(400), 'initial_writer', 'sdk_request');
+    await runSummaryV3GenerateAdapter(input(), {
+      request: vi.fn(async () => ({ ok: false, action: SUMMARY_V3_GENERATE_ACTION, typedReason: 'provider_request_failed', m4ProviderFailure: envelope })),
+      getLiveState: () => ({ cv: cv(), requestedLocale: 'en', uiLocale: 'en', storedContentLocale: 'en', exactVisibleSummary: '',
+        referenceDateIso: captured.referenceDateIso, jobContextHash: 'context-m4' }),
+      getActiveOperationId: () => 'm4-operation', writeCv: vi.fn(), projectPreviewSummary: (next) => next.summary,
+      persistCv: vi.fn(), incrementUsage: vi.fn(), getRouteHttpStatus: () => 502,
+      onTerminal: (event) => events.push(event),
+    });
+    const session = new SummaryAiDiagnosticSession({ uiLocale: 'en', requestedLocale: 'en', templateId: 'test', requestId: 'safe-request', usageCountBefore: 4 });
+    session.recordM4Terminal(events[0]);
+    const trace = session.commit();
+    expect(trace.m4RouteHttpStatus).toBe(502);
+    expect(trace.providerHttpStatus).toBe(400);
+    expect(trace.m4ProviderFailure).toMatchObject({ phase: 'initial_writer', providerHttpStatus: 400 });
+    const copy = formatSummaryAiDiagnosticForCopy(trace);
+    expect(copy).toContain('m4ProviderFailure');
+    expect(copy).not.toContain('raw provider message');
+    expect(copy).not.toContain('raw-provider-request-id');
   });
 });

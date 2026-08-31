@@ -173,6 +173,7 @@ import { INTERNAL_AI_RESET_ENABLED } from './build-channel';
 import type {
   SummaryV3GenerateTerminalEvent,
   SummaryV3InternalRejectionAudit,
+  SummaryV3ProviderFailureEnvelope,
 } from './ai-core-v3/summary-generate';
 import { getApiBaseUrl } from './api';
 import {
@@ -687,6 +688,7 @@ export type SummaryAiDiagnosticTrace = {
   m4RouteHttpStatus?: number | null;
   m4Writer?: SummaryV3GenerateTerminalEvent['evidence']['writer'];
   m4Evaluator?: SummaryV3GenerateTerminalEvent['evidence']['evaluator'];
+  m4ProviderFailure?: SummaryV3ProviderFailureEnvelope | null;
   m4Phases?: SummaryV3GenerateTerminalEvent['evidence']['phases'];
   m4CandidatePresent?: boolean;
   m4CandidateHash?: string | null;
@@ -2502,6 +2504,7 @@ export class SummaryAiDiagnosticSession {
       m4RouteHttpStatus: event.routeHttpStatus,
       m4Writer: event.evidence.writer,
       m4Evaluator: event.evidence.evaluator,
+      m4ProviderFailure: event.evidence.m4ProviderFailure ?? null,
       m4Phases: phaseStatus,
       m4CandidatePresent: event.evidence.candidatePresent,
       m4CandidateHash: event.evidence.candidateHash,
@@ -2527,7 +2530,7 @@ export class SummaryAiDiagnosticSession {
       providerCandidatePresent: event.evidence.candidatePresent,
       providerCandidateHash: event.evidence.candidateHash,
       providerResponseKind: event.evidence.providerResponseKind,
-      providerHttpStatus: event.routeHttpStatus,
+      providerHttpStatus: event.evidence.m4ProviderFailure?.providerHttpStatus ?? null,
       repairAttempted: event.evidence.repairAttempted,
       visibleApplySucceeded: event.applyCommitted,
       countedAsSuccess: event.applyCommitted,
