@@ -255,35 +255,20 @@ export const SUMMARY_V3_WRITER_TOOL: Anthropic.Tool = {
       operationId: { type: 'string' },
       snapshotHash: { type: 'string' },
       locale: { type: 'string' },
-      units: {
-        type: 'array',
-        items: {
-          anyOf: [
-            {
-              type: 'object',
-              additionalProperties: false,
-              required: ['slot', 'entryId', 'factIds', 'text'],
-              properties: {
-                slot: { type: 'string', const: 'duration' },
-                entryId: { type: 'null' },
-                factIds: { type: 'array', const: [], items: { type: 'string' } },
-                text: { type: 'string' },
-              },
+        units: {
+          type: 'array',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['slot', 'entryId', 'factIds', 'text'],
+            properties: {
+              slot: { type: 'string', enum: ['duration', 'experience'] },
+              entryId: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+              factIds: { type: 'array', items: { type: 'string' } },
+              text: { type: 'string' },
             },
-            {
-              type: 'object',
-              additionalProperties: false,
-              required: ['slot', 'entryId', 'factIds', 'text'],
-              properties: {
-                slot: { type: 'string', const: 'experience' },
-                entryId: { type: 'string' },
-                factIds: { type: 'array', items: { type: 'string' } },
-                text: { type: 'string' },
-              },
-            },
-          ],
+          },
         },
-      },
     },
   },
 };

@@ -14,6 +14,7 @@ import {
 import {
   SUMMARY_V3_EVALUATOR_TOOL_NAME,
   SUMMARY_V3_GENERATE_ACTION,
+  SUMMARY_V3_WRITER_TOOL,
   SUMMARY_V3_WRITER_TOOL_NAME,
   SUMMARY_V3_WRITER_UNIT_CONTRACT,
   SUMMARY_V3_INITIAL_WRITER_TIMEOUT_MS,
@@ -406,7 +407,8 @@ describe('M4 actual page routing and direct server gate', () => {
       });
       const tool = request.tools?.[0] as { description?: string; input_schema?: unknown };
       expect(tool.description).toContain(SUMMARY_V3_WRITER_UNIT_CONTRACT);
-      expect(JSON.stringify(tool.input_schema)).toContain('"const":[]');
+      expect(tool.input_schema).toEqual(SUMMARY_V3_WRITER_TOOL.input_schema);
+      expect(JSON.stringify(tool.input_schema)).not.toContain('"const":[]');
       expect(String(request.messages?.[0]?.content)).toContain(SUMMARY_V3_WRITER_UNIT_CONTRACT);
     }
   });

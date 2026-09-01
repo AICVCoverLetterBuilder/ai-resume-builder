@@ -35,6 +35,7 @@ import { M4_SUMMARY_GENERATE_AAB546_OBSERVATION } from '../fixtures/m4-summary-g
 import { M4_SUMMARY_GENERATE_AAB547_TIMEOUT_OBSERVATION } from '../fixtures/m4-summary-generate-aab547-timeout-observation';
 import { M4_SUMMARY_GENERATE_AAB548_WRITER_SCHEMA_OBSERVATION } from '../fixtures/m4-summary-generate-aab548-writer-schema-observation';
 import { M4_SUMMARY_GENERATE_AAB549_DURATION_OBSERVATION } from '../fixtures/m4-summary-generate-aab549-duration-observation';
+import { M4_SUMMARY_GENERATE_AAB550_STRICT_SCHEMA_OBSERVATION } from '../fixtures/m4-summary-generate-aab550-strict-schema-observation';
 import { SummaryAiDiagnosticSession, formatSummaryAiDiagnosticForCopy } from '../../cv-summary-ai-diagnostics';
 
 function cv(): CVData {
@@ -665,7 +666,7 @@ describe('M4 transactional apply, preview, rollback, and usage', () => {
 });
 
 describe('M4 provider-failure observability envelope', () => {
-  it('advertises one prompt/tool/schema duration ownership contract for initial and repair writers', () => {
+  it('keeps duration ownership in the shared prompt/tool contract while runtime parsing remains final authority', () => {
     const manifest = physicalShapeSnapshot().manifest;
     const initial = buildSummaryV3WriterPrompt(manifest);
     const repair = buildSummaryV3RepairPrompt(manifest, {
@@ -686,23 +687,34 @@ describe('M4 provider-failure observability envelope', () => {
     expect(SUMMARY_V3_WRITER_TOOL.description).toContain(SUMMARY_V3_WRITER_UNIT_CONTRACT);
   });
 
-  it('uses a provider JSON Schema that accepts the valid discriminated units and rejects both duration ownership drifts', () => {
+  it('uses the flat provider schema for type-shape validation while runtime parsing owns duration semantics', () => {
     const manifest = physicalShapeSnapshot().manifest;
     const validate = new Ajv({ allErrors: true }).compile(SUMMARY_V3_WRITER_TOOL.input_schema);
     const valid = output(manifest);
     expect(validate(valid), JSON.stringify(validate.errors)).toBe(true);
 
     const nonNullEntryId = { ...valid, units: [{ ...valid.units[0], entryId: 'synthetic-entry' }, ...valid.units.slice(1)] };
-    expect(validate(nonNullEntryId)).toBe(false);
+    expect(validate(nonNullEntryId), JSON.stringify(validate.errors)).toBe(true);
 
     const nonEmptyFactIds = { ...valid, units: [{ ...valid.units[0], factIds: ['synthetic-fact'] }, ...valid.units.slice(1)] };
-    expect(validate(nonEmptyFactIds)).toBe(false);
+    expect(validate(nonEmptyFactIds), JSON.stringify(validate.errors)).toBe(true);
 
     const bothInvalid = { ...valid, units: [{ ...valid.units[0], entryId: 'synthetic-entry', factIds: ['synthetic-fact'] }, ...valid.units.slice(1)] };
-    expect(validate(bothInvalid)).toBe(false);
+    expect(validate(bothInvalid), JSON.stringify(validate.errors)).toBe(true);
 
     const invalidExperienceOwnershipTypes = { ...valid, units: [valid.units[0], { ...valid.units[1], entryId: null }] };
-    expect(validate(invalidExperienceOwnershipTypes)).toBe(false);
+    expect(validate(invalidExperienceOwnershipTypes), JSON.stringify(validate.errors)).toBe(true);
+
+    const missingUnitKey = { ...valid, units: valid.units.map(({ text: _text, ...unit }) => unit) };
+    expect(validate(missingUnitKey)).toBe(false);
+    const extraUnitKey = { ...valid, units: valid.units.map((unit) => ({ ...unit, extra: true })) };
+    expect(validate(extraUnitKey)).toBe(false);
+    const wrongPrimitive = { ...valid, locale: 1 };
+    expect(validate(wrongPrimitive)).toBe(false);
+    const invalidSlot = { ...valid, units: [{ ...valid.units[0], slot: 'other' }, ...valid.units.slice(1)] };
+    expect(validate(invalidSlot)).toBe(false);
+    const invalidFactId = { ...valid, units: [{ ...valid.units[0], factIds: [1] }, ...valid.units.slice(1)] };
+    expect(validate(invalidFactId)).toBe(false);
   });
 
   function providerError(status?: number, code = 'invalid_request'): Error {
@@ -908,6 +920,26 @@ describe('M4 provider-failure observability envelope', () => {
     expect(Object.isFrozen(M4_SUMMARY_GENERATE_AAB549_DURATION_OBSERVATION)).toBe(true);
     expect(JSON.stringify(M4_SUMMARY_GENERATE_AAB549_DURATION_OBSERVATION))
       .not.toMatch(/@|fullName|email|phone|address|employer|roleTitle|generatedText|rawToolInput|credential|bearer/iu);
+  });
+
+  it('records the immutable AAB 550 strict-schema provider 400 without raw request, response, or CV data', () => {
+    expect(M4_SUMMARY_GENERATE_AAB550_STRICT_SCHEMA_OBSERVATION).toMatchObject({
+      package: '1.0.550 / 550', sourceMarker: '9f69bbc', operation: 'summary_v3_generate',
+      routeHttpStatus: 502, ownershipResult: 'owned',
+      writer: { attempted: true, result: 'failed', stopReason: null, contentBlockCount: null,
+        textBlockCount: null, toolBlockCount: null, toolNameMatched: null, toolInputObject: null,
+        toolInputSchemaPassed: null, identityPassed: null },
+      evaluator: { attempted: false, result: 'not_attempted' }, candidatePresent: false,
+      repairAttempted: false, apply: false, persistence: 'not_attempted', usageBefore: 0,
+      usageAfter: 0, usageDelta: 0, v2FallthroughCount: 0, summaryUnchanged: true,
+      experienceUnchanged: true, terminalRecordPresentBeforeToast: true,
+      m4ProviderFailure: { phase: 'initial_writer', failureStage: 'sdk_request', providerHttpStatus: 400,
+        providerErrorType: 'invalid_request', providerErrorCode: null, providerRequestIdHash: 'v3s-ede10895',
+        providerMessageFingerprint: 'v3s-de94804f', providerStructuralFieldPath: null,
+        providerHttpResponseReceived: true },
+    });
+    expect(Object.isFrozen(M4_SUMMARY_GENERATE_AAB550_STRICT_SCHEMA_OBSERVATION)).toBe(true);
+    expect(JSON.stringify(M4_SUMMARY_GENERATE_AAB550_STRICT_SCHEMA_OBSERVATION)).not.toMatch(/@|Ana|Example|Current|employer|role|prompt|token|credential|raw/u);
   });
 
   it('keeps route HTTP status separate from provider status in terminal diagnostics and copy', async () => {
