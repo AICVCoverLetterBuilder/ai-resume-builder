@@ -102,6 +102,7 @@ import type {
   ExperienceV3EnhanceWriterResponse,
 } from '@/lib/ai-core-v3/experience-enhance-server';
 import {
+  SUMMARY_V3_INITIAL_EVALUATOR_TIMEOUT_MS,
   SUMMARY_V3_INITIAL_WRITER_TIMEOUT_MS,
   computeSummaryV3ServerDeadline,
   type SummaryV3WriterResponse,
@@ -2113,7 +2114,10 @@ Rules:
           }
           let response: Anthropic.Messages.Message;
           try {
-            response = await callWithRetry(request, deadlineAt, undefined, AI_PROVIDER_CALL_TIMEOUT_MS, 'verifier', undefined, false);
+            const timeoutMs = phase === 'initial_evaluator'
+              ? SUMMARY_V3_INITIAL_EVALUATOR_TIMEOUT_MS
+              : AI_PROVIDER_CALL_TIMEOUT_MS;
+            response = await callWithRetry(request, deadlineAt, undefined, timeoutMs, 'verifier', undefined, false);
           } catch (error) {
             throw createSummaryV3ProviderTransportError(error, phase, 'sdk_request');
           }

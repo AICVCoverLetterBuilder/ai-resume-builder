@@ -36,7 +36,9 @@ import { M4_SUMMARY_GENERATE_AAB547_TIMEOUT_OBSERVATION } from '../fixtures/m4-s
 import { M4_SUMMARY_GENERATE_AAB548_WRITER_SCHEMA_OBSERVATION } from '../fixtures/m4-summary-generate-aab548-writer-schema-observation';
 import { M4_SUMMARY_GENERATE_AAB549_DURATION_OBSERVATION } from '../fixtures/m4-summary-generate-aab549-duration-observation';
 import { M4_SUMMARY_GENERATE_AAB550_STRICT_SCHEMA_OBSERVATION } from '../fixtures/m4-summary-generate-aab550-strict-schema-observation';
+import { M4_SUMMARY_GENERATE_AAB551_INITIAL_EVALUATOR_TIMEOUT_OBSERVATION } from '../fixtures/m4-summary-generate-aab551-initial-evaluator-timeout-observation';
 import { SummaryAiDiagnosticSession, formatSummaryAiDiagnosticForCopy } from '../../cv-summary-ai-diagnostics';
+import { AI_PROVIDER_CALL_TIMEOUT_MS, callProviderWithDeadline } from '../../ai-request-timing';
 
 function cv(): CVData {
   return {
@@ -1025,5 +1027,58 @@ describe('M4 AAB 547 immutable timeout authority', () => {
     const serialized = JSON.stringify(M4_SUMMARY_GENERATE_AAB547_TIMEOUT_OBSERVATION);
     expect(serialized).not.toMatch(/@|fullName|email|phone|address|employer|roleTitle|raw request|api[_-]?key|credential|bearer/iu);
     expect(M4_SUMMARY_GENERATE_AAB547_TIMEOUT_OBSERVATION.m4ProviderFailure.providerRequestIdHash).toBeNull();
+  });
+});
+
+describe('M4 AAB 551 immutable initial-evaluator timeout authority', () => {
+  it('preserves the physical writer-success/evaluator-timeout boundary without CV data', () => {
+    expect(M4_SUMMARY_GENERATE_AAB551_INITIAL_EVALUATOR_TIMEOUT_OBSERVATION).toMatchObject({
+      applicationId: 'com.cvproai.app', versionCode: 551, versionName: '1.0.551', sourceMarker: '0f8a14a',
+      locale: 'de', sourceWasEmpty: true, selectedExperienceCount: 1, authoritativeFactCount: 3,
+      routeHttpStatus: 502,
+      writer: { attempted: true, result: 'succeeded', stopReason: 'tool_use', contentBlockCount: 1,
+        textBlockCount: 0, toolBlockCount: 1, expectedToolCount: 1, toolNameMatched: true,
+        toolInputObject: true, schemaPassed: true, identityPassed: true },
+      evaluator: { attempted: true, result: 'failed', responseMetadataAvailable: false },
+      m4ProviderFailure: { phase: 'initial_evaluator', failureStage: 'sdk_request', errorClass: 'Error',
+        providerHttpStatus: null, providerErrorType: 'timeout', providerErrorCode: null,
+        providerRequestIdHash: null, providerRetryable: false, providerMessageFingerprint: 'v3s-de5a1d01',
+        providerStructuralFieldPath: null, providerHttpResponseReceived: null },
+      candidateApplied: false, applyAttempted: false, persistenceAttempted: false,
+      usageBefore: 0, usageAfter: 0, usageDelta: 0, v2FallthroughCount: 0,
+      summaryUnchanged: true, experienceUnchanged: true, terminalRecordPresentBeforeToast: true,
+    });
+  });
+
+  it('reproduces v3s-de5a1d01 through the actual historical verifier transport seam', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      const pending = callProviderWithDeadline(
+        () => new Promise<never>(() => undefined), null, AI_PROVIDER_CALL_TIMEOUT_MS, 'verifier',
+      ).catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(8_000);
+      const error = await pending;
+      expect(error).toMatchObject({ name: 'AbortError', deadlineOwner: 'verifier_transport',
+        configuredTimeoutMs: 8_000, effectiveTimeoutMs: 8_000 });
+      expect(classifySummaryV3ProviderFailure(error, 'initial_evaluator', 'sdk_request')).toMatchObject({
+        phase: 'initial_evaluator', failureStage: 'sdk_request', errorClass: 'Error',
+        providerHttpStatus: null, providerErrorType: 'timeout', providerRetryable: false,
+        providerMessageFingerprint: 'v3s-de5a1d01', providerHttpResponseReceived: null,
+      });
+      expect(classifySummaryV3ProviderFailure(error, 'post_repair_evaluator', 'sdk_request').phase)
+        .toBe('post_repair_evaluator');
+      expect(hashSummaryV3Value('provider_transport_timeout after 8000ms')).not.toBe('v3s-de5a1d01');
+      expect(hashSummaryV3Value('route_deadline_exceeded after 8000ms')).not.toBe('v3s-de5a1d01');
+      expect(hashSummaryV3Value('generic ordinary error')).not.toBe('v3s-de5a1d01');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('contains no prose, identity, prompt, provider payload, request ID, or secret', () => {
+    expect(Object.isFrozen(M4_SUMMARY_GENERATE_AAB551_INITIAL_EVALUATOR_TIMEOUT_OBSERVATION)).toBe(true);
+    const serialized = JSON.stringify(M4_SUMMARY_GENERATE_AAB551_INITIAL_EVALUATOR_TIMEOUT_OBSERVATION);
+    expect(serialized).not.toMatch(/@|fullName|email|phone|address|employer|role|prompt|rawProviderRequest|providerRequestPayload|providerResponsePayload|raw|api[_-]?key|credential|token|cookie|header|deployment/iu);
   });
 });
