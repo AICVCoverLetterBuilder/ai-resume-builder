@@ -39,6 +39,12 @@ export interface SummaryV3GenerateTransportSet {
 export const SUMMARY_V3_WRITER_TOOL_NAME = 'submit_summary_generation' as const;
 export const SUMMARY_V3_EVALUATOR_TOOL_NAME = 'submit_summary_validation' as const;
 
+export const SUMMARY_V3_WRITER_UNIT_CONTRACT = [
+  'Emit exactly one duration unit first with slot=duration, entryId=null, and factIds=[].',
+  'Do not attach any Experience entryId or factId to the duration unit.',
+  'Then emit one Experience unit per selected entry in manifest order with slot=experience, the supplied entryId, and exactly the supplied factIds in their supplied order.',
+].join(' ');
+
 /** M4 aliases existing constrained-provider authorities; no new transport value is introduced. */
 export const SUMMARY_V3_INITIAL_WRITER_TIMEOUT_MS = EXPERIENCE_LOCALIZATION_VERIFIER_TIMEOUT_MS;
 export const SUMMARY_V3_SERVER_BUDGET_MS = EXPERIENCE_LOCALIZATION_SERVER_BUDGET_MS;
@@ -80,7 +86,8 @@ const SAFE_PROVIDER_ERROR_CODES = new Set([
 const SAFE_TOOL_VALIDATION_CODES = new Set([
   'input_not_object', 'top_level_keys', 'units_type', 'units_length', 'unit_not_object',
   'unit_keys', 'slot_type_or_enum', 'entry_id_type', 'fact_ids_type', 'fact_id_type',
-  'text_type', 'text_content', 'unit_order', 'duration_contract', 'entry_ownership',
+  'text_type', 'text_content', 'unit_order', 'duration_contract', 'duration_entry_id_contract',
+  'duration_fact_ids_contract', 'entry_ownership',
   'fact_ownership', 'duplicate_fact_ids',
 ]);
 
@@ -137,7 +144,7 @@ function safeProviderCode(value: unknown): string | null {
 }
 
 function safeStructuralPath(value: string | null | undefined): string | null {
-  return typeof value === 'string' && /^[a-z][a-z0-9_.-]{0,127}$/u.test(value) ? value : null;
+  return typeof value === 'string' && /^[a-z][A-Za-z0-9_.-]{0,127}$/u.test(value) ? value : null;
 }
 
 function safeHash(value: unknown): string | null {
@@ -238,7 +245,7 @@ function evaluatorPhaseSchema(category: EvaluatedCategory) {
 
 export const SUMMARY_V3_WRITER_TOOL: Anthropic.Tool = {
   name: SUMMARY_V3_WRITER_TOOL_NAME,
-  description: 'Submit only the fact-locked Summary units. This tool cannot authorize validation, apply, persistence, usage, retries, or repair.',
+  description: `Submit only Summary units under this ownership contract: ${SUMMARY_V3_WRITER_UNIT_CONTRACT} This tool cannot authorize validation, apply, persistence, usage, retries, or repair.`,
   strict: true,
   input_schema: {
     type: 'object' as const,
@@ -251,15 +258,30 @@ export const SUMMARY_V3_WRITER_TOOL: Anthropic.Tool = {
       units: {
         type: 'array',
         items: {
-          type: 'object',
-          additionalProperties: false,
-          required: ['slot', 'entryId', 'factIds', 'text'],
-          properties: {
-            slot: { type: 'string', enum: ['duration', 'experience'] },
-            entryId: { anyOf: [{ type: 'string' }, { type: 'null' }] },
-            factIds: { type: 'array', items: { type: 'string' } },
-            text: { type: 'string' },
-          },
+          anyOf: [
+            {
+              type: 'object',
+              additionalProperties: false,
+              required: ['slot', 'entryId', 'factIds', 'text'],
+              properties: {
+                slot: { type: 'string', const: 'duration' },
+                entryId: { type: 'null' },
+                factIds: { type: 'array', const: [], items: { type: 'string' } },
+                text: { type: 'string' },
+              },
+            },
+            {
+              type: 'object',
+              additionalProperties: false,
+              required: ['slot', 'entryId', 'factIds', 'text'],
+              properties: {
+                slot: { type: 'string', const: 'experience' },
+                entryId: { type: 'string' },
+                factIds: { type: 'array', items: { type: 'string' } },
+                text: { type: 'string' },
+              },
+            },
+          ],
         },
       },
     },
@@ -493,9 +515,14 @@ function parseSummaryV3WriterObjectDetailed(
   }
   const duration = typed.filter((unit) => unit.slot === 'duration');
   const experiences = typed.filter((unit) => unit.slot === 'experience');
-  if (duration.length !== 1 || duration[0].entryId !== null || duration[0].factIds.length !== 0
-    || experiences.length !== manifest.selectedEntries.length) {
+  if (duration.length !== 1 || experiences.length !== manifest.selectedEntries.length) {
     return writerObjectFailure('duration_contract', 'units');
+  }
+  if (duration[0].entryId !== null) {
+    return writerObjectFailure('duration_entry_id_contract', 'units.0.entryId');
+  }
+  if (duration[0].factIds.length !== 0) {
+    return writerObjectFailure('duration_fact_ids_contract', 'units.0.factIds');
   }
   for (let index = 0; index < experiences.length; index += 1) {
     const expected = manifest.selectedEntries[index];
@@ -782,8 +809,8 @@ export function buildSummaryV3WriterPrompt(manifest: SummaryV3Manifest): string 
     'Write one grounded professional first-person CV Summary in the requested locale and script.',
     `Invoke only the ${SUMMARY_V3_WRITER_TOOL_NAME} tool. Do not emit text, Markdown, code fences, commentary, explanations, headings, or reasoning.`,
     'The tool input has exactly operationId, snapshotHash, locale, and units.',
-    'Return exactly one duration unit followed by one experience unit per selected entry in manifest order.',
-    'Each unit has exactly slot, entryId, factIds, and text. Preserve owning entry and every factId exactly once.',
+    SUMMARY_V3_WRITER_UNIT_CONTRACT,
+    'Each unit has exactly slot, entryId, factIds, and text.',
     'Use exactly one total-career duration representation. Keep current and prior roles separate and use correct current/past state.',
     'Do not invent facts, metrics, achievements, tools, certifications, leadership, education, skills, languages, employers, roles, or dates.',
     'No headings, bullets, markdown, commentary, diagnostics, authority fields, or mutation instructions.',
@@ -810,6 +837,7 @@ export function buildSummaryV3RepairPrompt(manifest: SummaryV3Manifest, candidat
   return [
     'Repair the candidate once using only the unchanged manifest and finite violations. Add no facts.',
     `Invoke only the ${SUMMARY_V3_WRITER_TOOL_NAME} tool with the identical strict writer schema and identities. Do not emit text, Markdown, code fences, commentary, diagnostics, authority, or fallback prose.`,
+    SUMMARY_V3_WRITER_UNIT_CONTRACT,
     JSON.stringify({ operationId: manifest.operationId, snapshotHash: manifest.sourceSnapshotHash,
       locale: manifest.targetLocale, manifest, candidate, violations }),
   ].join('\n');

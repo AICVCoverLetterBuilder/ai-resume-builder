@@ -1,3 +1,4 @@
+import Ajv from 'ajv';
 import { describe, expect, it, vi } from 'vitest';
 import { applyCvContentQuality } from '../../cv-content-quality';
 import { omitInvalidLocalizedFieldsForPreview } from '../../cv-field-locale-integrity';
@@ -22,13 +23,18 @@ import {
   type SummaryV3Manifest,
   type SummaryV3WriterOutput,
   SUMMARY_V3_EVALUATOR_TOOL_NAME,
+  SUMMARY_V3_WRITER_TOOL,
   SUMMARY_V3_WRITER_TOOL_NAME,
+  SUMMARY_V3_WRITER_UNIT_CONTRACT,
+  buildSummaryV3RepairPrompt,
+  buildSummaryV3WriterPrompt,
 } from '..';
 import { M4_SUMMARY_GENERATE_DEVICE_OBSERVATION } from '../fixtures/m4-summary-generate-device-observation';
 import { M4_SUMMARY_GENERATE_AAB545_OBSERVATION } from '../fixtures/m4-summary-generate-aab545-observation';
 import { M4_SUMMARY_GENERATE_AAB546_OBSERVATION } from '../fixtures/m4-summary-generate-aab546-observation';
 import { M4_SUMMARY_GENERATE_AAB547_TIMEOUT_OBSERVATION } from '../fixtures/m4-summary-generate-aab547-timeout-observation';
 import { M4_SUMMARY_GENERATE_AAB548_WRITER_SCHEMA_OBSERVATION } from '../fixtures/m4-summary-generate-aab548-writer-schema-observation';
+import { M4_SUMMARY_GENERATE_AAB549_DURATION_OBSERVATION } from '../fixtures/m4-summary-generate-aab549-duration-observation';
 import { SummaryAiDiagnosticSession, formatSummaryAiDiagnosticForCopy } from '../../cv-summary-ai-diagnostics';
 
 function cv(): CVData {
@@ -60,6 +66,15 @@ function input(overrides: Partial<SummaryV3GenerateAdapterInput> = {}): SummaryV
 
 function snapshot(overrides: Partial<SummaryV3GenerateAdapterInput> = {}) {
   return captureSummaryV3GenerateOperationSnapshot(input(overrides));
+}
+
+function physicalShapeSnapshot() {
+  const data = cv();
+  data.experience = [{
+    ...data.experience[1],
+    description: 'Maintains systems.\nReviews changes.\nDocuments results.',
+  }];
+  return snapshot({ cv: data, requestedLocale: 'de', uiLocale: 'de', storedContentLocale: 'de' });
 }
 
 function output(manifest: SummaryV3Manifest, suffix = ''): SummaryV3WriterOutput {
@@ -650,6 +665,46 @@ describe('M4 transactional apply, preview, rollback, and usage', () => {
 });
 
 describe('M4 provider-failure observability envelope', () => {
+  it('advertises one prompt/tool/schema duration ownership contract for initial and repair writers', () => {
+    const manifest = physicalShapeSnapshot().manifest;
+    const initial = buildSummaryV3WriterPrompt(manifest);
+    const repair = buildSummaryV3RepairPrompt(manifest, {
+      operationId: manifest.operationId,
+      candidateId: 'synthetic-candidate',
+      operationKind: 'summary_generate',
+      sourceSnapshotHash: manifest.sourceSnapshotHash,
+      targetLocale: manifest.targetLocale,
+      text: 'Synthetic candidate.',
+    }, [{ code: 'duration_mismatch', category: 'semantic', detail: 'finite synthetic evidence' }]);
+    expect(initial).toContain(SUMMARY_V3_WRITER_UNIT_CONTRACT);
+    expect(repair).toContain(SUMMARY_V3_WRITER_UNIT_CONTRACT);
+    expect(SUMMARY_V3_WRITER_UNIT_CONTRACT).toContain('exactly one duration unit first');
+    expect(SUMMARY_V3_WRITER_UNIT_CONTRACT).toContain('entryId=null');
+    expect(SUMMARY_V3_WRITER_UNIT_CONTRACT).toContain('factIds=[]');
+    expect(SUMMARY_V3_WRITER_UNIT_CONTRACT).toContain('supplied entryId');
+    expect(SUMMARY_V3_WRITER_UNIT_CONTRACT).toContain('exactly the supplied factIds');
+    expect(SUMMARY_V3_WRITER_TOOL.description).toContain(SUMMARY_V3_WRITER_UNIT_CONTRACT);
+  });
+
+  it('uses a provider JSON Schema that accepts the valid discriminated units and rejects both duration ownership drifts', () => {
+    const manifest = physicalShapeSnapshot().manifest;
+    const validate = new Ajv({ allErrors: true }).compile(SUMMARY_V3_WRITER_TOOL.input_schema);
+    const valid = output(manifest);
+    expect(validate(valid), JSON.stringify(validate.errors)).toBe(true);
+
+    const nonNullEntryId = { ...valid, units: [{ ...valid.units[0], entryId: 'synthetic-entry' }, ...valid.units.slice(1)] };
+    expect(validate(nonNullEntryId)).toBe(false);
+
+    const nonEmptyFactIds = { ...valid, units: [{ ...valid.units[0], factIds: ['synthetic-fact'] }, ...valid.units.slice(1)] };
+    expect(validate(nonEmptyFactIds)).toBe(false);
+
+    const bothInvalid = { ...valid, units: [{ ...valid.units[0], entryId: 'synthetic-entry', factIds: ['synthetic-fact'] }, ...valid.units.slice(1)] };
+    expect(validate(bothInvalid)).toBe(false);
+
+    const invalidExperienceOwnershipTypes = { ...valid, units: [valid.units[0], { ...valid.units[1], entryId: null }] };
+    expect(validate(invalidExperienceOwnershipTypes)).toBe(false);
+  });
+
   function providerError(status?: number, code = 'invalid_request'): Error {
     const error = new Error('raw provider message must never persist') as Error & Record<string, unknown>;
     if (status !== undefined) error.status = status;
@@ -758,7 +813,8 @@ describe('M4 provider-failure observability envelope', () => {
       ['wrong text type', { ...valid, units: [{ ...(valid.units[0] as object), text: 1 }, ...valid.units.slice(1)] }, 'text_type', 'units.0.text'],
       ['unsafe text', { ...valid, units: [{ ...(valid.units[0] as object), text: '# Summary' }, ...valid.units.slice(1)] }, 'text_content', 'units.0.text'],
       ['wrong order', { ...valid, units: [valid.units[1], valid.units[0], ...valid.units.slice(2)] }, 'unit_order', 'units'],
-      ['duration ownership', { ...valid, units: [{ ...(valid.units[0] as object), entryId: 'wrong' }, ...valid.units.slice(1)] }, 'duration_contract', 'units'],
+      ['duration ownership', { ...valid, units: [{ ...(valid.units[0] as object), entryId: 'wrong' }, ...valid.units.slice(1)] }, 'duration_entry_id_contract', 'units.0.entryId'],
+      ['duration fact ownership', { ...valid, units: [{ ...(valid.units[0] as object), factIds: ['foreign-fact'] }, ...valid.units.slice(1)] }, 'duration_fact_ids_contract', 'units.0.factIds'],
       ['experience ownership', { ...valid, units: [valid.units[0], { ...(valid.units[1] as object), entryId: 'wrong' }, ...valid.units.slice(2)] }, 'entry_ownership', 'units.1.entryId'],
       ['wrong fact ownership', { ...valid, units: [valid.units[0], { ...(valid.units[1] as object), factIds: (valid.units[2] as { factIds: string[] }).factIds }, ...valid.units.slice(2)] }, 'fact_ownership', 'units.1.factIds'],
     ];
@@ -775,6 +831,83 @@ describe('M4 provider-failure observability envelope', () => {
     const manifest = snapshot().manifest;
     const result = parseSummaryV3WriterToolResponse(writerResponse(manifest), manifest);
     expect(result).toMatchObject({ ok: true, diagnosticMetadata: { toolInputSchemaPassed: true, identityPassed: true } });
+  });
+
+  it.each([
+    ['duration entryId is non-null', (valid: SummaryV3WriterOutput) => ({ ...valid, units: [
+      { ...valid.units[0], entryId: 'synthetic-entry' }, ...valid.units.slice(1),
+    ] }), 'duration_entry_id_contract', 'units.0.entryId'],
+    ['duration factIds is non-empty', (valid: SummaryV3WriterOutput) => ({ ...valid, units: [
+      { ...valid.units[0], factIds: ['synthetic-fact'] }, ...valid.units.slice(1),
+    ] }), 'duration_fact_ids_contract', 'units.0.factIds'],
+    ['both duration ownership fields are invalid', (valid: SummaryV3WriterOutput) => ({ ...valid, units: [
+      { ...valid.units[0], entryId: 'synthetic-entry', factIds: ['synthetic-fact'] }, ...valid.units.slice(1),
+    ] }), 'duration_entry_id_contract', 'units.0.entryId'],
+  ])('projects the exact finite branch for %s', async (_name, mutate, code, fieldPath) => {
+    const manifest = physicalShapeSnapshot().manifest;
+    expect(manifest.selectedEntries).toHaveLength(1);
+    expect(manifest.selectedEntries[0].facts).toHaveLength(3);
+    const evaluate = vi.fn();
+    const result = await executeSummaryV3GenerateServer({ manifest }, {
+      write: vi.fn(async () => ({ stopReason: 'tool_use', content: [{
+        type: 'tool_use', name: SUMMARY_V3_WRITER_TOOL_NAME, input: mutate(output(manifest)),
+      }] })),
+      evaluate,
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      typedReason: 'writer_tool_input_malformed',
+      repairAttempted: false,
+      m4ProviderFailure: {
+        phase: 'initial_writer', failureStage: 'tool_validation',
+        providerErrorCode: code, providerStructuralFieldPath: fieldPath,
+        providerMessageFingerprint: 'v3s-f8b6c81c', providerRetryable: false,
+      },
+      transportEvidence: { writer: { identityPassed: true, result: 'malformed' } },
+    });
+    expect(evaluate).not.toHaveBeenCalled();
+    expect('candidate' in result).toBe(false);
+  });
+
+  it('uses the same exact duration observability for a malformed repair without changing repair eligibility', async () => {
+    const manifest = physicalShapeSnapshot().manifest;
+    let writes = 0;
+    const write = vi.fn(async () => {
+      writes += 1;
+      if (writes === 1) return writerResponse(manifest);
+      const invalid = output(manifest);
+      return { stopReason: 'tool_use', content: [{ type: 'tool_use' as const, name: SUMMARY_V3_WRITER_TOOL_NAME,
+        input: { ...invalid, units: [{ ...invalid.units[0], factIds: ['synthetic-fact'] }, ...invalid.units.slice(1)] } }] };
+    });
+    const evaluate = vi.fn(async () => evaluatorResponse(manifest, 'semantic', 'duration_mismatch'));
+    const result = await executeSummaryV3GenerateServer({ manifest }, { write, evaluate });
+    expect(result).toMatchObject({
+      ok: false, typedReason: 'repair_output_malformed', repairAttempted: true,
+      m4ProviderFailure: { phase: 'repair_writer', providerErrorCode: 'duration_fact_ids_contract',
+        providerStructuralFieldPath: 'units.0.factIds' },
+    });
+    expect(write).toHaveBeenCalledTimes(2);
+    expect(evaluate).toHaveBeenCalledTimes(1);
+  });
+
+  it('records the immutable AAB 549 ambiguity without retaining CV content or inventing duration months', () => {
+    expect(M4_SUMMARY_GENERATE_AAB549_DURATION_OBSERVATION).toMatchObject({
+      package: '1.0.549 / 549', sourceMarker: '8548540', operation: 'summary_v3_generate',
+      selectedExperienceCount: 1, availableFactCount: 3, requiredFactCount: 3,
+      expectedWriterManifest: {
+        totalUnitCount: 2, durationUnitCount: 1, durationUnitIndex: 0,
+        durationEntryIdMustBeNull: true, durationFactIdsCount: 0,
+        experienceUnitCount: 1, slotOrder: ['duration', 'experience'],
+        structuredDurationAvailable: true, structuredDurationMonths: null,
+      },
+      m4ProviderFailure: { providerErrorCode: 'duration_contract', providerStructuralFieldPath: 'units' },
+      exactDurationSubcondition: 'not_proven',
+      reachableHistoricalSubconditions: ['duration_entry_id_contract', 'duration_fact_ids_contract'],
+    });
+    expect(M4_SUMMARY_GENERATE_AAB549_DURATION_OBSERVATION).not.toHaveProperty('deploymentId');
+    expect(Object.isFrozen(M4_SUMMARY_GENERATE_AAB549_DURATION_OBSERVATION)).toBe(true);
+    expect(JSON.stringify(M4_SUMMARY_GENERATE_AAB549_DURATION_OBSERVATION))
+      .not.toMatch(/@|fullName|email|phone|address|employer|roleTitle|generatedText|rawToolInput|credential|bearer/iu);
   });
 
   it('keeps route HTTP status separate from provider status in terminal diagnostics and copy', async () => {

@@ -15,6 +15,7 @@ import {
   SUMMARY_V3_EVALUATOR_TOOL_NAME,
   SUMMARY_V3_GENERATE_ACTION,
   SUMMARY_V3_WRITER_TOOL_NAME,
+  SUMMARY_V3_WRITER_UNIT_CONTRACT,
   SUMMARY_V3_INITIAL_WRITER_TIMEOUT_MS,
   SUMMARY_V3_POST_PROCESSING_HEADROOM_MS,
   SUMMARY_V3_SERVER_BUDGET_MS,
@@ -228,6 +229,7 @@ async function forcedToolDirectRoute(options: {
     tools?: unknown[];
     tool_choice?: unknown;
     system?: unknown;
+    messages?: Array<{ role?: string; content?: unknown }>;
     requestOptions?: { timeout?: number; maxRetries?: number; signal?: AbortSignal };
   }> = [];
   let writerCalls = 0;
@@ -241,7 +243,7 @@ async function forcedToolDirectRoute(options: {
     process.env.ANTHROPIC_API_KEY = 'm4-route-key'; delete process.env.ANTHROPIC_AUTH_TOKEN;
     vi.resetModules();
     const create = vi.fn(async (
-      params: { tools?: unknown[]; tool_choice?: unknown; system?: unknown },
+      params: { tools?: unknown[]; tool_choice?: unknown; system?: unknown; messages?: Array<{ role?: string; content?: unknown }> },
       requestOptions?: { timeout?: number; maxRetries?: number; signal?: AbortSignal },
     ) => {
       requests.push({ ...params, requestOptions });
@@ -389,6 +391,24 @@ describe('M4 actual page routing and direct server gate', () => {
     expect(run.requests[1].tools).toHaveLength(1);
     expect(run.requests[1].tool_choice).toEqual({ type: 'tool', name: SUMMARY_V3_EVALUATOR_TOOL_NAME, disable_parallel_tool_use: true });
     expect(run.body.providerOutput).toBeDefined();
+  });
+
+  it('21b. initial and repair route requests send the identical revised duration contract', async () => {
+    const run = await forcedToolDirectRoute({ forceRepair: true });
+    expect(run.response.status).toBe(200);
+    const writers = run.requests.filter((request) =>
+      (request.tool_choice as { name?: string } | undefined)?.name === SUMMARY_V3_WRITER_TOOL_NAME);
+    expect(writers).toHaveLength(2);
+    expect(writers[0].tools).toEqual(writers[1].tools);
+    for (const request of writers) {
+      expect(request.tool_choice).toEqual({
+        type: 'tool', name: SUMMARY_V3_WRITER_TOOL_NAME, disable_parallel_tool_use: true,
+      });
+      const tool = request.tools?.[0] as { description?: string; input_schema?: unknown };
+      expect(tool.description).toContain(SUMMARY_V3_WRITER_UNIT_CONTRACT);
+      expect(JSON.stringify(tool.input_schema)).toContain('"const":[]');
+      expect(String(request.messages?.[0]?.content)).toContain(SUMMARY_V3_WRITER_UNIT_CONTRACT);
+    }
   });
 
   it('22. forced writer transport rejection retains the application 502 boundary', async () => {
