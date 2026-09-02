@@ -23,6 +23,11 @@ import {
   type SummaryV3Manifest,
   type SummaryV3WriterOutput,
   SUMMARY_V3_EVALUATOR_TOOL_NAME,
+  SUMMARY_V3_EVALUATOR_TOOL,
+  SUMMARY_V3_INITIAL_EVALUATOR_TIMEOUT_MS,
+  SUMMARY_V3_INITIAL_WRITER_TIMEOUT_MS,
+  SUMMARY_V3_POST_PROCESSING_HEADROOM_MS,
+  SUMMARY_V3_SERVER_BUDGET_MS,
   SUMMARY_V3_WRITER_TOOL,
   SUMMARY_V3_WRITER_TOOL_NAME,
   SUMMARY_V3_WRITER_UNIT_CONTRACT,
@@ -37,8 +42,219 @@ import { M4_SUMMARY_GENERATE_AAB548_WRITER_SCHEMA_OBSERVATION } from '../fixture
 import { M4_SUMMARY_GENERATE_AAB549_DURATION_OBSERVATION } from '../fixtures/m4-summary-generate-aab549-duration-observation';
 import { M4_SUMMARY_GENERATE_AAB550_STRICT_SCHEMA_OBSERVATION } from '../fixtures/m4-summary-generate-aab550-strict-schema-observation';
 import { M4_SUMMARY_GENERATE_AAB551_INITIAL_EVALUATOR_TIMEOUT_OBSERVATION } from '../fixtures/m4-summary-generate-aab551-initial-evaluator-timeout-observation';
+import { M4_SUMMARY_GENERATE_AAB552_INITIAL_EVALUATOR_TIMEOUT_OBSERVATION } from '../fixtures/m4-summary-generate-aab552-initial-evaluator-timeout-observation';
 import { SummaryAiDiagnosticSession, formatSummaryAiDiagnosticForCopy } from '../../cv-summary-ai-diagnostics';
-import { AI_PROVIDER_CALL_TIMEOUT_MS, callProviderWithDeadline } from '../../ai-request-timing';
+import {
+  AI_CLIENT_TIMEOUT_MS,
+  AI_PLATFORM_MAX_DURATION_S,
+  AI_PROVIDER_CALL_TIMEOUT_MS,
+  AI_RESPONSE_GUARD_MS,
+  callProviderWithDeadline,
+  readProviderTimingEvidence,
+  type ProviderCallOptions,
+  type ProviderDeadlineOwner,
+} from '../../ai-request-timing';
+
+type ProviderStage = 'provider' | 'translation' | 'verifier';
+type ProviderHelper = <T>(
+  create: (options: ProviderCallOptions) => Promise<T>,
+  deadlineAt?: number | null,
+  configuredTimeoutMs?: number,
+  timeoutStage?: ProviderStage,
+  cancellationSignal?: AbortSignal | null,
+) => Promise<T>;
+
+type ParentDeadlineError = Error & {
+  deadlineOwner: ProviderDeadlineOwner;
+  configuredTimeoutMs: number;
+  effectiveTimeoutMs: number;
+};
+
+function parentDeadlineError(
+  message: string,
+  owner: ProviderDeadlineOwner,
+  configuredTimeoutMs: number,
+  effectiveTimeoutMs: number,
+): ParentDeadlineError {
+  return Object.assign(new Error(message), {
+    name: 'AbortError', deadlineOwner: owner, configuredTimeoutMs, effectiveTimeoutMs,
+  }) as ParentDeadlineError;
+}
+
+function parentRemainingBudgetMs(deadlineAt: number, now = Date.now()): number {
+  return deadlineAt - now;
+}
+
+function parentHasProviderBudget(deadlineAt: number | null | undefined, now = Date.now()): boolean {
+  if (deadlineAt == null) return true;
+  return parentRemainingBudgetMs(deadlineAt, now)
+    >= Math.min(AI_PROVIDER_CALL_TIMEOUT_MS, AI_RESPONSE_GUARD_MS + 1_000);
+}
+
+/** Executable test-only transcription of the helper at 23a0d6e; never imported by production. */
+const callParentProviderWithDeadlineReference: ProviderHelper = async function callParentProviderWithDeadlineReference<T>(
+  create: (options: ProviderCallOptions) => Promise<T>,
+  deadlineAt?: number | null,
+  configuredTimeoutMs: number = AI_PROVIDER_CALL_TIMEOUT_MS,
+  timeoutStage: ProviderStage = 'provider',
+  cancellationSignal?: AbortSignal | null,
+): Promise<T> {
+  if (cancellationSignal?.aborted) {
+    throw parentDeadlineError('client_abort before provider dispatch', 'client_abort', configuredTimeoutMs, 0);
+  }
+  if (!parentHasProviderBudget(deadlineAt)) {
+    throw parentDeadlineError(
+      'route_deadline_insufficient before provider dispatch',
+      'route_deadline',
+      configuredTimeoutMs,
+      Math.max(0, deadlineAt == null ? 0 : parentRemainingBudgetMs(deadlineAt)),
+    );
+  }
+
+  const timeoutMs = deadlineAt == null
+    ? configuredTimeoutMs
+    : Math.max(1_000, Math.min(configuredTimeoutMs, parentRemainingBudgetMs(deadlineAt) - 500));
+  const effectiveMs = deadlineAt == null
+    ? timeoutMs
+    : Math.max(1_000, Math.min(timeoutMs, parentRemainingBudgetMs(deadlineAt) - AI_RESPONSE_GUARD_MS));
+  const controller = new AbortController();
+  let sliceTimer: ReturnType<typeof setTimeout> | undefined;
+  let clientAborted = false;
+  let rejectClientAbort: ((reason: ParentDeadlineError) => void) | undefined;
+  const clientAbortPromise = new Promise<never>((_, reject) => { rejectClientAbort = reject; });
+  const abortFromClient = () => {
+    clientAborted = true;
+    controller.abort();
+    rejectClientAbort?.(parentDeadlineError(
+      'client_abort during provider transport', 'client_abort', configuredTimeoutMs, effectiveMs,
+    ));
+  };
+  cancellationSignal?.addEventListener('abort', abortFromClient, { once: true });
+  const abort = () => {
+    try { controller.abort(); } catch { /* parent ignores AbortController failures */ }
+  };
+  const timeoutError = () => {
+    const routeOwned = deadlineAt != null && effectiveMs < configuredTimeoutMs;
+    const owner: ProviderDeadlineOwner = routeOwned
+      ? 'route_deadline'
+      : timeoutStage === 'verifier'
+        ? 'verifier_transport'
+        : timeoutStage === 'translation' ? 'translation_transport' : 'provider_transport';
+    return parentDeadlineError(
+      routeOwned ? `route_deadline_exceeded after ${effectiveMs}ms`
+        : `${timeoutStage}_transport_timeout after ${effectiveMs}ms`,
+      owner, configuredTimeoutMs, effectiveMs,
+    );
+  };
+  const slicePromise = new Promise<never>((_, reject) => {
+    sliceTimer = setTimeout(() => { abort(); reject(timeoutError()); }, effectiveMs);
+  });
+  const createPromise = create({ signal: controller.signal, timeout: effectiveMs, maxRetries: 0 });
+  try {
+    return await Promise.race([createPromise, slicePromise, clientAbortPromise]);
+  } catch (err) {
+    void createPromise.then(() => undefined, () => undefined);
+    if (clientAborted) {
+      throw parentDeadlineError(
+        'client_abort during provider transport', 'client_abort', configuredTimeoutMs, effectiveMs,
+      );
+    }
+    throw err;
+  } finally {
+    if (sliceTimer) clearTimeout(sliceTimer);
+    cancellationSignal?.removeEventListener('abort', abortFromClient);
+  }
+};
+
+type DifferentialMode = 'resolve' | 'pending' | 'reject' | 'abort_before' | 'abort_during';
+interface DifferentialScenario {
+  readonly name: string;
+  readonly mode: DifferentialMode;
+  readonly deadlineAt: number | null;
+  readonly configuredTimeoutMs: number;
+  readonly advanceMs: number;
+  readonly resolveAtMs?: number;
+  readonly rejectionValue?: unknown;
+}
+
+interface DifferentialOutcome {
+  readonly status: 'resolved' | 'rejected';
+  readonly value: unknown;
+  readonly providerCallCount: number;
+  readonly providerTimeoutMs: number | null;
+  readonly providerMaxRetries: number | null;
+  readonly providerSignalAborted: boolean | null;
+  readonly rejectionAt: number | null;
+  readonly prototype: object | null;
+  readonly name: string | null;
+  readonly message: string | null;
+  readonly enumerableKeys: readonly string[];
+  readonly json: string | null;
+  readonly deadlineOwner: unknown;
+  readonly configuredTimeoutMs: unknown;
+  readonly effectiveTimeoutMs: unknown;
+  readonly timerCountAfter: number;
+}
+
+async function executeDifferentialScenario(
+  helper: ProviderHelper,
+  scenario: DifferentialScenario,
+): Promise<DifferentialOutcome> {
+  vi.clearAllTimers();
+  vi.setSystemTime(0);
+  const cancellation = new AbortController();
+  if (scenario.mode === 'abort_before') cancellation.abort();
+  let providerCallCount = 0;
+  let providerOptions: ProviderCallOptions | null = null;
+  const create = (options: ProviderCallOptions): Promise<string> => {
+    providerCallCount += 1;
+    providerOptions = options;
+    if (scenario.mode === 'pending' || scenario.mode === 'abort_during') {
+      return new Promise<string>(() => undefined);
+    }
+    if (scenario.mode === 'reject') return Promise.reject(scenario.rejectionValue);
+    if (scenario.resolveAtMs != null) {
+      return new Promise((resolve) => { setTimeout(() => resolve('provider-ok'), scenario.resolveAtMs); });
+    }
+    return Promise.resolve('provider-ok');
+  };
+  const pending = helper(create, scenario.deadlineAt, scenario.configuredTimeoutMs, 'verifier', cancellation.signal)
+    .then((value) => ({ status: 'resolved' as const, value, rejectionAt: null }))
+    .catch((value: unknown) => ({ status: 'rejected' as const, value, rejectionAt: Date.now() }));
+  if (scenario.mode === 'abort_during') cancellation.abort();
+  await vi.advanceTimersByTimeAsync(scenario.advanceMs);
+  const settled = await pending;
+  const value = settled.value;
+  const isObject = (typeof value === 'object' && value !== null) || typeof value === 'function';
+  let json: string | null = null;
+  if (isObject) {
+    const serialized = JSON.stringify(value);
+    json = serialized === undefined ? null : serialized;
+  }
+  return {
+    status: settled.status,
+    value,
+    providerCallCount,
+    providerTimeoutMs: providerOptions?.timeout ?? null,
+    providerMaxRetries: providerOptions?.maxRetries ?? null,
+    providerSignalAborted: providerOptions?.signal?.aborted ?? null,
+    rejectionAt: settled.rejectionAt,
+    prototype: isObject ? Object.getPrototypeOf(value) : null,
+    name: value instanceof Error ? value.name : null,
+    message: value instanceof Error ? value.message : null,
+    enumerableKeys: isObject ? Object.keys(value as object) : [],
+    json,
+    deadlineOwner: isObject ? (value as { deadlineOwner?: unknown }).deadlineOwner : undefined,
+    configuredTimeoutMs: isObject ? (value as { configuredTimeoutMs?: unknown }).configuredTimeoutMs : undefined,
+    effectiveTimeoutMs: isObject ? (value as { effectiveTimeoutMs?: unknown }).effectiveTimeoutMs : undefined,
+    timerCountAfter: vi.getTimerCount(),
+  };
+}
+
+function comparableDifferentialOutcome(outcome: DifferentialOutcome) {
+  const { value: _value, ...comparison } = outcome;
+  return comparison;
+}
 
 function cv(): CVData {
   return {
@@ -1080,5 +1296,325 @@ describe('M4 AAB 551 immutable initial-evaluator timeout authority', () => {
     expect(Object.isFrozen(M4_SUMMARY_GENERATE_AAB551_INITIAL_EVALUATOR_TIMEOUT_OBSERVATION)).toBe(true);
     const serialized = JSON.stringify(M4_SUMMARY_GENERATE_AAB551_INITIAL_EVALUATOR_TIMEOUT_OBSERVATION);
     expect(serialized).not.toMatch(/@|fullName|email|phone|address|employer|role|prompt|rawProviderRequest|providerRequestPayload|providerResponsePayload|raw|api[_-]?key|credential|token|cookie|header|deployment/iu);
+  });
+});
+
+describe('M4 AAB 552 evaluator latency and timing-evidence closure', () => {
+  it('preserves the exact physical AAB 552 boundary as immutable non-PII evidence', () => {
+    expect(M4_SUMMARY_GENERATE_AAB552_INITIAL_EVALUATOR_TIMEOUT_OBSERVATION).toMatchObject({
+      applicationId: 'com.cvproai.app', versionCode: 552, versionName: '1.0.552', sourceMarker: '23a0d6e',
+      capturedAt: '2026-09-01T19:20:55.667Z', locale: 'de', sourceWasEmpty: true,
+      selectedExperienceCount: 1, authoritativeFactCount: 3, routeHttpStatus: 502,
+      writer: { attempted: true, result: 'succeeded', stopReason: 'tool_use', contentBlockCount: 1,
+        textBlockCount: 0, toolBlockCount: 1, expectedToolCount: 1, toolNameMatched: true,
+        toolInputObject: true, schemaPassed: true, identityPassed: true },
+      evaluator: { attempted: true, result: 'failed', responseMetadataAvailable: false },
+      m4ProviderFailure: { phase: 'initial_evaluator', failureStage: 'sdk_request', errorClass: 'Error',
+        providerHttpStatus: null, providerErrorType: 'timeout', providerErrorCode: null,
+        providerRequestIdHash: null, providerRetryable: false, providerMessageFingerprint: 'v3s-89628dbe',
+        providerStructuralFieldPath: null, providerHttpResponseReceived: null,
+        providerDeadlineOwner: 'verifier_transport', providerConfiguredTimeoutMs: 11_500,
+        providerEffectiveTimeoutMs: 11_500, providerElapsedMs: null,
+        providerOuterBudgetRemainingAtStartMs: null },
+      candidateApplied: false, repairAttempted: false, applyAttempted: false, persistenceAttempted: false,
+      usageBefore: 0, usageAfter: 0, usageDelta: 0, v2FallthroughCount: 0,
+      summaryUnchanged: true, experienceUnchanged: true, terminalRecordPresentBeforeToast: true,
+    });
+    expect(Object.isFrozen(M4_SUMMARY_GENERATE_AAB552_INITIAL_EVALUATOR_TIMEOUT_OBSERVATION)).toBe(true);
+    expect(Object.isFrozen(M4_SUMMARY_GENERATE_AAB552_INITIAL_EVALUATOR_TIMEOUT_OBSERVATION.writer)).toBe(true);
+    expect(Object.isFrozen(M4_SUMMARY_GENERATE_AAB552_INITIAL_EVALUATOR_TIMEOUT_OBSERVATION.m4ProviderFailure)).toBe(true);
+    expect(JSON.stringify(M4_SUMMARY_GENERATE_AAB552_INITIAL_EVALUATOR_TIMEOUT_OBSERVATION))
+      .not.toMatch(/@|fullName|email|phone|address|employer|role|prompt|candidateText|rawToolInput|raw|api[_-]?key|credential|token|cookie|authorization|deployment/iu);
+  });
+
+  it('uniquely maps both physical fingerprints through the production hash helper', () => {
+    expect(hashSummaryV3Value('verifier_transport_timeout after 11500ms')).toBe('v3s-89628dbe');
+    expect(hashSummaryV3Value('verifier_transport_timeout after 8000ms')).toBe('v3s-de5a1d01');
+    const matches: string[] = [];
+    for (const prefix of ['verifier_transport_timeout after ', 'provider_transport_timeout after ',
+      'translation_transport_timeout after ', 'route_deadline_exceeded after ']) {
+      for (let ms = 0; ms <= 60_000; ms += 1) {
+        const message = `${prefix}${ms}ms`;
+        if (hashSummaryV3Value(message) === 'v3s-89628dbe') matches.push(message);
+      }
+    }
+    expect(matches).toEqual(['verifier_transport_timeout after 11500ms']);
+  });
+
+  it('retains every committed budget because the bounded live evidence does not authorize A-C', () => {
+    expect(SUMMARY_V3_INITIAL_WRITER_TIMEOUT_MS).toBe(11_500);
+    expect(SUMMARY_V3_INITIAL_EVALUATOR_TIMEOUT_MS).toBe(11_500);
+    expect(AI_PROVIDER_CALL_TIMEOUT_MS).toBe(8_000);
+    expect(SUMMARY_V3_SERVER_BUDGET_MS).toBe(27_000);
+    expect(SUMMARY_V3_POST_PROCESSING_HEADROOM_MS).toBe(3_000);
+    expect(AI_PLATFORM_MAX_DURATION_S).toBe(30);
+    expect(AI_CLIENT_TIMEOUT_MS).toBe(40_000);
+    expect(hashSummaryV3Value(SUMMARY_V3_WRITER_TOOL)).toBe('v3s-c785acd3');
+    expect(hashSummaryV3Value(SUMMARY_V3_EVALUATOR_TOOL)).toBe('v3s-6b7e9c8e');
+  });
+
+  it('differentially preserves all parent execution behavior across the required matrix', async () => {
+    const ordinaryError = new Error('ordinary provider rejection');
+    const customObject = { kind: 'custom-provider-rejection', retryable: false };
+    const functionRejection = Object.assign(() => 'provider rejection', { kind: 'function-rejection' });
+    const symbolRejection = Symbol('provider-rejection');
+    const scenarios: readonly DifferentialScenario[] = [
+      { name: 'success without outer deadline', mode: 'resolve', deadlineAt: null,
+        configuredTimeoutMs: 11_500, advanceMs: 0 },
+      { name: 'success with sufficient outer deadline', mode: 'resolve', deadlineAt: 30_000,
+        configuredTimeoutMs: 11_500, advanceMs: 0 },
+      { name: 'provider timeout without outer deadline', mode: 'pending', deadlineAt: null,
+        configuredTimeoutMs: 11_500, advanceMs: 11_500 },
+      { name: 'provider timeout with sufficient outer deadline', mode: 'pending', deadlineAt: 30_000,
+        configuredTimeoutMs: 11_500, advanceMs: 11_500 },
+      { name: 'outer deadline clamped timeout', mode: 'pending', deadlineAt: 10_000,
+        configuredTimeoutMs: 11_500, advanceMs: 8_000 },
+      { name: 'route budget insufficient before dispatch', mode: 'pending', deadlineAt: 2_999,
+        configuredTimeoutMs: 11_500, advanceMs: 0 },
+      { name: 'client abort before dispatch', mode: 'abort_before', deadlineAt: null,
+        configuredTimeoutMs: 11_500, advanceMs: 0 },
+      { name: 'client abort during provider transport', mode: 'abort_during', deadlineAt: null,
+        configuredTimeoutMs: 11_500, advanceMs: 0 },
+      { name: 'ordinary Error rejection', mode: 'reject', deadlineAt: 30_000,
+        configuredTimeoutMs: 11_500, advanceMs: 0, rejectionValue: ordinaryError },
+      { name: 'custom object rejection', mode: 'reject', deadlineAt: 30_000,
+        configuredTimeoutMs: 11_500, advanceMs: 0, rejectionValue: customObject },
+      { name: 'function rejection', mode: 'reject', deadlineAt: 30_000,
+        configuredTimeoutMs: 11_500, advanceMs: 0, rejectionValue: functionRejection },
+      { name: 'string rejection', mode: 'reject', deadlineAt: 30_000,
+        configuredTimeoutMs: 11_500, advanceMs: 0, rejectionValue: 'provider-string-rejection' },
+      { name: 'number rejection', mode: 'reject', deadlineAt: 30_000,
+        configuredTimeoutMs: 11_500, advanceMs: 0, rejectionValue: 417 },
+      { name: 'boolean rejection', mode: 'reject', deadlineAt: 30_000,
+        configuredTimeoutMs: 11_500, advanceMs: 0, rejectionValue: false },
+      { name: 'bigint rejection', mode: 'reject', deadlineAt: 30_000,
+        configuredTimeoutMs: 11_500, advanceMs: 0, rejectionValue: 417n },
+      { name: 'symbol rejection', mode: 'reject', deadlineAt: 30_000,
+        configuredTimeoutMs: 11_500, advanceMs: 0, rejectionValue: symbolRejection },
+      { name: 'null rejection', mode: 'reject', deadlineAt: 30_000,
+        configuredTimeoutMs: 11_500, advanceMs: 0, rejectionValue: null },
+      { name: 'undefined rejection', mode: 'reject', deadlineAt: 30_000,
+        configuredTimeoutMs: 11_500, advanceMs: 0, rejectionValue: undefined },
+      { name: 'provider resolves just before timeout', mode: 'resolve', deadlineAt: null,
+        configuredTimeoutMs: 11_500, advanceMs: 11_499, resolveAtMs: 11_499 },
+      { name: 'provider resolves just after timeout', mode: 'resolve', deadlineAt: null,
+        configuredTimeoutMs: 11_500, advanceMs: 11_501, resolveAtMs: 11_501 },
+    ];
+    vi.useFakeTimers();
+    try {
+      for (const scenario of scenarios) {
+        const parent = await executeDifferentialScenario(callParentProviderWithDeadlineReference, scenario);
+        const instrumented = await executeDifferentialScenario(callProviderWithDeadline, scenario);
+        expect(comparableDifferentialOutcome(instrumented), scenario.name)
+          .toEqual(comparableDifferentialOutcome(parent));
+        if (scenario.mode === 'reject') {
+          expect(parent.value, `${scenario.name}: parent identity`).toBe(scenario.rejectionValue);
+          expect(instrumented.value, `${scenario.name}: instrumented identity`).toBe(scenario.rejectionValue);
+        } else if (scenario.mode === 'resolve' && instrumented.status === 'resolved') {
+          expect(instrumented.value, scenario.name).toBe(parent.value);
+        }
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('uses the call-entry budget only as evidence and preserves all three fresh parent decision times', async () => {
+    const parentNow = vi.spyOn(Date, 'now')
+      .mockReturnValueOnce(1_000).mockReturnValueOnce(4_000).mockReturnValueOnce(7_000)
+      .mockReturnValue(7_000);
+    const parentCreate = vi.fn(async (options: ProviderCallOptions) => options.timeout);
+    await expect(callParentProviderWithDeadlineReference(parentCreate, 20_000, 11_500, 'verifier'))
+      .resolves.toBe(11_000);
+    expect(parentCreate).toHaveBeenCalledWith(expect.objectContaining({ timeout: 11_000, maxRetries: 0 }));
+    expect(parentNow).toHaveBeenCalledTimes(3);
+    parentNow.mockRestore();
+
+    const instrumentedNow = vi.spyOn(Date, 'now')
+      .mockReturnValueOnce(0).mockReturnValueOnce(1_000).mockReturnValueOnce(4_000)
+      .mockReturnValueOnce(7_000).mockReturnValue(7_000);
+    const instrumentedCreate = vi.fn(async (options: ProviderCallOptions) => options.timeout);
+    await expect(callProviderWithDeadline(instrumentedCreate, 20_000, 11_500, 'verifier'))
+      .resolves.toBe(11_000);
+    expect(instrumentedCreate).toHaveBeenCalledWith(expect.objectContaining({ timeout: 11_000, maxRetries: 0 }));
+    expect(instrumentedNow).toHaveBeenCalledTimes(4);
+    instrumentedNow.mockRestore();
+
+    const guardNow = vi.spyOn(Date, 'now')
+      .mockReturnValueOnce(0).mockReturnValueOnce(18_000).mockReturnValueOnce(18_000)
+      .mockReturnValueOnce(18_000).mockReturnValue(18_000);
+    const guardedCreate = vi.fn(async () => 'must-not-dispatch');
+    const guardedError = await callProviderWithDeadline(guardedCreate, 20_000, 11_500, 'verifier')
+      .catch((error: unknown) => error);
+    expect(guardedCreate).not.toHaveBeenCalled();
+    expect(guardedError).toMatchObject({
+      name: 'AbortError', deadlineOwner: 'route_deadline', configuredTimeoutMs: 11_500,
+      effectiveTimeoutMs: 2_000, message: 'route_deadline_insufficient before provider dispatch',
+    });
+    expect(readProviderTimingEvidence(guardedError)).toMatchObject({ outerBudgetRemainingAtStartMs: 20_000 });
+    expect(guardNow).toHaveBeenCalledTimes(4);
+    guardNow.mockRestore();
+  });
+
+  it('keeps deadline Error prototype, name, message, enumerable keys, JSON shape, and stack head parent-equivalent', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(0);
+    try {
+      const scenario: DifferentialScenario = { name: 'deadline shape', mode: 'pending', deadlineAt: null,
+        configuredTimeoutMs: 11_500, advanceMs: 11_500 };
+      const parent = await executeDifferentialScenario(callParentProviderWithDeadlineReference, scenario);
+      const instrumented = await executeDifferentialScenario(callProviderWithDeadline, scenario);
+      expect(instrumented.prototype).toBe(parent.prototype);
+      expect(instrumented.name).toBe(parent.name);
+      expect(instrumented.message).toBe(parent.message);
+      expect(instrumented.enumerableKeys).toEqual(parent.enumerableKeys);
+      expect(instrumented.json).toBe(parent.json);
+      expect(instrumented.enumerableKeys).toEqual([
+        'name', 'deadlineOwner', 'configuredTimeoutMs', 'effectiveTimeoutMs',
+      ]);
+      expect(Object.prototype.hasOwnProperty.call(instrumented.value, 'elapsedMs')).toBe(false);
+      expect(Object.prototype.hasOwnProperty.call(instrumented.value, 'outerBudgetRemainingAtStartMs')).toBe(false);
+      expect(String((instrumented.value as Error).stack).split('\n')[0])
+        .toBe(String((parent.value as Error).stack).split('\n')[0]);
+      expect(readProviderTimingEvidence(instrumented.value)).toEqual({
+        deadlineOwner: 'verifier_transport', configuredTimeoutMs: 11_500, effectiveTimeoutMs: 11_500,
+        elapsedMs: 11_500, outerBudgetRemainingAtStartMs: null,
+      });
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('preserves object and primitive rejection identity while exposing evidence only for supported objects', async () => {
+    const values: readonly unknown[] = [
+      new Error('ordinary'), { kind: 'object' }, Object.assign(() => undefined, { kind: 'function' }),
+      'string', 12, true, 12n, Symbol('symbol'), null, undefined,
+    ];
+    for (const value of values) {
+      const rejected = await callProviderWithDeadline(() => Promise.reject(value), null, 11_500, 'verifier')
+        .catch((error: unknown) => error);
+      expect(rejected).toBe(value);
+      const supportsEvidence = (typeof value === 'object' && value !== null) || typeof value === 'function';
+      expect(readProviderTimingEvidence(rejected) !== null).toBe(supportsEvidence);
+      if (!supportsEvidence) expect(rejected).not.toBeInstanceOf(Error);
+    }
+  });
+
+  it('projects supported object timing into Summary and normalizes absent evidence to null', async () => {
+    const ordinaryError = new Error('safe ordinary provider rejection');
+    const rejected = await callProviderWithDeadline(
+      () => Promise.reject(ordinaryError), Date.now() + SUMMARY_V3_SERVER_BUDGET_MS, 11_500, 'verifier',
+    ).catch((error: unknown) => error);
+    expect(rejected).toBe(ordinaryError);
+    expect(classifySummaryV3ProviderFailure(rejected, 'initial_evaluator', 'sdk_request')).toMatchObject({
+      providerDeadlineOwner: null, providerConfiguredTimeoutMs: 11_500,
+      providerEffectiveTimeoutMs: 11_500, providerElapsedMs: expect.any(Number),
+      providerOuterBudgetRemainingAtStartMs: expect.any(Number),
+    });
+    expect(classifySummaryV3ProviderFailure(
+      new Error('uninstrumented backward-compatible failure'), 'initial_evaluator', 'sdk_request',
+    )).toMatchObject({
+      providerDeadlineOwner: null, providerConfiguredTimeoutMs: null,
+      providerEffectiveTimeoutMs: null, providerElapsedMs: null,
+      providerOuterBudgetRemainingAtStartMs: null,
+    });
+  });
+
+  it('records configured/effective/elapsed/outer timing for a full evaluator timeout', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(0);
+    try {
+      const pending = callProviderWithDeadline(() => new Promise<never>(() => undefined),
+        SUMMARY_V3_SERVER_BUDGET_MS, SUMMARY_V3_INITIAL_EVALUATOR_TIMEOUT_MS, 'verifier')
+        .catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(SUMMARY_V3_INITIAL_EVALUATOR_TIMEOUT_MS);
+      const error = await pending;
+      expect(readProviderTimingEvidence(error)).toEqual({
+        deadlineOwner: 'verifier_transport', configuredTimeoutMs: 11_500, effectiveTimeoutMs: 11_500,
+        elapsedMs: 11_500, outerBudgetRemainingAtStartMs: 27_000,
+      });
+      expect(classifySummaryV3ProviderFailure(error, 'initial_evaluator', 'sdk_request')).toMatchObject({
+        providerMessageFingerprint: hashSummaryV3Value('verifier_transport_timeout after 11500ms'),
+        providerDeadlineOwner: 'verifier_transport', providerConfiguredTimeoutMs: 11_500,
+        providerEffectiveTimeoutMs: 11_500, providerElapsedMs: 11_500,
+        providerOuterBudgetRemainingAtStartMs: 27_000,
+      });
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('distinguishes an outer-clamped evaluator timeout from a full transport timeout', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(0);
+    try {
+      const pending = callProviderWithDeadline(() => new Promise<never>(() => undefined), 10_000,
+        SUMMARY_V3_INITIAL_EVALUATOR_TIMEOUT_MS, 'verifier').catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(8_000);
+      const error = await pending;
+      expect(readProviderTimingEvidence(error)).toEqual({ deadlineOwner: 'route_deadline',
+        configuredTimeoutMs: 11_500, effectiveTimeoutMs: 8_000, elapsedMs: 8_000,
+        outerBudgetRemainingAtStartMs: 10_000 });
+      expect(classifySummaryV3ProviderFailure(error, 'initial_evaluator', 'sdk_request')).toMatchObject({
+        providerMessageFingerprint: hashSummaryV3Value('route_deadline_exceeded after 8000ms'),
+        providerDeadlineOwner: 'route_deadline', providerConfiguredTimeoutMs: 11_500,
+        providerEffectiveTimeoutMs: 8_000, providerElapsedMs: 8_000,
+        providerOuterBudgetRemainingAtStartMs: 10_000,
+      });
+      expect(AI_RESPONSE_GUARD_MS).toBe(2_000);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('accepts just below the final evaluator boundary and fails closed just above it', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(0);
+    try {
+      const below = callProviderWithDeadline(() => new Promise<string>((resolve) => {
+        setTimeout(() => resolve('accepted'), 11_499);
+      }), null, SUMMARY_V3_INITIAL_EVALUATOR_TIMEOUT_MS, 'verifier');
+      await vi.advanceTimersByTimeAsync(11_499);
+      await expect(below).resolves.toBe('accepted');
+      const above = callProviderWithDeadline(() => new Promise<string>((resolve) => {
+        setTimeout(() => resolve('late'), 11_501);
+      }), null, SUMMARY_V3_INITIAL_EVALUATOR_TIMEOUT_MS, 'verifier');
+      const rejected = expect(above).rejects.toMatchObject({ deadlineOwner: 'verifier_transport',
+        configuredTimeoutMs: 11_500, effectiveTimeoutMs: 11_500 });
+      await vi.advanceTimersByTimeAsync(11_501);
+      await rejected;
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('projects safe timing only through Summary diagnostics and cannot authorize side effects', async () => {
+    const captured = snapshot();
+    const writeCv = vi.fn(); const persistCv = vi.fn(); const incrementUsage = vi.fn();
+    const events: import('../summary-generate').SummaryV3GenerateTerminalEvent[] = [];
+    const envelope = {
+      phase: 'initial_evaluator' as const, failureStage: 'sdk_request' as const, errorClass: 'Error' as const,
+      providerHttpStatus: null, providerErrorType: 'timeout' as const, providerErrorCode: null,
+      providerRequestIdHash: null, providerRetryable: false, providerMessageFingerprint: 'v3s-89628dbe',
+      providerStructuralFieldPath: null, providerHttpResponseReceived: null,
+      providerDeadlineOwner: 'verifier_transport' as const, providerConfiguredTimeoutMs: 11_500,
+      providerEffectiveTimeoutMs: 11_500, providerElapsedMs: 11_501,
+      providerOuterBudgetRemainingAtStartMs: 15_866,
+    };
+    const adapterResult = await runSummaryV3GenerateAdapter(input(), {
+      request: vi.fn(async () => ({ ok: false, action: SUMMARY_V3_GENERATE_ACTION,
+        typedReason: 'validator_exception', repairAttempted: false, m4ProviderFailure: envelope })),
+      getLiveState: () => ({ cv: cv(), requestedLocale: 'en', uiLocale: 'en', storedContentLocale: 'en',
+        exactVisibleSummary: '', referenceDateIso: captured.referenceDateIso, jobContextHash: 'context-m4' }),
+      getActiveOperationId: () => 'm4-operation', writeCv, projectPreviewSummary: (next) => next.summary,
+      persistCv, incrementUsage, getRouteHttpStatus: () => 502, onTerminal: (event) => events.push(event),
+    });
+    expect(writeCv).not.toHaveBeenCalled(); expect(persistCv).not.toHaveBeenCalled();
+    expect(incrementUsage).not.toHaveBeenCalled();
+    expect(adapterResult).toEqual({ kind: 'handled_failure', typedReason: 'validator_exception' });
+    expect(events[0]).toMatchObject({ kind: 'handled_failure', typedReason: 'validator_exception',
+      applyCommitted: false, usageAfter: 4, evidence: { repairAttempted: false, m4ProviderFailure: envelope } });
+    const session = new SummaryAiDiagnosticSession({ uiLocale: 'en', requestedLocale: 'en', templateId: 'test',
+      requestId: 'safe-request', usageCountBefore: 4 });
+    session.recordM4Terminal(events[0]);
+    const trace = session.commit();
+    expect(trace.m4V2FallthroughCount).toBe(0);
+    expect(trace.visibleApplySucceeded).toBe(false);
+    const copy = formatSummaryAiDiagnosticForCopy(trace);
+    for (const field of ['providerDeadlineOwner', 'providerConfiguredTimeoutMs', 'providerEffectiveTimeoutMs',
+      'providerElapsedMs', 'providerOuterBudgetRemainingAtStartMs']) expect(copy).toContain(`"${field}"`);
+    expect(copy).not.toMatch(/raw provider|prompt|candidateText|rawToolInput|authorization|credential/iu);
+    const exportSource = (await import('node:fs')).readFileSync(
+      new URL('../../cv-export-diagnostics.ts', import.meta.url), 'utf8');
+    for (const field of ['providerDeadlineOwner', 'providerConfiguredTimeoutMs', 'providerEffectiveTimeoutMs',
+      'providerElapsedMs', 'providerOuterBudgetRemainingAtStartMs']) expect(exportSource).not.toContain(field);
   });
 });

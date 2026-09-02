@@ -12,14 +12,15 @@
  *   client AbortController is still at 40s.
  *
  * FIX:
- *  - Application response budget well under the platform limit (~22s vs ~30s).
+ *  - Application response budgets remain below the platform limit with a
+ *    dedicated serialization cushion.
  *  - Every provider call uses `maxRetries: 0` + AbortSignal hard-cancel so the
  *    underlying HTTP request is terminated when its slice expires.
  *  - Repair is skipped when remaining budget cannot cover another call.
  *  - Deterministic local fallback returns before the platform can kill us.
  */
 
-/** Client-side AbortController deadline (Android build 230+). */
+/** Client-side AbortController deadline for existing AI operations. */
 export const AI_CLIENT_TIMEOUT_MS = 40_000;
 
 /** Guarantees a finite, positive AbortController delay (never 0 / NaN / negative). */
@@ -186,6 +187,34 @@ export type ProviderDeadlineOwner =
   | 'route_deadline'
   | 'client_abort';
 
+/** Finite, non-sensitive timing evidence attached in memory to every provider failure. */
+export interface ProviderTimingEvidence {
+  readonly deadlineOwner: ProviderDeadlineOwner | null;
+  readonly configuredTimeoutMs: number;
+  readonly effectiveTimeoutMs: number;
+  readonly elapsedMs: number;
+  readonly outerBudgetRemainingAtStartMs: number | null;
+}
+
+const providerTimingEvidence = new WeakMap<object, ProviderTimingEvidence>();
+
+function finiteTimingInteger(value: number): number {
+  return Number.isFinite(value) ? Math.max(0, Math.round(value)) : 0;
+}
+
+function rememberProviderTimingEvidence<T>(error: T, evidence: ProviderTimingEvidence): T {
+  if ((typeof error === 'object' && error !== null) || typeof error === 'function') {
+    providerTimingEvidence.set(error as object, Object.freeze({ ...evidence }));
+  }
+  return error;
+}
+
+/** Read timing evidence without serializing or mutating the original SDK error. */
+export function readProviderTimingEvidence(error: unknown): ProviderTimingEvidence | null {
+  if ((typeof error !== 'object' || error === null) && typeof error !== 'function') return null;
+  return providerTimingEvidence.get(error as object) ?? null;
+}
+
 export type ProviderDeadlineError = Error & {
   deadlineOwner: ProviderDeadlineOwner;
   configuredTimeoutMs: number;
@@ -197,13 +226,23 @@ function deadlineError(
   owner: ProviderDeadlineOwner,
   configuredTimeoutMs: number,
   effectiveTimeoutMs: number,
+  elapsedMs: number,
+  outerBudgetRemainingAtStartMs: number | null,
 ): ProviderDeadlineError {
-  return Object.assign(new Error(message), {
+  const error = Object.assign(new Error(message), {
     name: 'AbortError',
     deadlineOwner: owner,
     configuredTimeoutMs,
     effectiveTimeoutMs,
   }) as ProviderDeadlineError;
+  return rememberProviderTimingEvidence(error, {
+    deadlineOwner: owner,
+    configuredTimeoutMs: finiteTimingInteger(configuredTimeoutMs),
+    effectiveTimeoutMs: finiteTimingInteger(effectiveTimeoutMs),
+    elapsedMs: finiteTimingInteger(elapsedMs),
+    outerBudgetRemainingAtStartMs: outerBudgetRemainingAtStartMs === null
+      ? null : finiteTimingInteger(outerBudgetRemainingAtStartMs),
+  });
 }
 
 /**
@@ -218,8 +257,14 @@ export async function callProviderWithDeadline<T>(
   timeoutStage: 'provider' | 'translation' | 'verifier' = 'provider',
   cancellationSignal?: AbortSignal | null,
 ): Promise<T> {
+  const callStartedAt = Date.now();
+  const outerBudgetRemainingAtStartMs = deadlineAt == null
+    ? null
+    : Math.max(0, remainingBudgetMs(deadlineAt, callStartedAt));
+  const elapsedMs = () => Math.max(0, Date.now() - callStartedAt);
   if (cancellationSignal?.aborted) {
-    throw deadlineError('client_abort before provider dispatch', 'client_abort', configuredTimeoutMs, 0);
+    throw deadlineError('client_abort before provider dispatch', 'client_abort', configuredTimeoutMs, 0,
+      elapsedMs(), outerBudgetRemainingAtStartMs);
   }
   if (!hasProviderBudget(deadlineAt)) {
     throw deadlineError(
@@ -227,6 +272,8 @@ export async function callProviderWithDeadline<T>(
       'route_deadline',
       configuredTimeoutMs,
       Math.max(0, deadlineAt == null ? 0 : remainingBudgetMs(deadlineAt)),
+      elapsedMs(),
+      outerBudgetRemainingAtStartMs,
     );
   }
 
@@ -252,6 +299,8 @@ export async function callProviderWithDeadline<T>(
       'client_abort',
       configuredTimeoutMs,
       effectiveMs,
+      elapsedMs(),
+      outerBudgetRemainingAtStartMs,
     ));
   };
   cancellationSignal?.addEventListener('abort', abortFromClient, { once: true });
@@ -277,6 +326,8 @@ export async function callProviderWithDeadline<T>(
       owner,
       configuredTimeoutMs,
       effectiveMs,
+      elapsedMs(),
+      outerBudgetRemainingAtStartMs,
     );
   };
 
@@ -304,7 +355,20 @@ export async function callProviderWithDeadline<T>(
     // usage, or keep the route awaiting an unresolved promise.
     void createPromise.then(() => undefined, () => undefined);
     if (clientAborted) {
-      throw deadlineError('client_abort during provider transport', 'client_abort', configuredTimeoutMs, effectiveMs);
+      throw deadlineError('client_abort during provider transport', 'client_abort', configuredTimeoutMs, effectiveMs,
+        elapsedMs(), outerBudgetRemainingAtStartMs);
+    }
+    const existing = readProviderTimingEvidence(err);
+    if (existing) throw err;
+    if ((typeof err === 'object' && err !== null) || typeof err === 'function') {
+      throw rememberProviderTimingEvidence(err, {
+        deadlineOwner: null,
+        configuredTimeoutMs: finiteTimingInteger(configuredTimeoutMs),
+        effectiveTimeoutMs: finiteTimingInteger(effectiveMs),
+        elapsedMs: finiteTimingInteger(elapsedMs()),
+        outerBudgetRemainingAtStartMs: outerBudgetRemainingAtStartMs === null
+          ? null : finiteTimingInteger(outerBudgetRemainingAtStartMs),
+      });
     }
     throw err;
   } finally {

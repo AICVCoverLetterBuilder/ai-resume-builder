@@ -7,6 +7,7 @@ import {
   AI_PLATFORM_MAX_DURATION_S,
   EXPERIENCE_LOCALIZATION_SERVER_BUDGET_MS,
   EXPERIENCE_LOCALIZATION_VERIFIER_TIMEOUT_MS,
+  readProviderTimingEvidence,
 } from '../ai-request-timing';
 import {
   SUMMARY_V3_GENERATE_ACTION,
@@ -166,6 +167,7 @@ export function classifySummaryV3ProviderFailure(
   const body = record?.error && typeof record.error === 'object' ? record.error as Record<string, unknown> : null;
   const message = error instanceof Error && error.message.trim() ? error.message : null;
   const requestId = typeof record?.requestID === 'string' ? record.requestID : null;
+  const timing = readProviderTimingEvidence(error);
   return immutableCopy({
     phase,
     failureStage: stage,
@@ -179,6 +181,11 @@ export function classifySummaryV3ProviderFailure(
     providerStructuralFieldPath: safeStructuralPath(fieldPath),
     providerHttpResponseReceived: stage === 'response_extraction' || stage === 'tool_validation'
       ? true : status !== null ? true : null,
+    providerDeadlineOwner: timing?.deadlineOwner ?? null,
+    providerConfiguredTimeoutMs: timing?.configuredTimeoutMs ?? null,
+    providerEffectiveTimeoutMs: timing?.effectiveTimeoutMs ?? null,
+    providerElapsedMs: timing?.elapsedMs ?? null,
+    providerOuterBudgetRemainingAtStartMs: timing?.outerBudgetRemainingAtStartMs ?? null,
   }) as SummaryV3ProviderFailureEnvelope;
 }
 

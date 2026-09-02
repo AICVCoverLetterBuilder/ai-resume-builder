@@ -55,6 +55,13 @@ export type SummaryV3ProviderErrorClass =
   | 'InternalServerError'
   | 'Error';
 
+export type SummaryV3ProviderDeadlineOwner =
+  | 'provider_transport'
+  | 'translation_transport'
+  | 'verifier_transport'
+  | 'route_deadline'
+  | 'client_abort';
+
 /** Safe M4 provider failure evidence. Raw errors/messages/IDs never cross this boundary. */
 export interface SummaryV3ProviderFailureEnvelope {
   readonly phase: SummaryV3ProviderPhase;
@@ -68,6 +75,11 @@ export interface SummaryV3ProviderFailureEnvelope {
   readonly providerMessageFingerprint: string | null;
   readonly providerStructuralFieldPath: string | null;
   readonly providerHttpResponseReceived: boolean | null;
+  readonly providerDeadlineOwner: SummaryV3ProviderDeadlineOwner | null;
+  readonly providerConfiguredTimeoutMs: number | null;
+  readonly providerEffectiveTimeoutMs: number | null;
+  readonly providerElapsedMs: number | null;
+  readonly providerOuterBudgetRemainingAtStartMs: number | null;
 }
 
 export type SummaryV3GenerateRoutingResult =
@@ -564,6 +576,9 @@ const SUMMARY_V3_PROVIDER_ERROR_CLASSES = new Set<SummaryV3ProviderErrorClass>([
   'BadRequestError', 'AuthenticationError', 'PermissionDeniedError', 'RateLimitError',
   'InternalServerError', 'Error',
 ]);
+const SUMMARY_V3_PROVIDER_DEADLINE_OWNERS = new Set<SummaryV3ProviderDeadlineOwner>([
+  'provider_transport', 'translation_transport', 'verifier_transport', 'route_deadline', 'client_abort',
+]);
 
 function safeEvidenceHash(value: unknown): string | null {
   return typeof value === 'string' && /^v3s-[a-z0-9_-]{8,128}$/u.test(value) ? value : null;
@@ -571,6 +586,13 @@ function safeEvidenceHash(value: unknown): string | null {
 
 function safeEvidenceCode(value: unknown): string | null {
   return typeof value === 'string' && /^[a-z][a-z0-9_.-]{0,63}$/u.test(value) ? value : null;
+}
+
+function safeTimingInteger(value: unknown): number | null {
+  return value === null || value === undefined
+    ? null
+    : typeof value === 'number' && Number.isFinite(value) && Number.isInteger(value) && value >= 0
+      ? value : null;
 }
 
 /** Parse the release-safe envelope received from the M4 server route. */
@@ -598,6 +620,21 @@ export function parseSummaryV3ProviderFailureEnvelope(value: unknown): SummaryV3
     || value.providerRequestIdHash !== null && !providerRequestIdHash
     || value.providerMessageFingerprint !== null && !providerMessageFingerprint
     || value.providerStructuralFieldPath !== null && !providerStructuralFieldPath) return null;
+  const providerDeadlineOwner = value.providerDeadlineOwner === undefined || value.providerDeadlineOwner === null
+    ? null
+    : typeof value.providerDeadlineOwner === 'string'
+      && SUMMARY_V3_PROVIDER_DEADLINE_OWNERS.has(value.providerDeadlineOwner as SummaryV3ProviderDeadlineOwner)
+      ? value.providerDeadlineOwner as SummaryV3ProviderDeadlineOwner : null;
+  if (value.providerDeadlineOwner !== undefined && value.providerDeadlineOwner !== null && !providerDeadlineOwner) return null;
+  const providerConfiguredTimeoutMs = safeTimingInteger(value.providerConfiguredTimeoutMs);
+  const providerEffectiveTimeoutMs = safeTimingInteger(value.providerEffectiveTimeoutMs);
+  const providerElapsedMs = safeTimingInteger(value.providerElapsedMs);
+  const providerOuterBudgetRemainingAtStartMs = safeTimingInteger(value.providerOuterBudgetRemainingAtStartMs);
+  if (value.providerConfiguredTimeoutMs !== undefined && value.providerConfiguredTimeoutMs !== null && providerConfiguredTimeoutMs === null
+    || value.providerEffectiveTimeoutMs !== undefined && value.providerEffectiveTimeoutMs !== null && providerEffectiveTimeoutMs === null
+    || value.providerElapsedMs !== undefined && value.providerElapsedMs !== null && providerElapsedMs === null
+    || value.providerOuterBudgetRemainingAtStartMs !== undefined && value.providerOuterBudgetRemainingAtStartMs !== null
+      && providerOuterBudgetRemainingAtStartMs === null) return null;
   return immutableCopy({
     phase: value.phase as SummaryV3ProviderPhase,
     failureStage: value.failureStage as SummaryV3ProviderFailureStage,
@@ -610,6 +647,11 @@ export function parseSummaryV3ProviderFailureEnvelope(value: unknown): SummaryV3
     providerMessageFingerprint,
     providerStructuralFieldPath,
     providerHttpResponseReceived: value.providerHttpResponseReceived as boolean | null,
+    providerDeadlineOwner,
+    providerConfiguredTimeoutMs,
+    providerEffectiveTimeoutMs,
+    providerElapsedMs,
+    providerOuterBudgetRemainingAtStartMs,
   }) as SummaryV3ProviderFailureEnvelope;
 }
 
