@@ -117,9 +117,9 @@ import type { SummaryV3ProviderPhase } from '@/lib/ai-core-v3/summary-generate';
  * terminated Android build 231 after ~32s with a transport-level network toast).
  *
  * NOTE: Next.js requires this route-segment config to be a plain literal.
- * Kept in sync with `AI_PLATFORM_MAX_DURATION_S` (30) via unit tests.
+ * Kept in sync with `SUMMARY_V3_ROUTE_MAX_DURATION_S` (45) via unit tests.
  */
-export const maxDuration = 30;
+export const maxDuration = 45;
 
 // ── Rate limiter (in-memory) ────────────────────────────────────────────────
 // Resets on server restart. For production with multiple instances, replace with

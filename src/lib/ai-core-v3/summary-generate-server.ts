@@ -4,8 +4,6 @@ import type { AiCoreV3CandidateEnvelope } from './contracts';
 import { immutableCopy } from './immutability';
 import { INTERNAL_AI_RESET_ENABLED } from '../build-channel';
 import {
-  AI_PLATFORM_MAX_DURATION_S,
-  EXPERIENCE_LOCALIZATION_SERVER_BUDGET_MS,
   EXPERIENCE_LOCALIZATION_VERIFIER_TIMEOUT_MS,
   readProviderTimingEvidence,
 } from '../ai-request-timing';
@@ -46,12 +44,15 @@ export const SUMMARY_V3_WRITER_UNIT_CONTRACT = [
   'Then emit one Experience unit per selected entry in manifest order with slot=experience, the supplied entryId, and exactly the supplied factIds in their supplied order.',
 ].join(' ');
 
-/** M4 aliases existing constrained-provider authorities; no new transport value is introduced. */
+/** Summary M4 uses the existing writer slice and a dedicated, physical-evidence-driven evaluator slice. */
 export const SUMMARY_V3_INITIAL_WRITER_TIMEOUT_MS = EXPERIENCE_LOCALIZATION_VERIFIER_TIMEOUT_MS;
-export const SUMMARY_V3_INITIAL_EVALUATOR_TIMEOUT_MS = EXPERIENCE_LOCALIZATION_VERIFIER_TIMEOUT_MS;
-export const SUMMARY_V3_SERVER_BUDGET_MS = EXPERIENCE_LOCALIZATION_SERVER_BUDGET_MS;
-export const SUMMARY_V3_POST_PROCESSING_HEADROOM_MS =
-  AI_PLATFORM_MAX_DURATION_S * 1_000 - SUMMARY_V3_SERVER_BUDGET_MS;
+export const SUMMARY_V3_INITIAL_EVALUATOR_TIMEOUT_MS = 20_000;
+export const SUMMARY_V3_POST_PROCESSING_HEADROOM_MS = 4_000;
+export const SUMMARY_V3_SERVER_BUDGET_MS = 38_000;
+/** Must stay synchronized with the static Next route export. */
+export const SUMMARY_V3_ROUTE_MAX_DURATION_S = 45;
+export const SUMMARY_V3_PLATFORM_HEADROOM_MS =
+  SUMMARY_V3_ROUTE_MAX_DURATION_S * 1_000 - SUMMARY_V3_SERVER_BUDGET_MS;
 
 export function computeSummaryV3ServerDeadline(requestStartedAt: number): number {
   return requestStartedAt + SUMMARY_V3_SERVER_BUDGET_MS;

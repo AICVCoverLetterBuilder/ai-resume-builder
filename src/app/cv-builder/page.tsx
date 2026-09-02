@@ -26,6 +26,8 @@ import {
   computeExperienceLocalizationOperationDeadline,
   logAiClientRequestTiming,
   resolveClientAbortTimeoutMs,
+  resolveSummaryM4ClientAbortTimeoutMs,
+  scheduleClientAbort,
 } from '@/lib/ai-request-timing';
 import { templateComponents } from '@/components/cv-templates';
 import { analyzeJobDescription } from '@/lib/ai';
@@ -209,6 +211,7 @@ import {
   EXPERIENCE_V3_ENHANCE_ACTION,
   EXPERIENCE_V3_GENERATE_ACTION,
   SUMMARY_V3_GENERATE_ACTION,
+  classifySummaryV3GenerateRouting,
   isAiCoreV3Enabled,
   runExperienceV3EnhanceAdapter,
   runExperienceV3GenerateAdapter,
@@ -1212,8 +1215,6 @@ export default function CVBuilderPage() {
     }
     setIsSummaryGenerating(true);
     const controller = new AbortController();
-    const clientTimeoutMs = resolveClientAbortTimeoutMs(AI_CLIENT_TIMEOUT_MS);
-    const timer = setTimeout(() => controller.abort(), clientTimeoutMs);
     // Immutable request context: `reqCtx.locale` is captured once, at button-press
     // time, and is the ONLY locale used for the API call, validation, and apply
     // below — never re-read the (possibly since-changed) `locale` closure/UI value
@@ -1254,6 +1255,26 @@ export default function CVBuilderPage() {
     const summaryV3Enabled = isAiCoreV3Enabled({
       AI_CORE_V3_ENABLED: process.env.NEXT_PUBLIC_AI_CORE_V3_ENABLED,
     });
+    const summaryV3InputAtPress = Object.freeze({
+      enabled: summaryV3Enabled,
+      operationKind: 'summary_generate' as const,
+      operationId: reqCtx.requestId,
+      requestId: reqCtx.requestId,
+      cv: liveCvAtPress,
+      requestedLocale,
+      uiLocale: locale,
+      storedContentLocale: String(liveCvAtPress.contentLocale || ''),
+      exactVisibleSummary: exactVisibleSummaryAtPress,
+      visibleExperienceSources: Object.freeze(readSummaryV3VisibleSources()),
+      referenceDateIso,
+      jobContextHash: summaryJobContext.key,
+      usageCountBefore: countBefore,
+    });
+    const summaryV3RoutingAtPress = classifySummaryV3GenerateRouting(summaryV3InputAtPress);
+    const clientTimeoutMs = summaryV3RoutingAtPress === 'owned'
+      ? resolveSummaryM4ClientAbortTimeoutMs()
+      : resolveClientAbortTimeoutMs(AI_CLIENT_TIMEOUT_MS);
+    const timer = scheduleClientAbort(controller, clientTimeoutMs);
     // One Summary diagnostic session owns the entire button press, including
     // an M4 terminal outcome. This must exist before the adapter can finish so
     // persistence is complete before the user-facing toast.
@@ -1273,21 +1294,7 @@ export default function CVBuilderPage() {
     let summaryV3RouteHttpStatus: number | null = null;
     let summaryV3TerminalEvent: import('@/lib/ai-core-v3/summary-generate').SummaryV3GenerateTerminalEvent | null = null;
     const summaryV3Result = summaryV3Enabled
-      ? await runSummaryV3GenerateAdapter({
-        enabled: true,
-        operationKind: 'summary_generate',
-        operationId: reqCtx.requestId,
-        requestId: reqCtx.requestId,
-        cv: liveCvAtPress,
-        requestedLocale,
-        uiLocale: locale,
-        storedContentLocale: String(liveCvAtPress.contentLocale || ''),
-        exactVisibleSummary: exactVisibleSummaryAtPress,
-        visibleExperienceSources: readSummaryV3VisibleSources(),
-        referenceDateIso,
-        jobContextHash: summaryJobContext.key,
-        usageCountBefore: countBefore,
-      }, {
+      ? await runSummaryV3GenerateAdapter(summaryV3InputAtPress, {
         request: async ({ manifest }) => {
           const { data, response } = await apiFetch<unknown>('/api/generate', {
             body: {

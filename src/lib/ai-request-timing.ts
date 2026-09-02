@@ -23,6 +23,23 @@
 /** Client-side AbortController deadline for existing AI operations. */
 export const AI_CLIENT_TIMEOUT_MS = 40_000;
 
+/**
+ * Summary M4 has one writer plus one independently validated evaluator under
+ * its own route deadline. Keep this longer client guard local to that M4
+ * button path; all existing AI operations continue to use AI_CLIENT_TIMEOUT_MS.
+ */
+export const SUMMARY_V3_M4_CLIENT_TIMEOUT_MS = 60_000;
+
+/** Resolves only the Summary M4 button's single client abort deadline. */
+export function resolveSummaryM4ClientAbortTimeoutMs(): number {
+  return resolveClientAbortTimeoutMs(SUMMARY_V3_M4_CLIENT_TIMEOUT_MS);
+}
+
+/** Schedules one AbortController guard and returns its existing cleanup handle. */
+export function scheduleClientAbort(controller: AbortController, timeoutMs: number): ReturnType<typeof setTimeout> {
+  return setTimeout(() => controller.abort(), timeoutMs);
+}
+
 /** Guarantees a finite, positive AbortController delay (never 0 / NaN / negative). */
 export function resolveClientAbortTimeoutMs(value: number = AI_CLIENT_TIMEOUT_MS): number {
   return Number.isFinite(value) && value >= 1_000 ? value : AI_CLIENT_TIMEOUT_MS;
@@ -32,9 +49,9 @@ export function resolveClientAbortTimeoutMs(value: number = AI_CLIENT_TIMEOUT_MS
 export const AI_LEGACY_CLIENT_TIMEOUT_MS = 30_000;
 
 /**
- * Vercel/Next.js route `maxDuration` (seconds) for `/api/generate`.
- * Kept as a named constant for tests; the route file must repeat the literal
- * because Next.js requires a static numeric export.
+ * Historical conservative generic application envelope (seconds), retained
+ * for non-M4 operations. The active Next route export is declared separately
+ * as the required static literal in `src/app/api/generate/route.ts`.
  */
 export const AI_PLATFORM_MAX_DURATION_S = 30;
 

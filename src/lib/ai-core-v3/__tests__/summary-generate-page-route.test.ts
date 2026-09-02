@@ -9,6 +9,7 @@ import {
   AI_CLIENT_TIMEOUT_MS,
   AI_PLATFORM_MAX_DURATION_S,
   AI_PROVIDER_CALL_TIMEOUT_MS,
+  SUMMARY_V3_M4_CLIENT_TIMEOUT_MS,
   callProviderWithDeadline,
 } from '../../ai-request-timing';
 import {
@@ -20,10 +21,12 @@ import {
   SUMMARY_V3_INITIAL_EVALUATOR_TIMEOUT_MS,
   SUMMARY_V3_INITIAL_WRITER_TIMEOUT_MS,
   SUMMARY_V3_POST_PROCESSING_HEADROOM_MS,
+  SUMMARY_V3_ROUTE_MAX_DURATION_S,
   SUMMARY_V3_SERVER_BUDGET_MS,
   computeSummaryV3ServerDeadline,
   captureSummaryV3GenerateOperationSnapshot,
   classifySummaryV3GenerateRouting,
+  type SummaryV3GenerateAdapterDependencies,
   type SummaryV3GenerateAdapterInput,
   type SummaryV3Manifest,
 } from '..';
@@ -122,18 +125,52 @@ function installMocks(): void {
 
 type AdapterKind = 'handled_failure' | 'handled_success' | 'not_applicable';
 
+type ClientAbortSpy = {
+  mock: { calls: [AbortController, number][] };
+  mockRestore: () => void;
+};
+
+type ClientTimerClearSpy = {
+  mock: { calls: [ReturnType<typeof setTimeout>][] };
+  mockRestore: () => void;
+};
+
 async function actualGeneralSummaryFlow(options: {
-  enabled?: boolean; kind?: AdapterKind; summary?: string; locale?: Locale; contentLocale?: Locale;
+  enabled?: boolean; kind?: AdapterKind; summary?: string; locale?: Locale; contentLocale?: Locale; experienceDescription?: string;
+  noCurrentRole?: boolean; captureClientTimer?: boolean;
 } = {}) {
   const environmentKeys = ['NEXT_PUBLIC_AI_CORE_V3_ENABLED', 'AI_CORE_V3_ENABLED'] as const;
   const saved = Object.fromEntries(environmentKeys.map((key) => [key, process.env[key]]));
   const scroll = HTMLElement.prototype.scrollIntoView;
   cleanup(); localStorage.clear(); sessionStorage.clear();
   testLocale = options.locale ?? 'en'; runtimeCv = pageCv(options.summary ?? '', options.contentLocale ?? 'en'); writes = [];
+  if (options.experienceDescription) {
+    runtimeCv = {
+      ...runtimeCv,
+      experience: runtimeCv.experience.map((entry) => ({ ...entry, description: options.experienceDescription! })),
+    };
+  }
+  if (options.noCurrentRole) {
+    runtimeCv = {
+      ...runtimeCv,
+      experience: runtimeCv.experience.map((entry) => ({ ...entry, isPresent: false, endDate: entry.endDate || '2024-01' })),
+    };
+  }
   const kind = options.kind ?? 'handled_failure';
   let toastSawSummaryRecord = false;
-  m4Adapter.mockReset().mockResolvedValue(kind === 'handled_failure'
-    ? { kind, typedReason: 'page_m4_rejected' } : { kind });
+  m4Adapter.mockReset().mockImplementation(async (
+    _input: SummaryV3GenerateAdapterInput,
+    dependencies: SummaryV3GenerateAdapterDependencies,
+  ) => {
+    if (kind === 'handled_success') {
+      const next = { ...runtimeCv, summary: 'M4 generated summary.' };
+      dependencies.writeCv(next);
+      if (!dependencies.persistCv(next)) return { kind: 'handled_failure', typedReason: 'persistence_failed' };
+      dependencies.incrementUsage();
+      return { kind };
+    }
+    return kind === 'handled_failure' ? { kind, typedReason: 'page_m4_rejected' } : { kind };
+  });
   m2Adapter.mockReset().mockResolvedValue({ kind: 'not_applicable' });
   m3Adapter.mockReset().mockResolvedValue({ kind: 'not_applicable' });
   legacyRequest.mockReset().mockResolvedValue({
@@ -148,8 +185,17 @@ async function actualGeneralSummaryFlow(options: {
   process.env.AI_CORE_V3_ENABLED = process.env.NEXT_PUBLIC_AI_CORE_V3_ENABLED;
   Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
   vi.resetModules(); installMocks();
+  let scheduleClientAbortSpy: ClientAbortSpy | undefined;
+  let clearTimeoutSpy: ClientTimerClearSpy | undefined;
+  const clientTimerHandle = {} as ReturnType<typeof setTimeout>;
   try {
     const core = await import('..'); core.resetAiCoreV3TestOverride();
+    if (options.captureClientTimer) {
+      const timing = await import('@/lib/ai-request-timing');
+      scheduleClientAbortSpy = vi.spyOn(timing, 'scheduleClientAbort')
+        .mockReturnValue(clientTimerHandle) as unknown as ClientAbortSpy;
+      clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout') as unknown as ClientTimerClearSpy;
+    }
     const Page = (await import('@/app/cv-builder/page')).default;
     render(React.createElement(Page));
     fireEvent.click(screen.getByRole('button', { name: translations[testLocale].cv.summary }));
@@ -170,8 +216,15 @@ async function actualGeneralSummaryFlow(options: {
       writes: writes.length,
       visible: editor.value,
       toastSawSummaryRecord,
+      scheduleClientAbortCalls: scheduleClientAbortSpy?.mock.calls.length ?? 0,
+      scheduledClientTimeoutMs: scheduleClientAbortSpy?.mock.calls[0]?.[1] as number | undefined,
+      scheduledController: scheduleClientAbortSpy?.mock.calls[0]?.[0],
+      clientTimerCleanupCalls: clearTimeoutSpy?.mock.calls
+        .filter(([handle]) => handle === clientTimerHandle).length ?? 0,
     };
   } finally {
+    scheduleClientAbortSpy?.mockRestore();
+    clearTimeoutSpy?.mockRestore();
     cleanup();
     const core = await import('..'); core.resetAiCoreV3TestOverride();
     for (const key of environmentKeys) {
@@ -183,6 +236,16 @@ async function actualGeneralSummaryFlow(options: {
     vi.doUnmock('@/lib/api'); vi.doUnmock('@/components/Header'); vi.doUnmock('@/components/Footer'); vi.doUnmock('sonner');
     vi.clearAllMocks(); vi.resetModules(); localStorage.clear(); sessionStorage.clear();
   }
+}
+
+function expectOneClientTimer(
+  run: Awaited<ReturnType<typeof actualGeneralSummaryFlow>>,
+  timeoutMs: number,
+): void {
+  expect(run.scheduleClientAbortCalls).toBe(1);
+  expect(run.scheduledController).toBeInstanceOf(AbortController);
+  expect(run.scheduledClientTimeoutMs).toBe(timeoutMs);
+  expect(run.clientTimerCleanupCalls).toBe(1);
 }
 
 async function actualStyleFlow(style: 'shorter' | 'stronger' | 'professional') {
@@ -301,9 +364,9 @@ async function forcedToolDirectRoute(options: {
     }).manifest;
     const request = new Request('http://localhost/api/generate', { method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ action: SUMMARY_V3_GENERATE_ACTION, proToken: 'token', requestId: 'route-m4', manifest }) });
-    const { POST } = await import('@/app/api/generate/route');
+    const { POST, maxDuration } = await import('@/app/api/generate/route');
     const response = await POST(request as Parameters<typeof POST>[0]);
-    return { response, body: await response.json(), requests };
+    return { response, body: await response.json(), requests, maxDuration };
   } finally {
     vi.restoreAllMocks(); vi.doUnmock('@anthropic-ai/sdk'); vi.doUnmock('@/lib/pro-token'); vi.resetModules();
     for (const key of keys) { if (saved[key] === undefined) delete process.env[key]; else process.env[key] = saved[key]; }
@@ -313,11 +376,15 @@ async function forcedToolDirectRoute(options: {
 afterEach(() => { cleanup(); });
 
 describe('M4 actual page routing and direct server gate', () => {
-  it('1. flag false bypasses the M4 page adapter', async () => {
-    const run = await actualGeneralSummaryFlow({ enabled: false }); expect(run.adapterCalls).toBe(0);
+  it('1. V3-disabled Generate schedules one generic 40000ms timer and bypasses the M4 adapter', async () => {
+    const run = await actualGeneralSummaryFlow({ enabled: false, captureClientTimer: true });
+    expectOneClientTimer(run, AI_CLIENT_TIMEOUT_MS);
+    expect(run.adapterCalls).toBe(0); expect(run.legacyCalls).toBe(1); expect(run.visible).toBe('');
   });
-  it('2. flag false keeps empty Summary on V2', async () => {
-    const run = await actualGeneralSummaryFlow({ enabled: false }); expect(run.legacyCalls).toBe(1); expect(run.visible).toBe('');
+  it('2. V3-disabled Generate preserves the existing single legacy/V2 continuation', async () => {
+    const run = await actualGeneralSummaryFlow({ enabled: false, captureClientTimer: true });
+    expectOneClientTimer(run, AI_CLIENT_TIMEOUT_MS);
+    expect(run.legacyCalls).toBe(1); expect(run.writes).toBe(1); expect(run.usageCalls).toBe(0);
   });
   it('3. direct disabled M4 API call returns exact typed 409', async () => {
     const run = await disabledDirectRoute(); expect(run.response.status).toBe(409);
@@ -336,17 +403,33 @@ describe('M4 actual page routing and direct server gate', () => {
   it('7. flag true plus empty same-locale Summary invokes M4 with exact empty bytes', async () => {
     const run = await actualGeneralSummaryFlow(); expect(run.adapterCalls).toBe(1); expect(run.adapterInput?.exactVisibleSummary).toBe('');
   });
+  it('7b. the actual Summary M4 button selects the isolated 60000ms abort guard', async () => {
+    const run = await actualGeneralSummaryFlow({ captureClientTimer: true });
+    expect(run.adapterCalls).toBe(1);
+    expectOneClientTimer(run, SUMMARY_V3_M4_CLIENT_TIMEOUT_MS);
+    expect(Object.isFrozen(run.adapterInput)).toBe(true);
+    expect(classifySummaryV3GenerateRouting(run.adapterInput!)).toBe('owned');
+    expect(SUMMARY_V3_M4_CLIENT_TIMEOUT_MS).toBe(60_000);
+    expect(AI_CLIENT_TIMEOUT_MS).toBe(40_000);
+  });
   it('8. flag true plus non-empty Summary is classified outside M4', () => {
     const data = pageCv('Existing'); expect(classifySummaryV3GenerateRouting({ enabled: true, operationKind: 'summary_generate', cv: data,
       requestedLocale: 'en', uiLocale: 'en', storedContentLocale: 'en', exactVisibleSummary: 'Existing',
       referenceDateIso: '2026-08-28', jobContextHash: 'context' })).toBe('not_applicable');
   });
-  it('9. non-empty Summary positive control reaches V2 exactly once', async () => {
-    const run = await actualGeneralSummaryFlow({ summary: 'Existing', kind: 'not_applicable' }); expect(run.legacyCalls).toBe(1);
+  it('9. non-empty Summary is truthfully outside M4 and schedules one generic 40000ms timer', async () => {
+    const run = await actualGeneralSummaryFlow({ summary: 'Existing', kind: 'not_applicable', captureClientTimer: true });
+    expectOneClientTimer(run, AI_CLIENT_TIMEOUT_MS);
+    expect(classifySummaryV3GenerateRouting(run.adapterInput!)).toBe('not_applicable');
+    expect(run.adapterCalls).toBe(1); expect(run.legacyCalls).toBe(1); expect(run.writes).toBe(1);
   });
-  it('10. cross-locale Summary returns not_applicable and reaches legacy V2', async () => {
-    const run = await actualGeneralSummaryFlow({ locale: 'de', contentLocale: 'en', kind: 'not_applicable' });
-    expect(run.adapterInput?.uiLocale).toBe('de'); expect(run.legacyCalls).toBe(1);
+  it('10. a production-classifier not_applicable no-current-role state schedules one generic 40000ms timer', async () => {
+    const run = await actualGeneralSummaryFlow({
+      kind: 'not_applicable', captureClientTimer: true, noCurrentRole: true,
+    });
+    expectOneClientTimer(run, AI_CLIENT_TIMEOUT_MS);
+    expect(classifySummaryV3GenerateRouting(run.adapterInput!)).toBe('not_applicable');
+    expect(run.adapterCalls).toBe(1); expect(run.legacyCalls).toBe(1); expect(run.writes).toBe(1);
   });
   it('11. Stronger bypasses M4 and invokes its existing V2 flow', async () => {
     const run = await actualStyleFlow('stronger'); expect(run.adapterCalls).toBe(0); expect(run.legacyCalls).toBe(1);
@@ -357,18 +440,26 @@ describe('M4 actual page routing and direct server gate', () => {
   it('13. Shorter bypasses M4 and invokes its existing V2 flow', async () => {
     const run = await actualStyleFlow('shorter'); expect(run.adapterCalls).toBe(0); expect(run.legacyCalls).toBe(1);
   });
-  it('14. M4 handled_failure terminates actual page flow before V2 and preserves empty Summary', async () => {
-    const run = await actualGeneralSummaryFlow({ kind: 'handled_failure' }); expect(run.legacyCalls).toBe(0); expect(run.visible).toBe('');
+  it('14. M4 handled_failure retains 60000ms, one timer, and no V2 fallthrough', async () => {
+    const run = await actualGeneralSummaryFlow({ kind: 'handled_failure', captureClientTimer: true });
+    expectOneClientTimer(run, SUMMARY_V3_M4_CLIENT_TIMEOUT_MS);
+    expect(run.adapterCalls).toBe(1); expect(run.legacyCalls).toBe(0); expect(run.visible).toBe('');
+    expect(run.writes).toBe(1); expect(run.usageCalls).toBe(0);
   });
-  it('15. M4 handled_success terminates actual page flow before V2', async () => {
-    const run = await actualGeneralSummaryFlow({ kind: 'handled_success' }); expect(run.legacyCalls).toBe(0);
+  it('15. M4 handled_success retains 60000ms, one timer, and no V2 fallthrough', async () => {
+    const run = await actualGeneralSummaryFlow({ kind: 'handled_success', captureClientTimer: true });
+    expectOneClientTimer(run, SUMMARY_V3_M4_CLIENT_TIMEOUT_MS);
+    expect(run.adapterCalls).toBe(1); expect(run.legacyCalls).toBe(0); expect(run.visible).toBe('M4 generated summary.');
+    expect(run.writes).toBe(2); expect(run.usageCalls).toBe(1);
   });
   it('15b. M4 failure persists the Summary terminal record before the toast', async () => {
     const run = await actualGeneralSummaryFlow({ kind: 'handled_failure' });
     expect(run.toastSawSummaryRecord).toBe(true);
   });
-  it('16. only not_applicable reaches the real legacy continuation seam exactly once', async () => {
-    const run = await actualGeneralSummaryFlow({ kind: 'not_applicable' }); expect(run.adapterCalls).toBe(1); expect(run.legacyCalls).toBe(1);
+  it('16. a classifier-compatible not_applicable adapter continuation keeps 40000ms and has no duplicate operation', async () => {
+    const run = await actualGeneralSummaryFlow({ summary: 'Existing', kind: 'not_applicable', captureClientTimer: true });
+    expectOneClientTimer(run, AI_CLIENT_TIMEOUT_MS);
+    expect(run.adapterCalls).toBe(1); expect(run.legacyCalls).toBe(1); expect(run.writes).toBe(1); expect(run.usageCalls).toBe(0);
   });
   it('17. stable selected Experience IDs and exact current sources reach M4', async () => {
     const run = await actualGeneralSummaryFlow(); expect(run.adapterInput?.cv.experience.map((entry) => entry.id)).toEqual(['page-prior', 'page-current']);
@@ -380,7 +471,8 @@ describe('M4 actual page routing and direct server gate', () => {
   });
   it('19. handled success causes no duplicate legacy usage or page-side apply', async () => {
     const run = await actualGeneralSummaryFlow({ kind: 'handled_success' });
-    expect(run.legacyCalls).toBe(0); expect(run.usageCalls).toBe(0); expect(run.visible).toBe('');
+    expect(run.legacyCalls).toBe(0); expect(run.usageCalls).toBe(1); expect(run.writes).toBe(2);
+    expect(run.visible).toBe('M4 generated summary.');
   });
   it('20. every Experience operation remains on existing M2/M3 routing', () => {
     const data = pageCv();
@@ -442,16 +534,19 @@ describe('M4 actual page routing and direct server gate', () => {
 describe('M4 Summary timeout budget closure', () => {
   it('proves the approved authorities and complete deadline ordering arithmetically', () => {
     expect(SUMMARY_V3_INITIAL_WRITER_TIMEOUT_MS).toBe(11_500);
-    expect(SUMMARY_V3_INITIAL_EVALUATOR_TIMEOUT_MS).toBe(11_500);
+    expect(SUMMARY_V3_INITIAL_EVALUATOR_TIMEOUT_MS).toBe(20_000);
     expect(AI_PROVIDER_CALL_TIMEOUT_MS).toBe(8_000);
-    expect(SUMMARY_V3_SERVER_BUDGET_MS).toBe(27_000);
-    expect(SUMMARY_V3_POST_PROCESSING_HEADROOM_MS).toBe(3_000);
-    expect(computeSummaryV3ServerDeadline(1_000)).toBe(28_000);
+    expect(SUMMARY_V3_SERVER_BUDGET_MS).toBe(38_000);
+    expect(SUMMARY_V3_POST_PROCESSING_HEADROOM_MS).toBe(4_000);
+    expect(SUMMARY_V3_ROUTE_MAX_DURATION_S).toBe(45);
+    expect(computeSummaryV3ServerDeadline(1_000)).toBe(39_000);
     expect(SUMMARY_V3_INITIAL_WRITER_TIMEOUT_MS + SUMMARY_V3_INITIAL_EVALUATOR_TIMEOUT_MS
-      + SUMMARY_V3_POST_PROCESSING_HEADROOM_MS).toBe(26_000);
-    expect(26_000).toBeLessThan(SUMMARY_V3_SERVER_BUDGET_MS);
-    expect(SUMMARY_V3_SERVER_BUDGET_MS).toBeLessThan(AI_PLATFORM_MAX_DURATION_S * 1_000);
-    expect(AI_PLATFORM_MAX_DURATION_S * 1_000).toBeLessThan(AI_CLIENT_TIMEOUT_MS);
+      + SUMMARY_V3_POST_PROCESSING_HEADROOM_MS).toBe(35_500);
+    expect(35_500).toBeLessThan(SUMMARY_V3_SERVER_BUDGET_MS);
+    expect(SUMMARY_V3_ROUTE_MAX_DURATION_S * 1_000 - SUMMARY_V3_SERVER_BUDGET_MS).toBeGreaterThanOrEqual(5_000);
+    expect(SUMMARY_V3_M4_CLIENT_TIMEOUT_MS - SUMMARY_V3_ROUTE_MAX_DURATION_S * 1_000).toBeGreaterThanOrEqual(10_000);
+    expect(AI_PLATFORM_MAX_DURATION_S).toBe(30);
+    expect(AI_CLIENT_TIMEOUT_MS).toBe(40_000);
   });
 
   it('keeps the historical evaluator 8000ms seam timed out for the identical valid forced-tool response at 8001ms', async () => {
@@ -479,44 +574,47 @@ describe('M4 Summary timeout budget closure', () => {
     }
   });
 
-  it('lets the actual production initial-evaluator seam parse and accept the valid forced tool at 8001ms', async () => {
+  it('lets the actual production initial-evaluator seam parse and accept valid forced tools at 11501ms, 15000ms, and 19999ms', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
     try {
-      let started!: () => void;
-      const evaluatorStarted = new Promise<void>((resolve) => { started = resolve; });
-      const pending = forcedToolDirectRoute({ initialEvaluatorDelayMs: 8_001, onInitialEvaluatorStarted: started });
-      await evaluatorStarted;
-      await vi.advanceTimersByTimeAsync(8_001);
-      const run = await pending;
-      expect(run.response.status).toBe(200);
-      expect(run.requests).toHaveLength(2);
-      expect(run.requests[0].requestOptions).toMatchObject({ timeout: 11_500, maxRetries: 0 });
-      expect(run.requests[1].requestOptions).toMatchObject({ timeout: 11_500, maxRetries: 0 });
-      expect(run.body.providerOutput).toBeDefined();
-      expect(run.body.candidate).toBeDefined();
-      expect(run.body.validation).toMatchObject({ decision: 'accept', phases: {
-        structural: { status: 'passed' }, semantic: { status: 'passed' }, language_quality: { status: 'passed' },
-      } });
-      expect(run.body.repairAttempted).toBe(false);
+      for (const delayMs of [11_501, 15_000, 19_999]) {
+        let started!: () => void;
+        const evaluatorStarted = new Promise<void>((resolve) => { started = resolve; });
+        const pending = forcedToolDirectRoute({ initialEvaluatorDelayMs: delayMs, onInitialEvaluatorStarted: started });
+        await evaluatorStarted;
+        await vi.advanceTimersByTimeAsync(delayMs);
+        const run = await pending;
+        expect(run.response.status).toBe(200);
+        expect(run.requests).toHaveLength(2);
+        expect(run.requests[0].requestOptions).toMatchObject({ timeout: 11_500, maxRetries: 0 });
+        expect(run.requests[1].requestOptions).toMatchObject({ timeout: 20_000, maxRetries: 0 });
+        expect(run.body.providerOutput).toBeDefined();
+        expect(run.body.candidate).toBeDefined();
+        expect(run.body.validation).toMatchObject({ decision: 'accept', phases: {
+          structural: { status: 'passed' }, semantic: { status: 'passed' }, language_quality: { status: 'passed' },
+        } });
+        expect(run.body.repairAttempted).toBe(false);
+        expect(run.maxDuration).toBe(45);
+      }
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it('fails closed when the initial evaluator exceeds 11500ms without repair, retry, or candidate authority', async () => {
+  it('fails closed when the initial evaluator exceeds 20000ms without repair, retry, or candidate authority', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
     try {
       let started!: () => void;
       const evaluatorStarted = new Promise<void>((resolve) => { started = resolve; });
-      const pending = forcedToolDirectRoute({ initialEvaluatorDelayMs: 11_501, onInitialEvaluatorStarted: started });
+      const pending = forcedToolDirectRoute({ initialEvaluatorDelayMs: 20_001, onInitialEvaluatorStarted: started });
       await evaluatorStarted;
-      await vi.advanceTimersByTimeAsync(11_501);
+      await vi.advanceTimersByTimeAsync(20_001);
       const run = await pending;
       expect(run.response.status).toBe(502);
       expect(run.requests).toHaveLength(2);
-      expect(run.requests.map((request) => request.requestOptions?.timeout)).toEqual([11_500, 11_500]);
+      expect(run.requests.map((request) => request.requestOptions?.timeout)).toEqual([11_500, 20_000]);
       expect(run.body).toMatchObject({ ok: false, typedReason: 'validator_exception', repairAttempted: false,
         m4ProviderFailure: { phase: 'initial_evaluator', failureStage: 'sdk_request',
           providerErrorType: 'timeout', providerRetryable: false, providerHttpStatus: null,
@@ -532,14 +630,20 @@ describe('M4 Summary timeout budget closure', () => {
   });
 
   it('changes only the initial evaluator while repair phases remain on their 8000ms authorities', async () => {
-    const run = await forcedToolDirectRoute({ forceRepair: true });
-    expect(run.response.status).toBe(200);
-    expect(run.requests).toHaveLength(4);
-    expect(run.requests.map((request) => request.requestOptions?.timeout)).toEqual([11_500, 11_500, 8_000, 8_000]);
-    expect(run.requests.every((request) => request.requestOptions?.maxRetries === 0)).toBe(true);
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      const run = await forcedToolDirectRoute({ forceRepair: true });
+      expect(run.response.status).toBe(200);
+      expect(run.requests).toHaveLength(4);
+      expect(run.requests.map((request) => request.requestOptions?.timeout)).toEqual([11_500, 20_000, 8_000, 8_000]);
+      expect(run.requests.every((request) => request.requestOptions?.maxRetries === 0)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
-  it('uses the M4-specific 27000ms outer budget from route entry', async () => {
+  it('uses the M4-specific 38000ms outer budget from route entry without introducing a second deadline', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
     try {
@@ -550,18 +654,18 @@ describe('M4 Summary timeout budget closure', () => {
       const pending = forcedToolDirectRoute({
         routeEntryElapsedMs: 6_000,
         initialWriterDelayMs: 8_001,
-        initialEvaluatorDelayMs: 7_999,
+        initialEvaluatorDelayMs: 19_999,
         onInitialWriterStarted: writerStartedResolve,
         onInitialEvaluatorStarted: evaluatorStartedResolve,
       });
       await writerStarted;
       await vi.advanceTimersByTimeAsync(8_001);
       await evaluatorStarted;
-      await vi.advanceTimersByTimeAsync(7_999);
+      await vi.advanceTimersByTimeAsync(19_999);
       const run = await pending;
       expect(run.response.status).toBe(200);
-      expect(Date.now()).toBe(22_000);
-      expect(run.requests.map((request) => request.requestOptions?.timeout)).toEqual([11_500, 10_999]);
+      expect(Date.now()).toBe(34_000);
+      expect(run.requests.map((request) => request.requestOptions?.timeout)).toEqual([11_500, 20_000]);
     } finally {
       vi.useRealTimers();
     }

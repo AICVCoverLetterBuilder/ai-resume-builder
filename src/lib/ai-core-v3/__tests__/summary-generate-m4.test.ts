@@ -26,7 +26,9 @@ import {
   SUMMARY_V3_EVALUATOR_TOOL,
   SUMMARY_V3_INITIAL_EVALUATOR_TIMEOUT_MS,
   SUMMARY_V3_INITIAL_WRITER_TIMEOUT_MS,
+  SUMMARY_V3_PLATFORM_HEADROOM_MS,
   SUMMARY_V3_POST_PROCESSING_HEADROOM_MS,
+  SUMMARY_V3_ROUTE_MAX_DURATION_S,
   SUMMARY_V3_SERVER_BUDGET_MS,
   SUMMARY_V3_WRITER_TOOL,
   SUMMARY_V3_WRITER_TOOL_NAME,
@@ -43,12 +45,14 @@ import { M4_SUMMARY_GENERATE_AAB549_DURATION_OBSERVATION } from '../fixtures/m4-
 import { M4_SUMMARY_GENERATE_AAB550_STRICT_SCHEMA_OBSERVATION } from '../fixtures/m4-summary-generate-aab550-strict-schema-observation';
 import { M4_SUMMARY_GENERATE_AAB551_INITIAL_EVALUATOR_TIMEOUT_OBSERVATION } from '../fixtures/m4-summary-generate-aab551-initial-evaluator-timeout-observation';
 import { M4_SUMMARY_GENERATE_AAB552_INITIAL_EVALUATOR_TIMEOUT_OBSERVATION } from '../fixtures/m4-summary-generate-aab552-initial-evaluator-timeout-observation';
+import { M4_SUMMARY_GENERATE_AAB553_FULL_INITIAL_EVALUATOR_TIMEOUT_OBSERVATION } from '../fixtures/m4-summary-generate-aab553-full-initial-evaluator-timeout-observation';
 import { SummaryAiDiagnosticSession, formatSummaryAiDiagnosticForCopy } from '../../cv-summary-ai-diagnostics';
 import {
   AI_CLIENT_TIMEOUT_MS,
   AI_PLATFORM_MAX_DURATION_S,
   AI_PROVIDER_CALL_TIMEOUT_MS,
   AI_RESPONSE_GUARD_MS,
+  SUMMARY_V3_M4_CLIENT_TIMEOUT_MS,
   callProviderWithDeadline,
   readProviderTimingEvidence,
   type ProviderCallOptions,
@@ -1299,6 +1303,41 @@ describe('M4 AAB 551 immutable initial-evaluator timeout authority', () => {
   });
 });
 
+describe('M4 AAB 553 full initial-evaluator timeout authority', () => {
+  it('preserves the exact physical writer-success and full evaluator-timeout boundary', () => {
+    expect(M4_SUMMARY_GENERATE_AAB553_FULL_INITIAL_EVALUATOR_TIMEOUT_OBSERVATION).toMatchObject({
+      applicationId: 'com.cvproai.app', versionCode: 553, versionName: '1.0.553',
+      packageSha256: '1871DE597AB98298DABB417FC14EA088DE8BDFE9A9BFE932EA82BC9D65B835C4',
+      sourceMarker: '77f37f6', capturedAt: '2026-09-02T11:24:22.050Z',
+      requestedLocale: 'de', uiLocale: 'de', contentLocale: 'de', sourceWasEmpty: true,
+      selectedExperienceCount: 1, authoritativeFactCount: 3, usageBefore: 0, generateClickCount: 1,
+      writer: { attempted: true, result: 'succeeded', stopReason: 'tool_use', contentBlockCount: 1,
+        textBlockCount: 0, toolBlockCount: 1, expectedToolCount: 1, toolNameMatched: true,
+        toolInputObject: true, toolInputSchemaPassed: true, identityPassed: true },
+      evaluator: { attempted: true, result: 'failed', responseMetadataAvailable: false },
+      m4ProviderFailure: { phase: 'initial_evaluator', failureStage: 'sdk_request', errorClass: 'Error',
+        providerHttpStatus: null, providerErrorType: 'timeout', providerErrorCode: null,
+        providerRequestIdHash: null, providerRetryable: false, providerMessageFingerprint: 'v3s-89628dbe',
+        providerHttpResponseReceived: null, providerDeadlineOwner: 'verifier_transport',
+        providerConfiguredTimeoutMs: 11_500, providerEffectiveTimeoutMs: 11_500,
+        providerElapsedMs: 11_504, providerOuterBudgetRemainingAtStartMs: 16_218 },
+      routeHttpStatus: 502, typedFailure: 'validator_exception', repairAttempted: false,
+      applyAttempted: false, persistenceAttempted: false, usageAfter: 0, usageDelta: 0,
+      v2FallthroughCount: 0, summaryUnchanged: true, experienceUnchanged: true, failureToastShown: true,
+    });
+  });
+
+  it('is deeply immutable and contains no PII, prose, provider payload, or credential', () => {
+    const observation = M4_SUMMARY_GENERATE_AAB553_FULL_INITIAL_EVALUATOR_TIMEOUT_OBSERVATION;
+    expect(Object.isFrozen(observation)).toBe(true);
+    expect(Object.isFrozen(observation.writer)).toBe(true);
+    expect(Object.isFrozen(observation.m4ProviderFailure)).toBe(true);
+    expect(JSON.stringify(observation)).not.toMatch(
+      /@|fullName|email|phone|address|employer|roleTitle|summaryText|experienceText|prompt|candidate|raw[A-Z]|api[_-]?key|credential|token|cookie|authorization/iu,
+    );
+  });
+});
+
 describe('M4 AAB 552 evaluator latency and timing-evidence closure', () => {
   it('preserves the exact physical AAB 552 boundary as immutable non-PII evidence', () => {
     expect(M4_SUMMARY_GENERATE_AAB552_INITIAL_EVALUATOR_TIMEOUT_OBSERVATION).toMatchObject({
@@ -1341,14 +1380,22 @@ describe('M4 AAB 552 evaluator latency and timing-evidence closure', () => {
     expect(matches).toEqual(['verifier_transport_timeout after 11500ms']);
   });
 
-  it('retains every committed budget because the bounded live evidence does not authorize A-C', () => {
+  it('applies only the approved M4 initial-evaluator, outer, route, and client hierarchy', () => {
     expect(SUMMARY_V3_INITIAL_WRITER_TIMEOUT_MS).toBe(11_500);
-    expect(SUMMARY_V3_INITIAL_EVALUATOR_TIMEOUT_MS).toBe(11_500);
+    expect(SUMMARY_V3_INITIAL_EVALUATOR_TIMEOUT_MS).toBe(20_000);
     expect(AI_PROVIDER_CALL_TIMEOUT_MS).toBe(8_000);
-    expect(SUMMARY_V3_SERVER_BUDGET_MS).toBe(27_000);
-    expect(SUMMARY_V3_POST_PROCESSING_HEADROOM_MS).toBe(3_000);
+    expect(SUMMARY_V3_SERVER_BUDGET_MS).toBe(38_000);
+    expect(SUMMARY_V3_POST_PROCESSING_HEADROOM_MS).toBe(4_000);
+    expect(SUMMARY_V3_ROUTE_MAX_DURATION_S).toBe(45);
+    expect(SUMMARY_V3_PLATFORM_HEADROOM_MS).toBe(7_000);
     expect(AI_PLATFORM_MAX_DURATION_S).toBe(30);
     expect(AI_CLIENT_TIMEOUT_MS).toBe(40_000);
+    expect(SUMMARY_V3_M4_CLIENT_TIMEOUT_MS).toBe(60_000);
+    expect(SUMMARY_V3_INITIAL_WRITER_TIMEOUT_MS + SUMMARY_V3_INITIAL_EVALUATOR_TIMEOUT_MS
+      + SUMMARY_V3_POST_PROCESSING_HEADROOM_MS).toBe(35_500);
+    expect(35_500).toBeLessThan(SUMMARY_V3_SERVER_BUDGET_MS);
+    expect(SUMMARY_V3_SERVER_BUDGET_MS).toBeLessThan(SUMMARY_V3_ROUTE_MAX_DURATION_S * 1_000);
+    expect(SUMMARY_V3_ROUTE_MAX_DURATION_S * 1_000).toBeLessThan(SUMMARY_V3_M4_CLIENT_TIMEOUT_MS);
     expect(hashSummaryV3Value(SUMMARY_V3_WRITER_TOOL)).toBe('v3s-c785acd3');
     expect(hashSummaryV3Value(SUMMARY_V3_EVALUATOR_TOOL)).toBe('v3s-6b7e9c8e');
   });
@@ -1526,14 +1573,14 @@ describe('M4 AAB 552 evaluator latency and timing-evidence closure', () => {
       await vi.advanceTimersByTimeAsync(SUMMARY_V3_INITIAL_EVALUATOR_TIMEOUT_MS);
       const error = await pending;
       expect(readProviderTimingEvidence(error)).toEqual({
-        deadlineOwner: 'verifier_transport', configuredTimeoutMs: 11_500, effectiveTimeoutMs: 11_500,
-        elapsedMs: 11_500, outerBudgetRemainingAtStartMs: 27_000,
+        deadlineOwner: 'verifier_transport', configuredTimeoutMs: 20_000, effectiveTimeoutMs: 20_000,
+        elapsedMs: 20_000, outerBudgetRemainingAtStartMs: 38_000,
       });
       expect(classifySummaryV3ProviderFailure(error, 'initial_evaluator', 'sdk_request')).toMatchObject({
-        providerMessageFingerprint: hashSummaryV3Value('verifier_transport_timeout after 11500ms'),
-        providerDeadlineOwner: 'verifier_transport', providerConfiguredTimeoutMs: 11_500,
-        providerEffectiveTimeoutMs: 11_500, providerElapsedMs: 11_500,
-        providerOuterBudgetRemainingAtStartMs: 27_000,
+        providerMessageFingerprint: hashSummaryV3Value('verifier_transport_timeout after 20000ms'),
+        providerDeadlineOwner: 'verifier_transport', providerConfiguredTimeoutMs: 20_000,
+        providerEffectiveTimeoutMs: 20_000, providerElapsedMs: 20_000,
+        providerOuterBudgetRemainingAtStartMs: 38_000,
       });
     } finally { vi.useRealTimers(); }
   });
@@ -1546,11 +1593,11 @@ describe('M4 AAB 552 evaluator latency and timing-evidence closure', () => {
       await vi.advanceTimersByTimeAsync(8_000);
       const error = await pending;
       expect(readProviderTimingEvidence(error)).toEqual({ deadlineOwner: 'route_deadline',
-        configuredTimeoutMs: 11_500, effectiveTimeoutMs: 8_000, elapsedMs: 8_000,
+        configuredTimeoutMs: 20_000, effectiveTimeoutMs: 8_000, elapsedMs: 8_000,
         outerBudgetRemainingAtStartMs: 10_000 });
       expect(classifySummaryV3ProviderFailure(error, 'initial_evaluator', 'sdk_request')).toMatchObject({
         providerMessageFingerprint: hashSummaryV3Value('route_deadline_exceeded after 8000ms'),
-        providerDeadlineOwner: 'route_deadline', providerConfiguredTimeoutMs: 11_500,
+        providerDeadlineOwner: 'route_deadline', providerConfiguredTimeoutMs: 20_000,
         providerEffectiveTimeoutMs: 8_000, providerElapsedMs: 8_000,
         providerOuterBudgetRemainingAtStartMs: 10_000,
       });
@@ -1562,16 +1609,16 @@ describe('M4 AAB 552 evaluator latency and timing-evidence closure', () => {
     vi.useFakeTimers(); vi.setSystemTime(0);
     try {
       const below = callProviderWithDeadline(() => new Promise<string>((resolve) => {
-        setTimeout(() => resolve('accepted'), 11_499);
+        setTimeout(() => resolve('accepted'), 19_999);
       }), null, SUMMARY_V3_INITIAL_EVALUATOR_TIMEOUT_MS, 'verifier');
-      await vi.advanceTimersByTimeAsync(11_499);
+      await vi.advanceTimersByTimeAsync(19_999);
       await expect(below).resolves.toBe('accepted');
       const above = callProviderWithDeadline(() => new Promise<string>((resolve) => {
-        setTimeout(() => resolve('late'), 11_501);
+        setTimeout(() => resolve('late'), 20_001);
       }), null, SUMMARY_V3_INITIAL_EVALUATOR_TIMEOUT_MS, 'verifier');
       const rejected = expect(above).rejects.toMatchObject({ deadlineOwner: 'verifier_transport',
-        configuredTimeoutMs: 11_500, effectiveTimeoutMs: 11_500 });
-      await vi.advanceTimersByTimeAsync(11_501);
+        configuredTimeoutMs: 20_000, effectiveTimeoutMs: 20_000 });
+      await vi.advanceTimersByTimeAsync(20_001);
       await rejected;
     } finally { vi.useRealTimers(); }
   });
