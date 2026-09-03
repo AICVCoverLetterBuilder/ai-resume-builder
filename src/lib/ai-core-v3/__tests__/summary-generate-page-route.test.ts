@@ -26,6 +26,7 @@ import {
   computeSummaryV3ServerDeadline,
   captureSummaryV3GenerateOperationSnapshot,
   classifySummaryV3GenerateRouting,
+  hashSummaryV3Value,
   type SummaryV3GenerateAdapterDependencies,
   type SummaryV3GenerateAdapterInput,
   type SummaryV3Manifest,
@@ -41,6 +42,9 @@ const toastError = vi.hoisted(() => vi.fn());
 let testLocale: Locale = 'en';
 let runtimeCv: CVData;
 let writes: CVData[] = [];
+let persistenceSucceeds = true;
+let usageAccountingSucceeds = true;
+let usageFailureMode: 'verified_rollback' | 'rollback_failed' | null = null;
 
 function pageCv(summary = '', contentLocale: Locale = 'en'): CVData {
   return {
@@ -105,14 +109,47 @@ function installMocks(): void {
   vi.doMock('@/lib/i18n/context', () => ({ useI18n: () => ({ locale: testLocale, t: translations[testLocale] }) }));
   vi.doMock('@/lib/store', () => ({
     checkProAccess: () => 'allowed',
-    useApp: () => ({
+    useApp: () => {
+      const commitProAiSuccess = () => {
+        if (usageFailureMode === 'verified_rollback') {
+          usageIncrement();
+          return { ok: false as const, attempted: true as const, before: 5, after: 5, delta: 0 as const,
+            forwardWriteResult: 'succeeded' as const, verificationResult: 'unknown' as const,
+            rollbackAttempted: true as const, rollbackResult: 'succeeded' as const,
+            record: { count: 5, windowStart: 0, schemaVersion: 2, policyLimit: 50 }, reason: 'usage_verification_failed' as const };
+        }
+        if (usageFailureMode === 'rollback_failed') {
+          usageIncrement();
+          return { ok: false as const, attempted: true as const, before: 5, after: 6, delta: 1 as const,
+            forwardWriteResult: 'succeeded' as const, verificationResult: 'unknown' as const,
+            rollbackAttempted: true as const, rollbackResult: 'failed' as const,
+            record: { count: 6, windowStart: 0, schemaVersion: 2, policyLimit: 50 }, reason: 'usage_rollback_failed' as const };
+        }
+        if (!usageAccountingSucceeds) {
+          return { ok: false as const, attempted: false as const, before: 5, after: 5, delta: 0 as const,
+            forwardWriteResult: 'not_attempted' as const, verificationResult: 'not_attempted' as const,
+            rollbackAttempted: false as const, rollbackResult: 'not_required' as const,
+            record: { count: 5, windowStart: 0, schemaVersion: 2, policyLimit: 50 }, reason: 'ai_gate_not_ready' as const };
+        }
+        usageIncrement();
+        return { ok: true as const, attempted: true as const, before: 5, after: 6, delta: 1 as const,
+          forwardWriteResult: 'succeeded' as const, verificationResult: 'passed' as const,
+          rollbackAttempted: false as const, rollbackResult: 'not_required' as const,
+          record: { count: 6, windowStart: 0, schemaVersion: 2, policyLimit: 50 } };
+      };
+      return ({
       currentCv: runtimeCv,
       setCurrentCv: (next: CVData) => { runtimeCv = next; writes.push(next); },
-      persistCurrentCvTransactionally: (next: CVData) => { runtimeCv = next; writes.push(next); return true; },
+      persistCurrentCvTransactionally: (next: CVData) => {
+        if (!persistenceSucceeds) return false;
+        runtimeCv = next; writes.push(next); return true;
+      },
       isPro: true, canDownload: () => true, incrementDownloads: vi.fn(), markAiRecommendUsed: vi.fn(),
-      recordProAiSuccess: usageIncrement, getProAiUsageCount: () => 5, lastCvSavedAt: 0,
+      recordProAiSuccess: () => { void commitProAiSuccess(); },
+      commitProAiSuccess, getProAiUsageCount: () => 5, lastCvSavedAt: 0,
       getAiGate: () => ({ status: 'ready', token: 'm4-page-token' }),
-    }),
+      });
+    },
   }));
   vi.doMock('@/lib/api', async () => {
     const actual = await vi.importActual<typeof import('../../api')>('@/lib/api');
@@ -137,13 +174,17 @@ type ClientTimerClearSpy = {
 
 async function actualGeneralSummaryFlow(options: {
   enabled?: boolean; kind?: AdapterKind; summary?: string; locale?: Locale; contentLocale?: Locale; experienceDescription?: string;
-  noCurrentRole?: boolean; captureClientTimer?: boolean;
+  noCurrentRole?: boolean; captureClientTimer?: boolean; persist?: boolean; usageFailure?: boolean;
+  usageFailureMode?: 'verified_rollback' | 'rollback_failed';
 } = {}) {
   const environmentKeys = ['NEXT_PUBLIC_AI_CORE_V3_ENABLED', 'AI_CORE_V3_ENABLED'] as const;
   const saved = Object.fromEntries(environmentKeys.map((key) => [key, process.env[key]]));
   const scroll = HTMLElement.prototype.scrollIntoView;
   cleanup(); localStorage.clear(); sessionStorage.clear();
   testLocale = options.locale ?? 'en'; runtimeCv = pageCv(options.summary ?? '', options.contentLocale ?? 'en'); writes = [];
+  persistenceSucceeds = options.persist !== false;
+  usageAccountingSucceeds = options.usageFailure !== true;
+  usageFailureMode = options.usageFailureMode ?? null;
   if (options.experienceDescription) {
     runtimeCv = {
       ...runtimeCv,
@@ -159,15 +200,32 @@ async function actualGeneralSummaryFlow(options: {
   const kind = options.kind ?? 'handled_failure';
   let toastSawSummaryRecord = false;
   m4Adapter.mockReset().mockImplementation(async (
-    _input: SummaryV3GenerateAdapterInput,
+    adapterInput: SummaryV3GenerateAdapterInput,
     dependencies: SummaryV3GenerateAdapterDependencies,
   ) => {
     if (kind === 'handled_success') {
-      const next = { ...runtimeCv, summary: 'M4 generated summary.' };
-      dependencies.writeCv(next);
-      if (!dependencies.persistCv(next)) return { kind: 'handled_failure', typedReason: 'persistence_failed' };
-      dependencies.incrementUsage();
-      return { kind };
+      const previous = runtimeCv;
+      const candidate = 'M4 generated summary.';
+      const next = {
+        ...previous,
+        summary: candidate,
+        summaryOrigin: 'ai_generated' as const,
+        summaryGeneratedLocale: adapterInput.requestedLocale as Locale,
+        summaryGenerationContextKey: adapterInput.jobContextHash,
+      };
+      const receipt = dependencies.commitCandidate({
+        operationId: adapterInput.operationId,
+        requestId: adapterInput.requestId,
+        previousCvHash: hashSummaryV3Value(previous),
+        candidateHash: hashSummaryV3Value(candidate),
+        requestedLocale: adapterInput.requestedLocale,
+        usageCountBefore: adapterInput.usageCountBefore,
+        previousCv: previous,
+        nextCv: next,
+      });
+      return receipt.kind === 'committed'
+        ? { kind }
+        : { kind: 'handled_failure', typedReason: receipt.reason };
     }
     return kind === 'handled_failure' ? { kind, typedReason: 'page_m4_rejected' } : { kind };
   });
@@ -206,7 +264,11 @@ async function actualGeneralSummaryFlow(options: {
       await waitFor(() => expect(legacyRequest).toHaveBeenCalled());
     } else {
       await waitFor(() => expect(m4Adapter).toHaveBeenCalledTimes(1));
-      await waitFor(() => expect(kind === 'handled_success' ? toastSuccess : toastError).toHaveBeenCalled());
+      await waitFor(() => expect(
+        kind === 'handled_success' && options.persist !== false && options.usageFailure !== true && !options.usageFailureMode
+          ? toastSuccess
+          : toastError,
+      ).toHaveBeenCalled());
     }
     return {
       adapterCalls: m4Adapter.mock.calls.length,
@@ -216,6 +278,9 @@ async function actualGeneralSummaryFlow(options: {
       writes: writes.length,
       visible: editor.value,
       toastSawSummaryRecord,
+      toastSuccessCalls: toastSuccess.mock.calls.length,
+      toastErrorCalls: toastError.mock.calls.length,
+      terminalTrace: JSON.parse(localStorage.getItem(SUMMARY_AI_DIAG_STORAGE_KEY) || 'null'),
       scheduleClientAbortCalls: scheduleClientAbortSpy?.mock.calls.length ?? 0,
       scheduledClientTimeoutMs: scheduleClientAbortSpy?.mock.calls[0]?.[1] as number | undefined,
       scheduledController: scheduleClientAbortSpy?.mock.calls[0]?.[0],
@@ -234,6 +299,8 @@ async function actualGeneralSummaryFlow(options: {
     else Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: scroll });
     vi.doUnmock('@/lib/ai-core-v3'); vi.doUnmock('@/lib/i18n/context'); vi.doUnmock('@/lib/store');
     vi.doUnmock('@/lib/api'); vi.doUnmock('@/components/Header'); vi.doUnmock('@/components/Footer'); vi.doUnmock('sonner');
+    usageAccountingSucceeds = true;
+    usageFailureMode = null;
     vi.clearAllMocks(); vi.resetModules(); localStorage.clear(); sessionStorage.clear();
   }
 }
@@ -455,6 +522,33 @@ describe('M4 actual page routing and direct server gate', () => {
   it('15b. M4 failure persists the Summary terminal record before the toast', async () => {
     const run = await actualGeneralSummaryFlow({ kind: 'handled_failure' });
     expect(run.toastSawSummaryRecord).toBe(true);
+  });
+  it('15c. page-owned persistence failure leaves canonical and rendered Summary empty with zero usage', async () => {
+    const run = await actualGeneralSummaryFlow({ kind: 'handled_success', persist: false });
+    expect(run.adapterCalls).toBe(1); expect(run.legacyCalls).toBe(0);
+    expect(run.visible).toBe(''); expect(run.usageCalls).toBe(0); expect(run.writes).toBe(1);
+    expect(run.toastErrorCalls).toBe(1); expect(run.toastSuccessCalls).toBe(0);
+  });
+  it('15d. page-owned usage rejection rolls the CV back and cannot produce a success terminal or toast', async () => {
+    const run = await actualGeneralSummaryFlow({ kind: 'handled_success', usageFailure: true });
+    expect(run.adapterCalls).toBe(1); expect(run.legacyCalls).toBe(0);
+    expect(run.visible).toBe(''); expect(run.usageCalls).toBe(0); expect(run.writes).toBe(3);
+    expect(run.toastErrorCalls).toBe(1); expect(run.toastSuccessCalls).toBe(0);
+  });
+  it.each([
+    ['verified usage rollback', 'verified_rollback'],
+    ['failed usage rollback', 'rollback_failed'],
+  ] as const)('15e. page terminalizes %s without a hidden success or V2 fallthrough', async (
+    _label,
+    usageFailureMode,
+  ) => {
+    const run = await actualGeneralSummaryFlow({ kind: 'handled_success', usageFailureMode });
+    expect(run.adapterCalls).toBe(1); expect(run.legacyCalls).toBe(0);
+    expect(run.visible).toBe(''); expect(run.writes).toBe(3); expect(run.usageCalls).toBe(1);
+    expect(run.toastErrorCalls).toBe(1); expect(run.toastSuccessCalls).toBe(0);
+    expect(run.terminalTrace).toMatchObject({
+      countedAsSuccess: false, visibleApplySucceeded: false,
+    });
   });
   it('16. a classifier-compatible not_applicable adapter continuation keeps 40000ms and has no duplicate operation', async () => {
     const run = await actualGeneralSummaryFlow({ summary: 'Existing', kind: 'not_applicable', captureClientTimer: true });

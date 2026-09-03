@@ -209,6 +209,86 @@ export interface SummaryV3GenerateLiveState {
   readonly jobContextHash: string;
 }
 
+export type SummaryV3CommitStageResult = 'passed' | 'failed' | 'skipped';
+export type SummaryV3CommitRollbackResult = 'not_required' | 'succeeded' | 'failed';
+export type SummaryV3CommitFailureReason =
+  | 'operation_superseded'
+  | 'stale_snapshot'
+  | 'persistence_failed'
+  | 'canonical_commit_failed'
+  | 'usage_accounting_failed'
+  | 'usage_rollback_failed'
+  | 'usage_final_state_unknown'
+  | 'rollback_failed'
+  | 'commit_operation_failed';
+
+/** One immutable page-boundary request for the complete M4 client commit tail. */
+export interface SummaryV3CommitRequest {
+  readonly operationId: string;
+  readonly requestId: string;
+  readonly previousCvHash: string;
+  readonly candidateHash: string;
+  readonly requestedLocale: string;
+  readonly usageCountBefore: number;
+  readonly previousCv: CVData;
+  readonly nextCv: CVData;
+}
+
+/** Safe, prose-free receipt from the one authoritative page commit owner. */
+interface SummaryV3CommitReceiptBase {
+  readonly operationId: string;
+  readonly requestId: string;
+  readonly intendedCandidateHash: string;
+  readonly committedSummaryHash: string | null;
+  readonly committedContentLocale: string | null;
+  readonly persistenceAttempted: boolean;
+  readonly persistenceResult: SummaryV3CommitStageResult;
+  readonly canonicalApplyAttempted: boolean;
+  readonly canonicalApplyResult: SummaryV3CommitStageResult;
+  readonly usageAttempted: boolean;
+  readonly usageResult: SummaryV3CommitStageResult;
+  readonly usageForwardWriteResult: 'not_attempted' | 'succeeded' | 'failed' | 'unknown';
+  readonly usageVerificationResult: 'not_attempted' | 'passed' | 'failed' | 'unknown';
+  readonly usageRollbackAttempted: boolean;
+  readonly usageRollbackResult: 'not_required' | 'succeeded' | 'failed' | 'unknown';
+  readonly actualUsageBefore: number | null;
+  readonly actualUsageAfter: number | null;
+  readonly actualUsageDelta: number | null;
+  readonly rollbackAttempted: boolean;
+  readonly rollbackResult: SummaryV3CommitRollbackResult;
+}
+
+export type SummaryV3CommitReceipt =
+  | Readonly<SummaryV3CommitReceiptBase & {
+      readonly kind: 'committed';
+      /** Final receipt outcome, redundant only with the discriminant by design. */
+      readonly canonicalAccepted: true;
+      readonly candidateMatched: true;
+      readonly persistenceAttempted: true;
+      readonly persistenceResult: 'passed';
+      readonly canonicalApplyAttempted: true;
+      readonly canonicalApplyResult: 'passed';
+      readonly usageAttempted: true;
+      readonly usageResult: 'passed';
+      readonly usageForwardWriteResult: 'succeeded';
+      readonly usageVerificationResult: 'passed';
+      readonly usageRollbackAttempted: false;
+      readonly usageRollbackResult: 'not_required';
+      readonly actualUsageBefore: number;
+      readonly actualUsageAfter: number;
+      readonly actualUsageDelta: 1;
+      readonly rollbackAttempted: false;
+      readonly rollbackResult: 'not_required';
+    }>
+  | Readonly<SummaryV3CommitReceiptBase & {
+      readonly kind: 'failed';
+      readonly reason: SummaryV3CommitFailureReason;
+      /** Final receipt outcome; an earlier canonical apply may still have passed before rollback. */
+      readonly canonicalAccepted: false;
+      readonly candidateMatched: boolean;
+      readonly actualUsageDelta: number | null;
+    }>;
+
 export interface SummaryV3GenerateAdapterDependencies {
   readonly request: (request: {
     readonly action: typeof SUMMARY_V3_GENERATE_ACTION;
@@ -216,13 +296,9 @@ export interface SummaryV3GenerateAdapterDependencies {
   }) => Promise<unknown>;
   readonly getLiveState: () => SummaryV3GenerateLiveState;
   readonly getActiveOperationId: () => string;
-  readonly writeCv: (next: CVData) => void;
-  readonly projectPreviewSummary: (next: CVData) => string;
-  readonly persistCv: (next: CVData) => boolean;
-  readonly incrementUsage: () => void;
+  readonly commitCandidate: (request: SummaryV3CommitRequest) => SummaryV3CommitReceipt;
   /** Optional terminal seam. It is observational and cannot affect routing/apply. */
   readonly onTerminal?: (event: SummaryV3GenerateTerminalEvent) => void;
-  readonly getUsageCount?: () => number;
   readonly getRouteHttpStatus?: () => number | null;
 }
 
@@ -249,6 +325,7 @@ export type SummaryV3TransportEvidence = Readonly<{
 }>;
 
 export type SummaryV3TerminalEvidence = {
+  readonly candidateAccepted: boolean;
   readonly candidatePresent: boolean;
   readonly candidateHash: string | null;
   readonly candidateLength: number | null;
@@ -298,8 +375,10 @@ export interface SummaryV3GenerateTerminalEvent {
   readonly typedReason: string | null;
   readonly evidence: SummaryV3TerminalEvidence;
   readonly internalRejectionAudit?: SummaryV3InternalRejectionAudit;
+  readonly commitReceipt: SummaryV3CommitReceipt | null;
   readonly applyCommitted: boolean;
-  readonly usageAfter: number;
+  /** Null only when a failed usage transaction cannot prove its final ledger state. */
+  readonly usageAfter: number | null;
   readonly routeHttpStatus: number | null;
 }
 
@@ -745,27 +824,6 @@ function snapshotStillCurrent(
   }
 }
 
-function nonSummaryState(cv: CVData): unknown {
-  const { summary: _summary, summaryOrigin: _origin, summaryGeneratedLocale: _locale,
-    summaryGenerationContextKey: _context, ...rest } = cv;
-  return rest;
-}
-
-function rollback(
-  before: CVData,
-  dependencies: Pick<SummaryV3GenerateAdapterDependencies, 'writeCv' | 'getLiveState' | 'persistCv'>,
-): boolean {
-  try {
-    dependencies.writeCv(before);
-    const restored = dependencies.getLiveState().cv;
-    const verified = hashSummaryV3Value(restored) === hashSummaryV3Value(before);
-    if (verified) dependencies.persistCv(before);
-    return verified;
-  } catch {
-    return false;
-  }
-}
-
 export function projectSummaryV3ImmediatePreviewModel(cv: CVData): CVData {
   return cv;
 }
@@ -774,7 +832,7 @@ export function applySummaryV3GenerateTransaction(
   snapshot: SummaryV3GenerateOperationSnapshot,
   response: SummaryV3GenerateSuccessResponse,
   dependencies: Pick<SummaryV3GenerateAdapterDependencies,
-    'getLiveState' | 'getActiveOperationId' | 'writeCv' | 'projectPreviewSummary' | 'persistCv' | 'incrementUsage'>,
+    'getLiveState' | 'getActiveOperationId' | 'commitCandidate'>,
 ): SummaryV3GenerateRoutingResult {
   if (dependencies.getActiveOperationId() !== snapshot.operationId) {
     return { kind: 'handled_failure', typedReason: 'operation_superseded' };
@@ -784,56 +842,36 @@ export function applySummaryV3GenerateTransaction(
   if (!responseMatchesSummaryV3GenerateSnapshot(response, snapshot)) {
     return { kind: 'handled_failure', typedReason: 'candidate_or_validation_mismatch' };
   }
-  const before = live.cv;
-  const next: CVData = {
+  const before = immutableCopy(live.cv) as CVData;
+  const next = immutableCopy({
     ...before,
     summary: response.candidate.text,
     summaryOrigin: 'ai_generated',
     summaryGeneratedLocale: snapshot.requestedLocale,
     summaryGenerationContextKey: snapshot.jobContextHash,
-  };
+    contentLocale: snapshot.requestedLocale as CVData['contentLocale'],
+  }) as CVData;
+  const request = immutableCopy({
+    operationId: snapshot.operationId,
+    requestId: snapshot.requestId,
+    previousCvHash: hashSummaryV3Value(before),
+    candidateHash: hashSummaryV3Value(response.candidate.text),
+    requestedLocale: snapshot.requestedLocale,
+    usageCountBefore: snapshot.usageCountBefore,
+    previousCv: before,
+    nextCv: next,
+  }) as SummaryV3CommitRequest;
+  let receipt: SummaryV3CommitReceipt;
   try {
-    dependencies.writeCv(next);
+    receipt = dependencies.commitCandidate(request);
   } catch {
-    rollback(before, dependencies);
-    return { kind: 'handled_failure', typedReason: 'state_write_failed' };
+    return { kind: 'handled_failure', typedReason: 'commit_operation_failed' };
   }
-  let readback: CVData;
-  try {
-    readback = dependencies.getLiveState().cv;
-  } catch {
-    return { kind: 'handled_failure', typedReason: rollback(before, dependencies) ? 'visible_readback_failed' : 'rollback_failed' };
+  if (receipt.kind === 'failed') {
+    return { kind: 'handled_failure', typedReason: receipt.reason };
   }
-  let previewSummary = '';
-  try {
-    previewSummary = dependencies.projectPreviewSummary(readback);
-  } catch {
-    return { kind: 'handled_failure', typedReason: rollback(before, dependencies) ? 'preview_projection_failed' : 'rollback_failed' };
-  }
-  const readbackPassed = readback.summary === response.candidate.text
-    && hashSummaryV3Value(readback.summary) === hashSummaryV3Value(response.candidate.text)
-    && readback.summaryOrigin === 'ai_generated'
-    && normalizeLocale(readback.summaryGeneratedLocale || '') === normalizeLocale(snapshot.requestedLocale)
-    && readback.summaryGenerationContextKey === snapshot.jobContextHash
-    && previewSummary === response.candidate.text
-    && hashSummaryV3Value(nonSummaryState(readback)) === hashSummaryV3Value(nonSummaryState(before));
-  if (!readbackPassed) {
-    return { kind: 'handled_failure', typedReason: rollback(before, dependencies) ? 'visible_readback_failed' : 'rollback_failed' };
-  }
-  let persisted = false;
-  try {
-    persisted = dependencies.persistCv(readback);
-  } catch {
-    persisted = false;
-  }
-  if (!persisted) {
-    return { kind: 'handled_failure', typedReason: rollback(before, dependencies) ? 'persistence_failed' : 'rollback_failed' };
-  }
-  try {
-    dependencies.incrementUsage();
-  } catch {
-    return { kind: 'handled_failure', typedReason: rollback(before, dependencies) ? 'usage_increment_failed' : 'rollback_failed' };
-  }
+  // A committed receipt is final. The page boundary owns every verification
+  // and rollback after its side effects; the adapter only routes this outcome.
   return { kind: 'handled_success' };
 }
 
@@ -922,9 +960,9 @@ function diagnosticAttempts(
   const none = notAttemptedAttempt();
   const succeeded = attemptedAttempt('succeeded', null);
   if (acceptedResponse || [
-    'candidate_or_validation_mismatch', 'stale_snapshot', 'visible_readback_failed',
-    'rollback_failed', 'persistence_failed', 'usage_increment_failed',
-    'client_verification_exception', 'state_write_failed', 'preview_projection_failed',
+    'candidate_or_validation_mismatch', 'operation_superseded', 'stale_snapshot',
+    'rollback_failed', 'persistence_failed', 'canonical_commit_failed',
+    'usage_accounting_failed', 'commit_operation_failed', 'client_verification_exception',
   ].includes(String(reason))) return { writer: succeeded, evaluator: succeeded };
   if (reason === 'provider_request_failed') return { writer: attemptedAttempt('failed', reason), evaluator: none };
   if (reason === 'provider_output_malformed') return { writer: attemptedAttempt('malformed', reason), evaluator: none };
@@ -995,6 +1033,7 @@ function responseEvidence(value: unknown, reason: string | null): SummaryV3Termi
     ? parseSummaryV3ProviderFailureEnvelope(value.m4ProviderFailure)
     : null;
   return immutableCopy({
+    candidateAccepted: accepted && Boolean(candidate),
     candidatePresent: Boolean(candidate),
     candidateHash: candidate ? hashSummaryV3Value(candidate.text) : null,
     candidateLength: candidate ? candidate.text.length : null,
@@ -1065,24 +1104,13 @@ function routeHttpStatus(dependencies: SummaryV3GenerateAdapterDependencies): nu
   }
 }
 
-function usageAfter(
-  input: SummaryV3GenerateAdapterInput,
-  dependencies: SummaryV3GenerateAdapterDependencies,
-  kind: 'handled_success' | 'handled_failure',
-): number {
-  try {
-    const count = dependencies.getUsageCount?.();
-    if (Number.isFinite(count) && Number(count) >= 0) return Number(count);
-  } catch { /* diagnostics only */ }
-  return input.usageCountBefore + (kind === 'handled_success' ? 1 : 0);
-}
-
 function emitTerminal(
   input: SummaryV3GenerateAdapterInput,
   dependencies: SummaryV3GenerateAdapterDependencies,
   snapshot: SummaryV3GenerateOperationSnapshot | null,
   result: { kind: 'handled_success' | 'handled_failure'; typedReason?: string },
   rawResponse: unknown,
+  commitReceipt: SummaryV3CommitReceipt | null = null,
 ): void {
   try {
     dependencies.onTerminal?.({
@@ -1097,8 +1125,11 @@ function emitTerminal(
           return audit ? { internalRejectionAudit: audit } : {};
         })()
         : {}),
-      applyCommitted: result.kind === 'handled_success',
-      usageAfter: usageAfter(input, dependencies, result.kind),
+      commitReceipt,
+      applyCommitted: result.kind === 'handled_success' && commitReceipt?.kind === 'committed',
+      // A receipt's nullable final state is authoritative. Pre-commit failures
+      // have no usage attempt and retain the input count as a known no-op.
+      usageAfter: commitReceipt ? commitReceipt.actualUsageAfter : input.usageCountBefore,
       routeHttpStatus: routeHttpStatus(dependencies),
     });
   } catch {
@@ -1134,9 +1165,18 @@ export async function runSummaryV3GenerateAdapter(
     return result;
   }
   try {
-    const result = applySummaryV3GenerateTransaction(snapshot, response, dependencies);
+    let commitReceipt: SummaryV3CommitReceipt | null = null;
+    const result = applySummaryV3GenerateTransaction(snapshot, response, {
+      getLiveState: dependencies.getLiveState,
+      getActiveOperationId: dependencies.getActiveOperationId,
+      commitCandidate: (request) => {
+        const receipt = dependencies.commitCandidate(request);
+        commitReceipt = receipt;
+        return receipt;
+      },
+    });
     if (result.kind === 'not_applicable') return result;
-    emitTerminal(input, dependencies, snapshot, result, raw);
+    emitTerminal(input, dependencies, snapshot, result, raw, commitReceipt);
     return result;
   } catch {
     const result = { kind: 'handled_failure' as const, typedReason: 'client_verification_exception' };

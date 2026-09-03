@@ -12,6 +12,8 @@ import {
   copySummaryV3InternalRejectionAuditToClipboard,
   getLatestSummaryV3InternalRejectionAudit,
   getLatestSummaryAiDiagnostic,
+  formatSummaryUsageDiagnosticView,
+  getSummaryUsageDiagnosticView,
   summarizeSummaryAiDiagnostic,
 } from '@/lib/cv-summary-ai-diagnostics';
 import { getCvAiDiagnosticHistory } from '@/lib/cv-ai-diagnostics-contract';
@@ -60,6 +62,13 @@ export function InternalSummaryAiDiagnosticsPanel({
     return getLatestSummaryAiDiagnostic();
   }, [refreshToken, rev]);
   const summary = useMemo(() => summarizeSummaryAiDiagnostic(full), [full]);
+  const usageView = useMemo(
+    () => (full ? getSummaryUsageDiagnosticView(full) : null),
+    [full],
+  );
+  const m4RequestUsage = usageView && usageView.kind !== 'legacy'
+    ? usageView.requestBefore
+    : null;
   const rejectedAudit = useMemo(() => {
     void rev;
     void refreshToken;
@@ -105,7 +114,14 @@ export function InternalSummaryAiDiagnosticsPanel({
     }
     if ((full.wrongLocaleUnitCount || 0) > 0) warnings.push('wrong locale');
     if ((full.unsupportedClaimCount || 0) > 0) warnings.push('unsupported claim');
-    if ((full.usageCountAfter ?? 0) !== (full.usageCountBefore ?? 0) + (full.countedAsSuccess ? 1 : 0)) {
+    if (full.m4Operation === 'summary_v3_generate') {
+      if (usageView?.kind === 'm4_unknown') {
+        warnings.push('usage final state unknown');
+      } else if (usageView?.kind === 'm4_known' && !full.countedAsSuccess && usageView.delta !== 0) {
+        warnings.push('usage changed after failed operation');
+      }
+    } else if ((full.usageCountAfter ?? 0) !== (full.usageCountBefore ?? 0) + (full.countedAsSuccess ? 1 : 0)) {
+      // Legacy V2 remains numeric and uses its existing request-boundary rule.
       warnings.push('usage mismatch');
     }
   }
@@ -199,7 +215,8 @@ export function InternalSummaryAiDiagnosticsPanel({
               <div><dt className="inline font-medium text-foreground">M4 candidate evidence: </dt><dd className="inline">{full.m4CandidatePresent ? `${full.m4CandidateUnitCount ?? 0} units / ${full.m4CandidateLength ?? 0} chars` : 'none'}</dd></div>
               <div><dt className="inline font-medium text-foreground">M4 available/required/covered: </dt><dd className="inline">{full.m4AvailableFactCount ?? 'n/a'} / {full.m4RequiredFactCount ?? 'n/a'} / {full.m4CoveredFactCount ?? 'n/a'}</dd></div>
               <div><dt className="inline font-medium text-foreground">M4 apply/persistence/fallthrough: </dt><dd className="inline">{full.m4ApplyCommitted ? 'committed' : 'not committed'} / {full.m4PersistenceResult || 'n/a'} / {full.m4V2FallthroughCount ?? 0}</dd></div>
-              <div><dt className="inline font-medium text-foreground">M4 usage: </dt><dd className="inline">{full.usageCountBefore} → {full.usageCountAfter} (Δ {full.m4UsageDelta ?? (full.usageCountAfter - full.usageCountBefore)})</dd></div>
+              <div><dt className="inline font-medium text-foreground">M4 request usage: </dt><dd className="inline">{m4RequestUsage ?? 'n/a'}</dd></div>
+              <div><dt className="inline font-medium text-foreground">M4 usage: </dt><dd className="inline">{usageView ? formatSummaryUsageDiagnosticView(usageView) : 'not available'}</dd></div>
             </>
           ) : null}
         </dl>
@@ -215,7 +232,7 @@ export function InternalSummaryAiDiagnosticsPanel({
             {history.map((h) => (
               <li key={`${h.timestamp}-${h.requestIdHash}`}>
                 {h.timestamp.slice(0, 19)} · {h.targetLocale} · {h.success ? 'ok' : 'fail'} ·{' '}
-                {h.finalCandidateSource || 'n/a'}
+                {h.finalCandidateSource || 'n/a'} · {formatSummaryUsageDiagnosticView(getSummaryUsageDiagnosticView(h))}
               </li>
             ))}
           </ul>

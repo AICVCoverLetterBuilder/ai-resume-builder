@@ -54,6 +54,41 @@ export interface ProAiRecord {
   policyLimit?: number;
 }
 
+/**
+ * The synchronous, authoritative result of one user-visible Pro AI action.
+ * `before`/`after` are null only when storage itself cannot be read; callers
+ * must not substitute an optimistic count in that case.
+ */
+export type ProAiUsageCommitResult =
+  | Readonly<{
+      ok: true;
+      attempted: true;
+      forwardWriteResult: 'succeeded';
+      verificationResult: 'passed';
+      rollbackAttempted: false;
+      rollbackResult: 'not_required';
+      before: number;
+      after: number;
+      delta: 1;
+      record: ProAiRecord;
+    }>
+  | Readonly<{
+      ok: false;
+      attempted: boolean;
+      forwardWriteResult: 'not_attempted' | 'succeeded' | 'failed' | 'unknown';
+      verificationResult: 'not_attempted' | 'failed' | 'unknown';
+      rollbackAttempted: boolean;
+      rollbackResult: 'not_required' | 'succeeded' | 'failed' | 'unknown';
+      before: number | null;
+      after: number | null;
+      /** Final canonical delta when it can be proven; never optimistic. */
+      delta: number | null;
+      record: ProAiRecord | null;
+      reason: 'ai_gate_not_ready' | 'usage_cap_reached' | 'usage_storage_unavailable'
+        | 'usage_persist_failed' | 'usage_verification_failed'
+        | 'usage_rollback_failed' | 'usage_final_state_unknown';
+    }>;
+
 interface PersistedProAiRecord {
   schemaVersion?: number;
   count?: number;
@@ -244,6 +279,131 @@ export function recordProAiUserActionSuccess(
   };
   persistProAiRecord(updated);
   return updated;
+}
+
+type ProAiUsageReadResult =
+  | Readonly<{ ok: true; record: ProAiRecord; raw: string | null }>
+  | Readonly<{ ok: false }>;
+
+/** Read one canonical ledger value without the best-effort fallback used by UI display helpers. */
+function readProAiRecordForCommit(now: number): ProAiUsageReadResult {
+  if (typeof window === 'undefined') return { ok: false };
+  try {
+    const raw = localStorage.getItem(AI_USAGE_STORAGE_KEY);
+    const parsed = raw === null ? null : JSON.parse(raw) as PersistedProAiRecord;
+    return { ok: true, record: migrateProAiRecord(parsed, now), raw };
+  } catch {
+    return { ok: false };
+  }
+}
+
+type ProAiUsageRollbackAttempt = Readonly<{
+  result: 'succeeded' | 'failed' | 'unknown';
+  finalRead: ProAiUsageReadResult;
+}>;
+
+/**
+ * Restore the exact pre-commit storage blob, rather than recreating a record
+ * from a count. This remains private to the one existing usage-policy owner.
+ */
+function restoreProAiRecordForCommit(raw: string | null, now: number): ProAiUsageRollbackAttempt {
+  if (typeof window === 'undefined') return { result: 'unknown', finalRead: { ok: false } };
+  try {
+    if (raw === null) localStorage.removeItem(AI_USAGE_STORAGE_KEY);
+    else localStorage.setItem(AI_USAGE_STORAGE_KEY, raw);
+  } catch {
+    const finalRead = readProAiRecordForCommit(now);
+    return { result: finalRead.ok ? 'failed' : 'unknown', finalRead };
+  }
+  const finalRead = readProAiRecordForCommit(now);
+  if (!finalRead.ok) return { result: 'unknown', finalRead };
+  return { result: finalRead.raw === raw ? 'succeeded' : 'failed', finalRead };
+}
+
+/**
+ * Commit exactly one Pro AI usage unit through the existing ledger owner and
+ * prove the persisted result by reading the canonical storage value back.
+ * The caller supplies only the current authorization decision; this function
+ * never derives counts from a request-start snapshot or React state.
+ */
+export function commitProAiUserAction(options: {
+  readonly aiGateReady: boolean;
+  readonly now?: number;
+}): ProAiUsageCommitResult {
+  const now = options.now ?? Date.now();
+  const beforeRead = readProAiRecordForCommit(now);
+  if (!beforeRead.ok) {
+    return {
+      ok: false, attempted: false, forwardWriteResult: 'not_attempted', verificationResult: 'not_attempted',
+      rollbackAttempted: false, rollbackResult: 'not_required', before: null, after: null, delta: null,
+      record: null, reason: 'usage_storage_unavailable',
+    };
+  }
+  const before = beforeRead.record;
+  if (!options.aiGateReady) {
+    return {
+      ok: false, attempted: false, forwardWriteResult: 'not_attempted', verificationResult: 'not_attempted',
+      rollbackAttempted: false, rollbackResult: 'not_required', before: before.count, after: before.count,
+      delta: 0, record: before, reason: 'ai_gate_not_ready',
+    };
+  }
+  if (isProAiSafetyBlocked(before, now)) {
+    return {
+      ok: false, attempted: false, forwardWriteResult: 'not_attempted', verificationResult: 'not_attempted',
+      rollbackAttempted: false, rollbackResult: 'not_required', before: before.count, after: before.count,
+      delta: 0, record: before, reason: 'usage_cap_reached',
+    };
+  }
+
+  let forwardWriteResult: 'succeeded' | 'failed' = 'succeeded';
+  try {
+    // Reuse the existing synchronous record builder/persistence owner; this is
+    // deliberately the only write performed by this transaction.
+    recordProAiUserActionSuccess(before, now);
+  } catch {
+    forwardWriteResult = 'failed';
+  }
+
+  const afterRead = readProAiRecordForCommit(now);
+  if (forwardWriteResult === 'succeeded' && afterRead.ok
+    && afterRead.record.count === before.count + 1) {
+    return {
+      ok: true, attempted: true, forwardWriteResult: 'succeeded', verificationResult: 'passed',
+      rollbackAttempted: false, rollbackResult: 'not_required', before: before.count,
+      after: afterRead.record.count, delta: 1, record: afterRead.record,
+    };
+  }
+
+  // A failed write with an exact unchanged read needs no compensating write.
+  // Any unreadable or changed post-write state may have charged the user and
+  // must be restored from the retained raw canonical value before failure.
+  if (afterRead.ok && afterRead.raw === beforeRead.raw) {
+    return {
+      ok: false, attempted: true, forwardWriteResult,
+      verificationResult: 'failed', rollbackAttempted: false, rollbackResult: 'not_required',
+      before: before.count, after: afterRead.record.count,
+      delta: afterRead.record.count - before.count, record: afterRead.record,
+      reason: forwardWriteResult === 'failed' ? 'usage_persist_failed' : 'usage_verification_failed',
+    };
+  }
+
+  const usageRollback = restoreProAiRecordForCommit(beforeRead.raw, now);
+  const finalRecord = usageRollback.finalRead.ok ? usageRollback.finalRead.record : null;
+  const finalAfter = finalRecord?.count ?? null;
+  const finalDelta = finalAfter === null ? null : finalAfter - before.count;
+  const reason = usageRollback.result === 'failed'
+    ? 'usage_rollback_failed'
+    : usageRollback.result === 'unknown'
+      ? 'usage_final_state_unknown'
+      : forwardWriteResult === 'failed'
+        ? 'usage_persist_failed'
+        : 'usage_verification_failed';
+  return {
+    ok: false, attempted: true, forwardWriteResult,
+    verificationResult: afterRead.ok ? 'failed' : 'unknown', rollbackAttempted: true,
+    rollbackResult: usageRollback.result, before: before.count, after: finalAfter,
+    delta: finalDelta, record: finalRecord, reason,
+  };
 }
 
 function readCircuitRaw(): AiCircuitState | null {

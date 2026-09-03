@@ -20,6 +20,8 @@ import {
   runSummaryV3GenerateAdapter,
   type SummaryV3GenerateAdapterInput,
   type SummaryV3GenerateSuccessResponse,
+  type SummaryV3CommitReceipt,
+  type SummaryV3CommitRequest,
   type SummaryV3Manifest,
   type SummaryV3WriterOutput,
   SUMMARY_V3_EVALUATOR_TOOL_NAME,
@@ -46,6 +48,7 @@ import { M4_SUMMARY_GENERATE_AAB550_STRICT_SCHEMA_OBSERVATION } from '../fixture
 import { M4_SUMMARY_GENERATE_AAB551_INITIAL_EVALUATOR_TIMEOUT_OBSERVATION } from '../fixtures/m4-summary-generate-aab551-initial-evaluator-timeout-observation';
 import { M4_SUMMARY_GENERATE_AAB552_INITIAL_EVALUATOR_TIMEOUT_OBSERVATION } from '../fixtures/m4-summary-generate-aab552-initial-evaluator-timeout-observation';
 import { M4_SUMMARY_GENERATE_AAB553_FULL_INITIAL_EVALUATOR_TIMEOUT_OBSERVATION } from '../fixtures/m4-summary-generate-aab553-full-initial-evaluator-timeout-observation';
+import { M4_SUMMARY_GENERATE_AAB554_VISIBLE_READBACK_OBSERVATION } from '../fixtures/m4-summary-generate-aab554-visible-readback-observation';
 import { SummaryAiDiagnosticSession, formatSummaryAiDiagnosticForCopy } from '../../cv-summary-ai-diagnostics';
 import {
   AI_CLIENT_TIMEOUT_MS,
@@ -680,17 +683,85 @@ describe('M4 strict writer, evaluator, and repair server', () => {
 });
 
 describe('M4 transactional apply, preview, rollback, and usage', () => {
-  async function harness(options: { mutateLive?: (value: CVData) => void; persist?: boolean; active?: string; previewMutation?: boolean } = {}) {
+  function committedReceipt(request: SummaryV3CommitRequest): SummaryV3CommitReceipt {
+    return {
+      kind: 'committed', operationId: request.operationId, requestId: request.requestId,
+      intendedCandidateHash: request.candidateHash, committedSummaryHash: request.candidateHash,
+      committedContentLocale: request.requestedLocale, canonicalAccepted: true, candidateMatched: true,
+      persistenceAttempted: true, persistenceResult: 'passed',
+      canonicalApplyAttempted: true, canonicalApplyResult: 'passed',
+      usageAttempted: true, usageResult: 'passed',
+      usageForwardWriteResult: 'succeeded', usageVerificationResult: 'passed',
+      usageRollbackAttempted: false, usageRollbackResult: 'not_required',
+      actualUsageBefore: request.usageCountBefore, actualUsageAfter: request.usageCountBefore + 1,
+      actualUsageDelta: 1, rollbackAttempted: false, rollbackResult: 'not_required',
+    };
+  }
+
+  function failedReceipt(
+    request: SummaryV3CommitRequest,
+    reason: Extract<SummaryV3CommitReceipt, { kind: 'failed' }>['reason'],
+    persistenceResult: Extract<SummaryV3CommitReceipt, { kind: 'failed' }>['persistenceResult'] = 'skipped',
+  ): SummaryV3CommitReceipt {
+    const canonicalAttempted = persistenceResult === 'passed';
+    return {
+      kind: 'failed', operationId: request.operationId, requestId: request.requestId,
+      reason, canonicalAccepted: false, intendedCandidateHash: request.candidateHash,
+      committedSummaryHash: null, committedContentLocale: null, candidateMatched: false,
+      persistenceAttempted: persistenceResult !== 'skipped', persistenceResult,
+      canonicalApplyAttempted: canonicalAttempted,
+      canonicalApplyResult: canonicalAttempted ? 'failed' : 'skipped',
+      usageAttempted: false, usageResult: 'skipped',
+      usageForwardWriteResult: 'not_attempted', usageVerificationResult: 'not_attempted',
+      usageRollbackAttempted: false, usageRollbackResult: 'not_required',
+      actualUsageBefore: request.usageCountBefore, actualUsageAfter: request.usageCountBefore,
+      actualUsageDelta: 0, rollbackAttempted: false, rollbackResult: 'not_required',
+    };
+  }
+
+  function usageFailureReceipt(request: SummaryV3CommitRequest): SummaryV3CommitReceipt {
+    return {
+      kind: 'failed', reason: 'usage_accounting_failed', operationId: request.operationId, requestId: request.requestId,
+      canonicalAccepted: false, intendedCandidateHash: request.candidateHash,
+      committedSummaryHash: request.candidateHash, committedContentLocale: request.requestedLocale,
+      candidateMatched: true, persistenceAttempted: true, persistenceResult: 'passed',
+      canonicalApplyAttempted: true, canonicalApplyResult: 'passed',
+      usageAttempted: true, usageResult: 'failed', actualUsageBefore: 6, actualUsageAfter: 6,
+      usageForwardWriteResult: 'failed', usageVerificationResult: 'failed',
+      usageRollbackAttempted: false, usageRollbackResult: 'not_required',
+      actualUsageDelta: 0, rollbackAttempted: true, rollbackResult: 'succeeded',
+    };
+  }
+
+  it('73b. canonicalAccepted names the final receipt outcome, not the earlier canonical-write stage', () => {
+    const request = {
+      operationId: 'receipt-semantics', requestId: 'receipt-semantics',
+      previousCvHash: 'before', candidateHash: 'candidate', requestedLocale: 'en',
+      usageCountBefore: 5, previousCv: cv(), nextCv: cv(),
+    } as SummaryV3CommitRequest;
+    const committed = committedReceipt(request);
+    const failedAfterCanonicalApply = usageFailureReceipt(request);
+
+    expect(committed).toMatchObject({ kind: 'committed', canonicalAccepted: true, canonicalApplyResult: 'passed' });
+    expect(failedAfterCanonicalApply).toMatchObject({
+      kind: 'failed', canonicalAccepted: false, canonicalApplyResult: 'passed', rollbackResult: 'succeeded',
+    });
+  });
+
+  async function harness(options: { mutateLive?: (value: CVData) => void; persist?: boolean; active?: string } = {}) {
     const captured = snapshot(); const response = await accepted(captured.manifest);
     let live = cv(); options.mutateLive?.(live); let usage = 4; const writes: CVData[] = []; const events: string[] = [];
     const result = applySummaryV3GenerateTransaction(captured, response, {
       getLiveState: () => ({ cv: live, requestedLocale: 'en', uiLocale: 'en', storedContentLocale: 'en',
         exactVisibleSummary: live.summary, referenceDateIso: '2026-08-28', jobContextHash: 'context-m4' }),
       getActiveOperationId: () => options.active ?? 'm4-operation',
-      writeCv: (next) => { live = next; writes.push(next); events.push('write'); },
-      projectPreviewSummary: (next) => options.previewMutation ? `${next.summary} mutated` : next.summary,
-      persistCv: () => { events.push('persist'); return options.persist ?? true; },
-      incrementUsage: () => { events.push('usage'); usage += 1; },
+      commitCandidate: (request) => {
+        events.push('persist');
+        if (options.persist === false) return failedReceipt(request, 'persistence_failed', 'failed');
+        live = request.nextCv; writes.push(request.nextCv); events.push('write');
+        usage += 1; events.push('usage');
+        return committedReceipt(request);
+      },
     });
     return { captured, response, result, live, usage, writes, events };
   }
@@ -718,15 +789,40 @@ describe('M4 transactional apply, preview, rollback, and usage', () => {
     expect(actualPreviewModel.summary).toBe(run.response.candidate.text);
   });
 
-  it('76b. preview semantic mutation blocks readiness, rolls back, and increments usage zero', async () => {
-    const run = await harness({ previewMutation: true });
-    expect(run.result).toEqual({ kind: 'handled_failure', typedReason: 'visible_readback_failed' });
-    expect(hashSummaryV3Value(run.live)).toBe(hashSummaryV3Value(cv()));
-    expect(run.usage).toBe(4);
+  it('76b. f566 legacy split tail reproduces the AAB 554 false failure at display projection readback', async () => {
+    const before = cv(); const response = await accepted(); let live = before; const events: string[] = [];
+    const acceptedCandidate = `${response.candidate.text} I strengthen operational efficiency.`;
+    const legacySplitTail = () => {
+      live = { ...before, summary: acceptedCandidate, summaryOrigin: 'ai_generated',
+        summaryGeneratedLocale: 'en', summaryGenerationContextKey: 'context-m4' }; events.push('write');
+      expect(live.summary).toBe(acceptedCandidate);
+      const migrated = normalizeLegacyCvRuntime(live, 'en');
+      const quality = applyCvContentQuality(migrated, 'en', {
+        gender: migrated.personal.gender, summaryOrigin: migrated.summaryOrigin,
+      }).cv;
+      const projectedSummary = omitInvalidLocalizedFieldsForPreview(quality, 'en').summary;
+      expect(projectedSummary).not.toBe(acceptedCandidate);
+      if (projectedSummary !== acceptedCandidate) {
+        live = before; events.push('rollback');
+        return { kind: 'handled_failure' as const, typedReason: 'visible_readback_failed' as const };
+      }
+      return { kind: 'handled_success' as const };
+    };
+    expect(legacySplitTail()).toEqual({ kind: 'handled_failure', typedReason: 'visible_readback_failed' });
+    expect(events).toEqual(['write', 'rollback']);
+    expect(hashSummaryV3Value(live)).toBe(hashSummaryV3Value(before));
+  });
+
+  it('76c. accepted canonical M4 commit does not fail because a lossy display projection differs', async () => {
+    const run = await harness();
+    expect(run.result).toEqual({ kind: 'handled_success' });
+    expect(run.live.summary).toBe(run.response.candidate.text);
+    expect(run.events).toEqual(['persist', 'write', 'usage']);
+    expect(run.usage).toBe(5);
   });
 
   it('77. persistence occurs before the only usage increment and success increments exactly once', async () => {
-    const run = await harness(); expect(run.events.slice(-2)).toEqual(['persist', 'usage']); expect(run.usage).toBe(5);
+    const run = await harness(); expect(run.events).toEqual(['persist', 'write', 'usage']); expect(run.usage).toBe(5);
   });
 
   it.each([
@@ -751,38 +847,36 @@ describe('M4 transactional apply, preview, rollback, and usage', () => {
     const result = applySummaryV3GenerateTransaction(captured, response, {
       getLiveState: () => ({ cv: live, requestedLocale: 'en', uiLocale: 'en', storedContentLocale: 'en', exactVisibleSummary: '',
         referenceDateIso: '2026-08-28', jobContextHash: 'context-m4' }), getActiveOperationId: () => 'm4-operation',
-      writeCv: (next) => { live = next; }, projectPreviewSummary: (next) => next.summary,
-      persistCv: () => true, incrementUsage: () => { usage += 1; },
+      commitCandidate: (request) => { live = request.nextCv; usage += 1; return committedReceipt(request); },
     });
     expect(result.kind).toBe('handled_success'); expect(usage).toBe(1);
   });
 
   it('86. adapter handled failure never invokes apply, persistence, usage, or V2 recovery', async () => {
-    const captured = snapshot(); const writeCv = vi.fn(); const persistCv = vi.fn(); const incrementUsage = vi.fn();
+    const captured = snapshot(); const commitCandidate = vi.fn();
     const result = await runSummaryV3GenerateAdapter(input(), {
       request: vi.fn(async () => ({ ok: false, action: SUMMARY_V3_GENERATE_ACTION, typedReason: 'validation_rejected' })),
       getLiveState: () => ({ cv: cv(), requestedLocale: 'en', uiLocale: 'en', storedContentLocale: 'en', exactVisibleSummary: '',
         referenceDateIso: captured.referenceDateIso, jobContextHash: 'context-m4' }), getActiveOperationId: () => 'm4-operation',
-      writeCv, projectPreviewSummary: (next) => next.summary, persistCv, incrementUsage,
+      commitCandidate,
     });
     expect(result).toEqual({ kind: 'handled_failure', typedReason: 'validation_rejected' });
-    expect(writeCv).not.toHaveBeenCalled(); expect(persistCv).not.toHaveBeenCalled(); expect(incrementUsage).not.toHaveBeenCalled();
+    expect(commitCandidate).not.toHaveBeenCalled();
   });
 
   it('86b. initial malformed writer fails closed before evaluator, repair, apply, persistence, usage, or fallthrough', async () => {
     const captured = snapshot(); const write = vi.fn(async () => ({ stopReason: 'tool_use', content: [] }));
-    const evaluate = vi.fn(); const writeCv = vi.fn(); const persistCv = vi.fn(); const incrementUsage = vi.fn();
+    const evaluate = vi.fn(); const commitCandidate = vi.fn();
     const events: unknown[] = [];
     const result = await runSummaryV3GenerateAdapter(input(), {
       request: vi.fn(async () => executeSummaryV3GenerateServer({ manifest: captured.manifest }, { write, evaluate })),
       getLiveState: () => ({ cv: cv(), requestedLocale: 'en', uiLocale: 'en', storedContentLocale: 'en', exactVisibleSummary: '',
         referenceDateIso: captured.referenceDateIso, jobContextHash: 'context-m4' }),
-      getActiveOperationId: () => 'm4-operation', writeCv, projectPreviewSummary: (next) => next.summary,
-      persistCv, incrementUsage, onTerminal: (event) => events.push(event),
+      getActiveOperationId: () => 'm4-operation', commitCandidate, onTerminal: (event) => events.push(event),
     });
     expect(result).toEqual({ kind: 'handled_failure', typedReason: 'writer_tool_missing' });
     expect(write).toHaveBeenCalledTimes(1); expect(evaluate).not.toHaveBeenCalled();
-    expect(writeCv).not.toHaveBeenCalled(); expect(persistCv).not.toHaveBeenCalled(); expect(incrementUsage).not.toHaveBeenCalled();
+    expect(commitCandidate).not.toHaveBeenCalled();
     expect(events).toHaveLength(1);
     const event = events[0] as import('../summary-generate').SummaryV3GenerateTerminalEvent;
     expect(event.evidence.candidatePresent).toBe(false);
@@ -797,8 +891,8 @@ describe('M4 transactional apply, preview, rollback, and usage', () => {
       request: vi.fn(async () => accepted(captured.manifest)),
       getLiveState: () => ({ cv: live, requestedLocale: 'en', uiLocale: 'en', storedContentLocale: 'en', exactVisibleSummary: live.summary,
         referenceDateIso: captured.referenceDateIso, jobContextHash: 'context-m4' }),
-      getActiveOperationId: () => 'm4-operation', writeCv: (next) => { live = next; }, projectPreviewSummary: (next) => next.summary,
-      persistCv: vi.fn(() => true), incrementUsage: vi.fn(), getUsageCount: () => 5,
+      getActiveOperationId: () => 'm4-operation',
+      commitCandidate: (request) => { live = request.nextCv; return committedReceipt(request); },
       getRouteHttpStatus: () => 200, onTerminal: (event) => events.push(event),
     });
     expect(result).toEqual({ kind: 'handled_success' });
@@ -822,8 +916,7 @@ describe('M4 transactional apply, preview, rollback, and usage', () => {
       })),
       getLiveState: () => ({ cv: cv(), requestedLocale: 'en', uiLocale: 'en', storedContentLocale: 'en', exactVisibleSummary: '',
         referenceDateIso: captured.referenceDateIso, jobContextHash: 'context-m4' }),
-      getActiveOperationId: () => 'm4-operation', writeCv: vi.fn(), projectPreviewSummary: (next) => next.summary,
-      persistCv: vi.fn(() => true), incrementUsage: vi.fn(), onTerminal: (event) => events.push(event),
+      getActiveOperationId: () => 'm4-operation', commitCandidate: vi.fn(), onTerminal: (event) => events.push(event),
     });
     expect(result).toEqual({ kind: 'handled_failure', typedReason: 'repair_validation_rejected' });
     expect(events).toHaveLength(1);
@@ -838,6 +931,17 @@ describe('M4 transactional apply, preview, rollback, and usage', () => {
     } else {
       expect(event.evidence.candidatePresent).toBe(false);
     }
+    const session = new SummaryAiDiagnosticSession({ uiLocale: 'en', requestedLocale: 'en', templateId: 'test',
+      requestId: 'safe-request', usageCountBefore: 4 });
+    session.recordCvSnapshot(cv(), '');
+    session.recordM4Terminal(event);
+    const trace = session.commit();
+    expect({ missing: trace.missingRequiredDiagnosticFields, nullable: trace.nullRequiredDiagnosticFields })
+      .toEqual({ missing: [], nullable: [] });
+    expect(trace).toMatchObject({ diagnosticCompletenessPassed: true, privacyCheckPassed: true,
+      finalCandidateSource: 'none', providerCandidatePresent: false, m4ApplyAuthorized: false,
+      m4ApplyAttempted: false, m4ApplyCommitted: false, m4PersistenceResult: 'skipped',
+      meaningfulChangeDetected: false, noOpDetected: false, serverFallbackUsed: false, clientFallbackUsed: false });
   });
 
   it('89. device observation fixture is non-PII and captures the pre-fix false-green', () => {
@@ -884,6 +988,303 @@ describe('M4 transactional apply, preview, rollback, and usage', () => {
     });
     expect(Object.isFrozen(M4_SUMMARY_GENERATE_AAB548_WRITER_SCHEMA_OBSERVATION)).toBe(true);
     expect(JSON.stringify(M4_SUMMARY_GENERATE_AAB548_WRITER_SCHEMA_OBSERVATION)).not.toMatch(/@|fullName|email|phone|address|employer|role|prompt|token|credential|raw/u);
+  });
+
+  it('93. AAB 554 fixture preserves the exact non-PII atomic-apply observation and is deeply immutable', () => {
+    expect(M4_SUMMARY_GENERATE_AAB554_VISIBLE_READBACK_OBSERVATION).toMatchObject({
+      applicationId: 'com.cvproai.app', versionCode: 554, versionName: '1.0.554', sourceMarker: 'f566a9c',
+      capturedAt: '2026-09-02T16:40:09.732Z', requestedLocale: 'de', uiLocale: 'de', storedContentLocale: 'de',
+      operation: 'summary_v3_generate', sourceSummaryState: 'empty', selectedExperienceCount: 1,
+      currentRoleCount: 1, availableFactCount: 3, requiredFactCount: 3,
+      observedElapsed: { estimateSeconds: 20, manuallyEstimated: true, exactProviderPhaseTimingAvailable: false },
+      routeHttpStatus: 200, writer: { attempted: true, result: 'succeeded', stopReason: 'tool_use' },
+      evaluator: { attempted: true, result: 'succeeded' },
+      phases: { structural: 'passed', semantic: 'passed', language_quality: 'passed' },
+      candidate: { present: true, length: 347, unitCount: 2, hash: 'v3s-3e088daf', proseRetained: false },
+      apply: { authorized: true, attempted: true, committed: false }, persistence: 'unknown',
+      v2FallthroughCount: 0, usageBefore: 0, usageAfter: 0, usageDelta: 0,
+      terminalTypedFailure: 'visible_readback_failed', rejectionStage: 'visible_readback_failed',
+      visibleApplySucceeded: false, diagnosticCompletenessPassed: false,
+      missingRequiredDiagnosticFields: ['meaningfulChangeDetected', 'noOpDetected', 'apiResponseKind', 'serverFallbackUsed', 'clientFallbackUsed'],
+    });
+    const everyObjectFrozen = (value: unknown): boolean => {
+      if (value === null || typeof value !== 'object') return true;
+      return Object.isFrozen(value) && Object.values(value).every(everyObjectFrozen);
+    };
+    expect(everyObjectFrozen(M4_SUMMARY_GENERATE_AAB554_VISIBLE_READBACK_OBSERVATION)).toBe(true);
+    expect(JSON.stringify(M4_SUMMARY_GENERATE_AAB554_VISIBLE_READBACK_OBSERVATION))
+      .not.toMatch(/fullName|email|phone|address|employer|roleTitle|candidateText|cvText|prompt|payload|token|cookie|authorization|rawRequest|rawResponse/iu);
+  });
+
+  it('94. successful receipt owns one persistence, canonical write, usage increment, and terminal event', async () => {
+    const captured = snapshot(); let live = cv(); const events: import('../summary-generate').SummaryV3GenerateTerminalEvent[] = [];
+    const commitCandidate = vi.fn((request: SummaryV3CommitRequest) => { live = request.nextCv; return committedReceipt(request); });
+    const result = await runSummaryV3GenerateAdapter(input(), {
+      request: vi.fn(async () => accepted(captured.manifest)),
+      getLiveState: () => ({ cv: live, requestedLocale: 'en', uiLocale: 'en', storedContentLocale: 'en', exactVisibleSummary: live.summary,
+        referenceDateIso: captured.referenceDateIso, jobContextHash: 'context-m4' }),
+      getActiveOperationId: () => 'm4-operation', commitCandidate, onTerminal: (event) => events.push(event),
+    });
+    expect(result).toEqual({ kind: 'handled_success' });
+    expect(commitCandidate).toHaveBeenCalledTimes(1); expect(events).toHaveLength(1);
+    expect(events[0].commitReceipt).toMatchObject({ kind: 'committed', persistenceResult: 'passed',
+      candidateMatched: true, usageResult: 'passed', actualUsageBefore: 4, actualUsageAfter: 5,
+      actualUsageDelta: 1 });
+    expect(events[0].applyCommitted).toBe(true);
+  });
+
+  it('94b. a final committed receipt cannot be reclassified by the adapter after its side effects', async () => {
+    const captured = snapshot(); let live = cv();
+    const result = await runSummaryV3GenerateAdapter(input(), {
+      request: vi.fn(async () => accepted(captured.manifest)),
+      getLiveState: () => ({ cv: live, requestedLocale: 'en', uiLocale: 'en', storedContentLocale: 'en', exactVisibleSummary: live.summary,
+        referenceDateIso: captured.referenceDateIso, jobContextHash: 'context-m4' }),
+      getActiveOperationId: () => 'm4-operation',
+      commitCandidate: (request) => {
+        live = request.nextCv;
+        return { ...committedReceipt(request), actualUsageBefore: 6, actualUsageAfter: 7 };
+      },
+    });
+    expect(result).toEqual({ kind: 'handled_success' });
+    expect(live.summary).toBeTruthy();
+  });
+
+  it('95. persistence failure produces no split state, usage, success terminal, fallback, or fallthrough', async () => {
+    const captured = snapshot(); const before = cv(); const live = before;
+    const events: import('../summary-generate').SummaryV3GenerateTerminalEvent[] = [];
+    const result = await runSummaryV3GenerateAdapter(input(), {
+      request: vi.fn(async () => accepted(captured.manifest)),
+      getLiveState: () => ({ cv: live, requestedLocale: 'en', uiLocale: 'en', storedContentLocale: 'en', exactVisibleSummary: live.summary,
+        referenceDateIso: captured.referenceDateIso, jobContextHash: 'context-m4' }),
+      getActiveOperationId: () => 'm4-operation',
+      commitCandidate: (request) => failedReceipt(request, 'persistence_failed', 'failed'),
+      onTerminal: (event) => events.push(event),
+    });
+    expect(result).toEqual({ kind: 'handled_failure', typedReason: 'persistence_failed' });
+    expect(hashSummaryV3Value(live)).toBe(hashSummaryV3Value(before));
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ applyCommitted: false, usageAfter: 4,
+      commitReceipt: { persistenceAttempted: true, persistenceResult: 'failed', usageResult: 'skipped', actualUsageDelta: 0 } });
+  });
+
+  it.each([
+    ['success', null],
+    ['persistence failure', 'persistence_failed'],
+  ])('96-97. diagnostic terminal truth is complete for M4 %s', async (_name, failure) => {
+    const captured = snapshot(); let live = cv(); const events: import('../summary-generate').SummaryV3GenerateTerminalEvent[] = [];
+    await runSummaryV3GenerateAdapter(input(), {
+      request: vi.fn(async () => accepted(captured.manifest)),
+      getLiveState: () => ({ cv: live, requestedLocale: 'en', uiLocale: 'en', storedContentLocale: 'en', exactVisibleSummary: live.summary,
+        referenceDateIso: captured.referenceDateIso, jobContextHash: 'context-m4' }),
+      getActiveOperationId: () => 'm4-operation',
+      commitCandidate: (request) => {
+        if (failure) return failedReceipt(request, failure as Extract<SummaryV3CommitReceipt, { kind: 'failed' }>['reason'], 'failed');
+        live = request.nextCv; return committedReceipt(request);
+      },
+      onTerminal: (event) => events.push(event),
+    });
+    const session = new SummaryAiDiagnosticSession({ uiLocale: 'en', requestedLocale: 'en', contentLocale: 'en',
+      templateId: 'test', requestId: 'safe-request', usageCountBefore: 4, operationMode: 'generate_from_context' });
+    session.recordCvSnapshot(cv(), '');
+    session.recordM4Terminal(events[0]);
+    const trace = session.commit();
+    expect(trace).toMatchObject({ meaningfulChangeDetected: true, noOpDetected: false,
+      apiResponseKind: 'provider', serverFallbackUsed: false, clientFallbackUsed: false,
+      m4LegacyV2DiagnosticFieldsApplicable: false,
+      finalCandidateSource: 'v3_writer_evaluator', m4ApplyAttempted: failure ? false : true,
+      m4ApplyCommitted: failure ? false : true, m4PersistenceResult: failure ? 'failed' : 'passed',
+      diagnosticCompletenessPassed: true, privacyCheckPassed: true });
+    const visible = trace.stages.find((stage) => stage.name === 'visible_apply');
+    expect(visible?.status).toBe(failure ? 'skipped' : 'ok');
+    expect(trace.missingRequiredDiagnosticFields).not.toEqual(expect.arrayContaining([
+      'meaningfulChangeDetected', 'noOpDetected', 'apiResponseKind', 'serverFallbackUsed', 'clientFallbackUsed',
+    ]));
+  });
+
+  it('98. a real source race has complete skipped-apply diagnostics and zero commit authority', async () => {
+    const captured = snapshot(); const commitCandidate = vi.fn();
+    const events: import('../summary-generate').SummaryV3GenerateTerminalEvent[] = [];
+    const result = await runSummaryV3GenerateAdapter(input(), {
+      request: vi.fn(async () => accepted(captured.manifest)),
+      getLiveState: () => ({ cv: { ...cv(), summary: 'A concurrent user edit.' }, requestedLocale: 'en', uiLocale: 'en',
+        storedContentLocale: 'en', exactVisibleSummary: 'A concurrent user edit.', referenceDateIso: captured.referenceDateIso,
+        jobContextHash: 'context-m4' }),
+      getActiveOperationId: () => 'm4-operation', commitCandidate, onTerminal: (event) => events.push(event),
+    });
+    expect(result).toEqual({ kind: 'handled_failure', typedReason: 'stale_snapshot' });
+    expect(commitCandidate).not.toHaveBeenCalled();
+    const session = new SummaryAiDiagnosticSession({ uiLocale: 'en', requestedLocale: 'en', templateId: 'test',
+      requestId: 'safe-request', usageCountBefore: 4 });
+    session.recordCvSnapshot(cv(), ''); session.recordM4Terminal(events[0]);
+    const trace = session.commit();
+    expect(trace).toMatchObject({ diagnosticCompletenessPassed: true, privacyCheckPassed: true,
+      finalCandidateSource: 'v3_writer_evaluator', m4ApplyAuthorized: true, m4ApplyAttempted: false,
+      m4ApplyCommitted: false, m4PersistenceResult: 'skipped', raceGuardResult: 'fail',
+      rejectionStage: 'race_guard', meaningfulChangeDetected: true, noOpDetected: false,
+      serverFallbackUsed: false, clientFallbackUsed: false });
+    expect(trace.stages.find((stage) => stage.name === 'visible_apply')?.status).toBe('skipped');
+  });
+
+  it('99. a canonical commit failure has complete attempted-failure diagnostics and no success accounting', async () => {
+    const captured = snapshot(); const events: import('../summary-generate').SummaryV3GenerateTerminalEvent[] = [];
+    await runSummaryV3GenerateAdapter(input(), {
+      request: vi.fn(async () => accepted(captured.manifest)),
+      getLiveState: () => ({ cv: cv(), requestedLocale: 'en', uiLocale: 'en', storedContentLocale: 'en', exactVisibleSummary: '',
+        referenceDateIso: captured.referenceDateIso, jobContextHash: 'context-m4' }),
+      getActiveOperationId: () => 'm4-operation',
+      commitCandidate: (request) => failedReceipt(request, 'canonical_commit_failed', 'passed'),
+      onTerminal: (event) => events.push(event),
+    });
+    const session = new SummaryAiDiagnosticSession({ uiLocale: 'en', requestedLocale: 'en', templateId: 'test',
+      requestId: 'safe-request', usageCountBefore: 4 });
+    session.recordCvSnapshot(cv(), ''); session.recordM4Terminal(events[0]);
+    const trace = session.commit();
+    expect(trace).toMatchObject({ diagnosticCompletenessPassed: true, privacyCheckPassed: true,
+      finalCandidateSource: 'v3_writer_evaluator', m4ApplyAuthorized: true, m4ApplyAttempted: true,
+      m4ApplyCommitted: false, m4PersistenceResult: 'passed', countedAsSuccess: false,
+      usageCountAfter: 4, m4UsageDelta: 0, meaningfulChangeDetected: true, noOpDetected: false });
+    expect(trace.stages.find((stage) => stage.name === 'visible_apply')?.status).toBe('fail');
+  });
+
+  it('99b. usage accounting failure records the attempted failed stage and a completed CV rollback', async () => {
+    const captured = snapshot(); const before = cv(); let live = before;
+    const events: import('../summary-generate').SummaryV3GenerateTerminalEvent[] = [];
+    const result = await runSummaryV3GenerateAdapter(input(), {
+      request: vi.fn(async () => accepted(captured.manifest)),
+      getLiveState: () => ({ cv: live, requestedLocale: 'en', uiLocale: 'en', storedContentLocale: 'en', exactVisibleSummary: live.summary,
+        referenceDateIso: captured.referenceDateIso, jobContextHash: 'context-m4' }),
+      getActiveOperationId: () => 'm4-operation',
+      commitCandidate: (request) => { live = request.nextCv; live = before; return usageFailureReceipt(request); },
+      onTerminal: (event) => events.push(event),
+    });
+    expect(result).toEqual({ kind: 'handled_failure', typedReason: 'usage_accounting_failed' });
+    expect(hashSummaryV3Value(live)).toBe(hashSummaryV3Value(before));
+    const session = new SummaryAiDiagnosticSession({ uiLocale: 'en', requestedLocale: 'en', templateId: 'test',
+      requestId: 'safe-request', usageCountBefore: 4 });
+    session.recordCvSnapshot(before, ''); session.recordM4Terminal(events[0]);
+    const trace = session.commit();
+    expect(trace).toMatchObject({ m4PersistenceResult: 'passed', m4CanonicalApplyResult: 'passed',
+      m4UsageAttempted: true, m4UsageResult: 'failed', m4ActualUsageBefore: 6, m4ActualUsageAfter: 6,
+      m4ActualUsageDelta: 0, m4RollbackAttempted: true, m4RollbackResult: 'succeeded',
+      rejectionStage: 'usage_accounting', countedAsSuccess: false, m4V2FallthroughCount: 0 });
+    expect(trace.stages.find((stage) => stage.name === 'usage_accounting')?.status).toBe('fail');
+    expect(trace.stages.find((stage) => stage.name === 'rollback')?.status).toBe('ok');
+  });
+
+  it('99c. a failed usage rollback preserves the non-zero final delta instead of fabricating zero', async () => {
+    const captured = snapshot(); const before = cv(); let live = before;
+    const events: import('../summary-generate').SummaryV3GenerateTerminalEvent[] = [];
+    const result = await runSummaryV3GenerateAdapter(input(), {
+      request: vi.fn(async () => accepted(captured.manifest)),
+      getLiveState: () => ({ cv: live, requestedLocale: 'en', uiLocale: 'en', storedContentLocale: 'en', exactVisibleSummary: live.summary,
+        referenceDateIso: captured.referenceDateIso, jobContextHash: 'context-m4' }),
+      getActiveOperationId: () => 'm4-operation',
+      commitCandidate: (request) => {
+        live = request.nextCv; live = before;
+        return {
+          ...usageFailureReceipt(request), reason: 'usage_rollback_failed' as const,
+          usageForwardWriteResult: 'succeeded' as const, usageVerificationResult: 'unknown' as const,
+          usageRollbackAttempted: true as const, usageRollbackResult: 'failed' as const,
+          actualUsageAfter: 7, actualUsageDelta: 1,
+        } as Extract<SummaryV3CommitReceipt, { kind: 'failed' }>;
+      },
+      onTerminal: (event) => events.push(event),
+    });
+    expect(result).toEqual({ kind: 'handled_failure', typedReason: 'usage_rollback_failed' });
+    expect(hashSummaryV3Value(live)).toBe(hashSummaryV3Value(before));
+    const session = new SummaryAiDiagnosticSession({ uiLocale: 'en', requestedLocale: 'en', templateId: 'test',
+      requestId: 'safe-request', usageCountBefore: 4 });
+    session.recordCvSnapshot(before, ''); session.recordM4Terminal(events[0]);
+    const trace = session.commit();
+    expect(trace).toMatchObject({
+      m4UsageAttempted: true, m4UsageResult: 'failed', m4UsageForwardWriteResult: 'succeeded',
+      m4UsageVerificationResult: 'unknown', m4UsageRollbackAttempted: true, m4UsageRollbackResult: 'failed',
+      m4ActualUsageBefore: 6, m4ActualUsageAfter: 7, m4ActualUsageDelta: 1,
+      m4UsageDelta: 1, rejectionStage: 'usage_rollback', countedAsSuccess: false,
+    });
+    expect(trace.stages.find((stage) => stage.name === 'usage_rollback')?.status).toBe('fail');
+  });
+
+  it('99d. an unreadable post-rollback ledger remains explicitly unknown and still terminally complete', async () => {
+    const captured = snapshot(); const before = cv(); let live = before;
+    const events: import('../summary-generate').SummaryV3GenerateTerminalEvent[] = [];
+    const result = await runSummaryV3GenerateAdapter(input(), {
+      request: vi.fn(async () => accepted(captured.manifest)),
+      getLiveState: () => ({ cv: live, requestedLocale: 'en', uiLocale: 'en', storedContentLocale: 'en', exactVisibleSummary: live.summary,
+        referenceDateIso: captured.referenceDateIso, jobContextHash: 'context-m4' }),
+      getActiveOperationId: () => 'm4-operation',
+      commitCandidate: (request) => {
+        live = request.nextCv; live = before;
+        return {
+          ...usageFailureReceipt(request), reason: 'usage_final_state_unknown' as const,
+          usageForwardWriteResult: 'succeeded' as const, usageVerificationResult: 'unknown' as const,
+          usageRollbackAttempted: true as const, usageRollbackResult: 'unknown' as const,
+          actualUsageAfter: null, actualUsageDelta: null,
+        } as Extract<SummaryV3CommitReceipt, { kind: 'failed' }>;
+      },
+      onTerminal: (event) => events.push(event),
+    });
+    expect(result).toEqual({ kind: 'handled_failure', typedReason: 'usage_final_state_unknown' });
+    const session = new SummaryAiDiagnosticSession({ uiLocale: 'en', requestedLocale: 'en', templateId: 'test',
+      requestId: 'safe-request', usageCountBefore: 4 });
+    session.recordCvSnapshot(before, ''); session.recordM4Terminal(events[0]);
+    const trace = session.commit();
+    expect(trace).toMatchObject({
+      m4ActualUsageBefore: 6, m4ActualUsageAfter: null, m4ActualUsageDelta: null, m4UsageDelta: null,
+      m4UsageRollbackAttempted: true, m4UsageRollbackResult: 'unknown',
+      rejectionStage: 'usage_accounting', finalTypedFailureReason: 'usage_final_state_unknown',
+    });
+    expect(trace.nullRequiredDiagnosticFields).not.toContain('m4ActualUsageDelta');
+    expect(trace.stages.find((stage) => stage.name === 'usage_rollback')?.status).toBe('fail');
+  });
+
+  it('100. empty German Summary commits one eligible current-role candidate exactly once end to end', async () => {
+    const germanCv = cv();
+    germanCv.contentLocale = 'de';
+    germanCv.experience = [{ ...germanCv.experience[1],
+      description: 'Pflegt Systeme.\nPrüft Änderungen.\nDokumentiert Ergebnisse.' }];
+    const germanInput = input({ cv: germanCv, requestedLocale: 'de', uiLocale: 'de', storedContentLocale: 'de',
+      usageCountBefore: 0 });
+    const captured = captureSummaryV3GenerateOperationSnapshot(germanInput);
+    const writerOutput: SummaryV3WriterOutput = {
+      operationId: captured.manifest.operationId,
+      snapshotHash: captured.manifest.sourceSnapshotHash,
+      locale: 'de',
+      units: [
+        { slot: 'duration', entryId: null, factIds: [], text: 'Ich verfüge über mehrere Jahre Berufserfahrung.' },
+        ...captured.manifest.selectedEntries.map((entry) => ({
+          slot: 'experience' as const,
+          entryId: entry.entryId,
+          factIds: entry.facts.map((fact) => fact.factId),
+          text: 'Ich pflege Systeme, prüfe Änderungen und dokumentiere Ergebnisse.',
+        })),
+      ],
+    };
+    const server = await executeSummaryV3GenerateServer({ manifest: captured.manifest }, {
+      write: vi.fn(async () => ({ stopReason: 'tool_use', content: [{ type: 'tool_use' as const,
+        name: SUMMARY_V3_WRITER_TOOL_NAME, input: writerOutput }] })),
+      evaluate: vi.fn(async () => evaluatorResponse(captured.manifest)),
+    });
+    if (!server.ok) throw new Error(server.typedReason);
+    let live = germanCv; let persistenceCount = 0; let canonicalWriteCount = 0; let usage = 0;
+    const terminal: import('../summary-generate').SummaryV3GenerateTerminalEvent[] = [];
+    const result = await runSummaryV3GenerateAdapter(germanInput, {
+      request: vi.fn(async () => server),
+      getLiveState: () => ({ cv: live, requestedLocale: 'de', uiLocale: 'de', storedContentLocale: 'de',
+        exactVisibleSummary: live.summary, referenceDateIso: captured.referenceDateIso, jobContextHash: 'context-m4' }),
+      getActiveOperationId: () => 'm4-operation',
+      commitCandidate: (request) => {
+        persistenceCount += 1; live = request.nextCv; canonicalWriteCount += 1; usage += 1;
+        return committedReceipt(request);
+      },
+      onTerminal: (event) => terminal.push(event),
+    });
+    expect(result).toEqual({ kind: 'handled_success' });
+    expect(live.summary).toBe(server.candidate.text); expect(live.contentLocale).toBe('de');
+    expect({ persistenceCount, canonicalWriteCount, usage, terminalCount: terminal.length })
+      .toEqual({ persistenceCount: 1, canonicalWriteCount: 1, usage: 1, terminalCount: 1 });
+    expect(terminal[0]).toMatchObject({ kind: 'handled_success', applyCommitted: true,
+      usageAfter: 1, commitReceipt: { candidateMatched: true, persistenceResult: 'passed' } });
   });
 });
 
@@ -1172,8 +1573,7 @@ describe('M4 provider-failure observability envelope', () => {
       request: vi.fn(async () => ({ ok: false, action: SUMMARY_V3_GENERATE_ACTION, typedReason: 'provider_request_failed', m4ProviderFailure: envelope })),
       getLiveState: () => ({ cv: cv(), requestedLocale: 'en', uiLocale: 'en', storedContentLocale: 'en', exactVisibleSummary: '',
         referenceDateIso: captured.referenceDateIso, jobContextHash: 'context-m4' }),
-      getActiveOperationId: () => 'm4-operation', writeCv: vi.fn(), projectPreviewSummary: (next) => next.summary,
-      persistCv: vi.fn(), incrementUsage: vi.fn(), getRouteHttpStatus: () => 502,
+      getActiveOperationId: () => 'm4-operation', commitCandidate: vi.fn(), getRouteHttpStatus: () => 502,
       onTerminal: (event) => events.push(event),
     });
     const session = new SummaryAiDiagnosticSession({ uiLocale: 'en', requestedLocale: 'en', templateId: 'test', requestId: 'safe-request', usageCountBefore: 4 });
@@ -1182,6 +1582,12 @@ describe('M4 provider-failure observability envelope', () => {
     expect(trace.m4RouteHttpStatus).toBe(502);
     expect(trace.providerHttpStatus).toBe(400);
     expect(trace.m4ProviderFailure).toMatchObject({ phase: 'initial_writer', providerHttpStatus: 400 });
+    expect({ missing: trace.missingRequiredDiagnosticFields, nullable: trace.nullRequiredDiagnosticFields })
+      .toEqual({ missing: [], nullable: [] });
+    expect(trace).toMatchObject({ diagnosticCompletenessPassed: true, privacyCheckPassed: true,
+      finalCandidateSource: 'none', m4ApplyAuthorized: false, m4ApplyAttempted: false,
+      m4ApplyCommitted: false, m4PersistenceResult: 'skipped', meaningfulChangeDetected: false,
+      noOpDetected: false, apiResponseKind: 'error', serverFallbackUsed: false, clientFallbackUsed: false });
     const copy = formatSummaryAiDiagnosticForCopy(trace);
     expect(copy).toContain('m4ProviderFailure');
     expect(copy).not.toContain('raw provider message');
@@ -1203,8 +1609,7 @@ describe('M4 provider-failure observability envelope', () => {
         typedReason: 'writer_tool_input_malformed', m4ProviderFailure: envelope })),
       getLiveState: () => ({ cv: cv(), requestedLocale: 'en', uiLocale: 'en', storedContentLocale: 'en', exactVisibleSummary: '',
         referenceDateIso: captured.referenceDateIso, jobContextHash: 'context-m4' }),
-      getActiveOperationId: () => 'm4-operation', writeCv: vi.fn(), projectPreviewSummary: (next) => next.summary,
-      persistCv: vi.fn(), incrementUsage: vi.fn(), getRouteHttpStatus: () => 502,
+      getActiveOperationId: () => 'm4-operation', commitCandidate: vi.fn(), getRouteHttpStatus: () => 502,
       onTerminal: (event) => events.push(event),
     });
     const session = new SummaryAiDiagnosticSession({ uiLocale: 'en', requestedLocale: 'en', templateId: 'test', requestId: 'safe-request', usageCountBefore: 4 });
@@ -1625,7 +2030,7 @@ describe('M4 AAB 552 evaluator latency and timing-evidence closure', () => {
 
   it('projects safe timing only through Summary diagnostics and cannot authorize side effects', async () => {
     const captured = snapshot();
-    const writeCv = vi.fn(); const persistCv = vi.fn(); const incrementUsage = vi.fn();
+    const commitCandidate = vi.fn();
     const events: import('../summary-generate').SummaryV3GenerateTerminalEvent[] = [];
     const envelope = {
       phase: 'initial_evaluator' as const, failureStage: 'sdk_request' as const, errorClass: 'Error' as const,
@@ -1641,11 +2046,10 @@ describe('M4 AAB 552 evaluator latency and timing-evidence closure', () => {
         typedReason: 'validator_exception', repairAttempted: false, m4ProviderFailure: envelope })),
       getLiveState: () => ({ cv: cv(), requestedLocale: 'en', uiLocale: 'en', storedContentLocale: 'en',
         exactVisibleSummary: '', referenceDateIso: captured.referenceDateIso, jobContextHash: 'context-m4' }),
-      getActiveOperationId: () => 'm4-operation', writeCv, projectPreviewSummary: (next) => next.summary,
-      persistCv, incrementUsage, getRouteHttpStatus: () => 502, onTerminal: (event) => events.push(event),
+      getActiveOperationId: () => 'm4-operation', commitCandidate,
+      getRouteHttpStatus: () => 502, onTerminal: (event) => events.push(event),
     });
-    expect(writeCv).not.toHaveBeenCalled(); expect(persistCv).not.toHaveBeenCalled();
-    expect(incrementUsage).not.toHaveBeenCalled();
+    expect(commitCandidate).not.toHaveBeenCalled();
     expect(adapterResult).toEqual({ kind: 'handled_failure', typedReason: 'validator_exception' });
     expect(events[0]).toMatchObject({ kind: 'handled_failure', typedReason: 'validator_exception',
       applyCommitted: false, usageAfter: 4, evidence: { repairAttempted: false, m4ProviderFailure: envelope } });
@@ -1655,6 +2059,10 @@ describe('M4 AAB 552 evaluator latency and timing-evidence closure', () => {
     const trace = session.commit();
     expect(trace.m4V2FallthroughCount).toBe(0);
     expect(trace.visibleApplySucceeded).toBe(false);
+    expect(trace).toMatchObject({ diagnosticCompletenessPassed: true, privacyCheckPassed: true,
+      finalCandidateSource: 'none', m4ApplyAuthorized: false, m4ApplyAttempted: false,
+      m4ApplyCommitted: false, m4PersistenceResult: 'skipped', meaningfulChangeDetected: false,
+      noOpDetected: false, apiResponseKind: 'error', serverFallbackUsed: false, clientFallbackUsed: false });
     const copy = formatSummaryAiDiagnosticForCopy(trace);
     for (const field of ['providerDeadlineOwner', 'providerConfiguredTimeoutMs', 'providerEffectiveTimeoutMs',
       'providerElapsedMs', 'providerOuterBudgetRemainingAtStartMs']) expect(copy).toContain(`"${field}"`);

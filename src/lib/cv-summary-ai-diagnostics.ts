@@ -167,6 +167,7 @@ import {
   sanitizeCvAiDiagnosticMarkerPatch,
   SUMMARY_AI_DIAG_MARKER,
   clearCvAiDiagnosticHistory,
+  validateCvAiDiagnosticMarkerField,
   type CvAiCandidateLineageRecord,
 } from './cv-ai-diagnostics-contract';
 import { INTERNAL_AI_RESET_ENABLED } from './build-channel';
@@ -191,6 +192,173 @@ export type SummaryAiDiagStage = {
   status: 'ok' | 'fail' | 'skipped';
   reason?: string;
 };
+
+type SummaryDiagnosticCompleteness = ReturnType<typeof checkSummaryDiagnosticCompleteness>;
+
+/** Read-only M4/legacy presentation projection; never reads or infers ledger state. */
+export type SummaryUsageDiagnosticView =
+  | Readonly<{ kind: 'legacy'; before: number; after: number; delta: number }>
+  | Readonly<{ kind: 'm4_known'; requestBefore: number | null; before: number; after: number; delta: number }>
+  | Readonly<{ kind: 'm4_unknown'; requestBefore: number | null; before: number | null; after: null; delta: null; reason: string }>
+  | Readonly<{ kind: 'm4_not_attempted'; requestBefore: number | null; reason: string | null }>;
+
+type SummaryUsageDiagnosticInput = {
+  m4Operation?: 'summary_v3_generate';
+  m4UsageAttempted?: boolean;
+  m4UsageFinalStateKnown?: boolean;
+  m4UsageCountAtRequest?: number;
+  m4ActualUsageBefore?: number | null;
+  m4ActualUsageAfter?: number | null;
+  m4ActualUsageDelta?: number | null;
+  usageCountBefore?: number | null;
+  usageCountAfter?: number | null;
+  finalTypedFailureReason?: string | null;
+};
+
+export function getSummaryUsageDiagnosticView(input: SummaryUsageDiagnosticInput): SummaryUsageDiagnosticView {
+  if (input.m4Operation === 'summary_v3_generate') {
+    // Request-start count is display-only. Do not invent zero if an older or
+    // malformed trace does not contain the explicit M4 observation.
+    const requestBefore = input.m4UsageCountAtRequest ?? null;
+    if (input.m4UsageAttempted !== true) {
+      return { kind: 'm4_not_attempted', requestBefore, reason: input.finalTypedFailureReason ?? null };
+    }
+    if (
+      input.m4UsageFinalStateKnown !== true
+      || input.m4ActualUsageBefore === null
+      || input.m4ActualUsageBefore === undefined
+      || input.m4ActualUsageAfter === null
+      || input.m4ActualUsageAfter === undefined
+      || input.m4ActualUsageDelta === null
+      || input.m4ActualUsageDelta === undefined
+    ) {
+      return {
+        kind: 'm4_unknown',
+        requestBefore,
+        before: input.m4ActualUsageBefore ?? null,
+        after: null,
+        delta: null,
+        reason: input.finalTypedFailureReason || 'usage_final_state_unknown',
+      };
+    }
+    return {
+      kind: 'm4_known',
+      requestBefore,
+      before: input.m4ActualUsageBefore,
+      after: input.m4ActualUsageAfter,
+      delta: input.m4ActualUsageDelta,
+    };
+  }
+  const before = input.usageCountBefore ?? 0;
+  const after = input.usageCountAfter ?? before;
+  return { kind: 'legacy', before, after, delta: after - before };
+}
+
+export function formatSummaryUsageDiagnosticView(view: SummaryUsageDiagnosticView): string {
+  if (view.kind === 'm4_unknown') {
+    return `unknown final state (request ${view.requestBefore ?? 'unknown'}; before ${view.before ?? 'unknown'}; ${view.reason})`;
+  }
+  if (view.kind === 'm4_not_attempted') {
+    return `not attempted (request ${view.requestBefore ?? 'unknown'}${view.reason ? `; ${view.reason}` : ''})`;
+  }
+  return `${view.before} → ${view.after} (Δ ${view.delta >= 0 ? '+' : ''}${view.delta})`;
+}
+
+/** M4 has explicit shared and M4-owned requirements; V2-only fields are absent. */
+const M4_DIAGNOSTIC_APPLICABILITY = Object.freeze({
+  sharedRequired: Object.freeze([
+    'diagnosticContractRevision', 'schemaVersion', 'requestedLocale', 'finalCandidateSource',
+    'providerCandidatePresent', 'deterministicCandidatePresent', 'countedAsSuccess',
+    'visibleApplySucceeded', 'meaningfulChangeDetected',
+    'noOpDetected', 'apiResponseKind', 'serverFallbackUsed', 'clientFallbackUsed',
+    'apiBaseUrlConfigured', 'capacitorServerUrlConfigured', 'sourceCommitStatus',
+  ] as const),
+  m4Required: Object.freeze([
+    'm4Operation', 'm4LegacyV2DiagnosticFieldsApplicable', 'm4SourceWasEmpty', 'm4OwnershipResult',
+    'm4Writer', 'm4Evaluator', 'm4Phases', 'm4CandidatePresent', 'm4CandidateUnitHashes',
+    'm4CandidateUnitLengths', 'm4SemanticViolationCodes', 'm4LanguageQualityViolationCodes',
+    'm4ViolationFactIdHashesByCode', 'm4ViolationEntryIdHashesByCode', 'm4RepairAttempted',
+    'm4ApplyAuthorized', 'm4ApplyAttempted', 'm4ApplyCommitted', 'm4PersistenceAttempted',
+    'm4PersistenceResult', 'm4CanonicalApplyAttempted', 'm4CanonicalApplyResult',
+    'm4UsageAttempted', 'm4UsageResult', 'm4UsageForwardWriteResult',
+    'm4UsageVerificationResult', 'm4UsageRollbackAttempted', 'm4UsageRollbackResult',
+    'm4RollbackAttempted', 'm4CommitCandidateMatched', 'm4V2FallthroughCount',
+  ] as const),
+  nullableWhenUnknown: Object.freeze([
+    'usageCountBefore', 'usageCountAfter', 'm4UsageCountAtRequest', 'm4UsageFinalStateKnown',
+    'm4ActualUsageBefore', 'm4ActualUsageAfter', 'm4ActualUsageDelta', 'm4UsageDelta',
+  ] as const),
+});
+
+/**
+ * M4 owns a provider-evaluated candidate and an atomic page commit receipt. It
+ * does not run the legacy V2 locale-specific finalizer, so V2 role-slot and
+ * duration-owner fields are explicitly inapplicable rather than fabricated.
+ * The shared contract still checks every route-independent field and marker.
+ */
+function checkM4SummaryDiagnosticCompleteness(
+  trace: Record<string, unknown>,
+): SummaryDiagnosticCompleteness {
+  const missing: string[] = [];
+  const nullish: string[] = [];
+  const requirePresent = (key: string) => {
+    if (!(key in trace)) missing.push(key);
+  };
+  const requireValue = (key: string) => {
+    requirePresent(key);
+    if (key in trace && (trace[key] === null || trace[key] === undefined)) {
+      nullish.push(key);
+    }
+  };
+
+  for (const key of M4_DIAGNOSTIC_APPLICABILITY.sharedRequired) requireValue(key);
+  for (const key of M4_DIAGNOSTIC_APPLICABILITY.m4Required) requireValue(key);
+
+  const noCandidate = trace.finalCandidateSource === 'none';
+  for (const key of [
+    'grammarValidationPassed',
+    'groundingValidationPassed',
+    'durationValidationPassed',
+  ]) {
+    requirePresent(key);
+    if (!noCandidate && (trace[key] === null || trace[key] === undefined)) {
+      nullish.push(key);
+    }
+  }
+
+  const markerCheck = validateCvAiDiagnosticMarkerField({
+    ...trace,
+    operationKind: trace.operationKind || 'summary',
+  });
+  missing.push(...markerCheck.missingRequiredDiagnosticFields);
+  nullish.push(...markerCheck.nullRequiredDiagnosticFields);
+
+  for (const key of [
+    'm4AvailableFactCount',
+    'm4RequiredFactCount',
+    'm4CoveredFactCount',
+    'm4RouteHttpStatus',
+    'm4ProviderFailure',
+    'm4CandidateHash',
+    'm4CandidateLength',
+    'm4CandidateUnitCount',
+    'm4SemanticViolationCount',
+    'm4LanguageQualityViolationCount',
+    'm4PrimaryValidationRejectionCode',
+    'm4CommittedSummaryHash',
+    'm4CommittedContentLocale',
+    'm4ActualUsageBefore',
+    'm4ActualUsageAfter',
+    'm4RollbackResult',
+  ]) requirePresent(key);
+  for (const key of M4_DIAGNOSTIC_APPLICABILITY.nullableWhenUnknown) requirePresent(key);
+
+  return {
+    passed: missing.length === 0 && nullish.length === 0,
+    missingRequiredDiagnosticFields: dedupeStableStrings(missing),
+    nullRequiredDiagnosticFields: dedupeStableStrings(nullish),
+  };
+}
 
 export type SummaryAiDiagnosticTrace = {
   schemaVersion: typeof SUMMARY_AI_TRACE_SCHEMA_VERSION;
@@ -547,8 +715,8 @@ export type SummaryAiDiagnosticTrace = {
   visibleSummaryMatchesFinalHash: boolean | null;
   contentLocaleUpdatedAfterApply: boolean;
   countedAsSuccess: boolean;
-  usageCountBefore: number;
-  usageCountAfter: number;
+  usageCountBefore: number | null;
+  usageCountAfter: number | null;
   finalTypedFailureReason: string | null;
   rejectionStage: string | null;
   /** AAB-387 transactional apply lifecycle (privacy-safe hashes only). */
@@ -680,6 +848,8 @@ export type SummaryAiDiagnosticTrace = {
   privacyCheckPassed?: boolean;
   /** M4 Summary V3 terminal evidence; safe metadata only. */
   m4Operation?: 'summary_v3_generate';
+  /** False is the explicit M4 not-applicable marker for legacy V2-only fields. */
+  m4LegacyV2DiagnosticFieldsApplicable?: false;
   m4SourceWasEmpty?: boolean;
   m4AvailableFactCount?: number | null;
   m4RequiredFactCount?: number | null;
@@ -707,9 +877,30 @@ export type SummaryAiDiagnosticTrace = {
   m4ApplyAuthorized?: boolean;
   m4ApplyAttempted?: boolean;
   m4ApplyCommitted?: boolean;
-  m4PersistenceResult?: 'succeeded' | 'failed' | 'not_attempted' | 'unknown';
+  m4PersistenceAttempted?: boolean;
+  m4PersistenceResult?: 'passed' | 'failed' | 'skipped';
+  m4CanonicalApplyAttempted?: boolean;
+  m4CanonicalApplyResult?: 'passed' | 'failed' | 'skipped';
+  m4UsageAttempted?: boolean;
+  m4UsageResult?: 'passed' | 'failed' | 'skipped';
+  m4UsageForwardWriteResult?: 'not_attempted' | 'succeeded' | 'failed' | 'unknown';
+  m4UsageVerificationResult?: 'not_attempted' | 'passed' | 'failed' | 'unknown';
+  m4UsageRollbackAttempted?: boolean;
+  m4UsageRollbackResult?: 'not_required' | 'succeeded' | 'failed' | 'unknown';
+  /** Request-start observation only; never used as M4 transaction authority. */
+  m4UsageCountAtRequest?: number;
+  /** Whether the final ledger state is known after the typed M4 transaction. */
+  m4UsageFinalStateKnown?: boolean;
+  m4ActualUsageBefore?: number | null;
+  m4ActualUsageAfter?: number | null;
+  m4ActualUsageDelta?: number | null;
+  m4RollbackAttempted?: boolean;
+  m4CommittedSummaryHash?: string | null;
+  m4CommittedContentLocale?: string | null;
+  m4CommitCandidateMatched?: boolean;
+  m4RollbackResult?: 'not_required' | 'succeeded' | 'failed' | null;
   m4V2FallthroughCount?: 0;
-  m4UsageDelta?: number;
+  m4UsageDelta?: number | null;
 };
 
 let latestSummaryTrace: SummaryAiDiagnosticTrace | null = null;
@@ -2473,25 +2664,57 @@ export class SummaryAiDiagnosticSession {
       : rawReason
         ? 'unknown_terminal_failure'
         : null;
-    const acceptedResponse = event.evidence.candidatePresent
-      && event.evidence.writer.attempted === true
-      && event.evidence.evaluator.attempted === true;
-    const applyFailure = ['visible_readback_failed', 'rollback_failed', 'persistence_failed',
-      'usage_increment_failed', 'state_write_failed', 'preview_projection_failed'].includes(reason || '');
-    const applyAuthorized = acceptedResponse && (event.kind === 'handled_success' || applyFailure);
-    const applyAttempted = applyAuthorized && (event.kind === 'handled_success' || applyFailure);
-    const persistenceResult: SummaryAiDiagnosticTrace['m4PersistenceResult'] = event.kind === 'handled_success'
-      ? 'succeeded'
-      : reason === 'persistence_failed' || reason === 'rollback_failed'
-        ? 'failed'
-        : applyAttempted
-          ? 'unknown'
-          : 'not_attempted';
+    const acceptedResponse = event.evidence.candidateAccepted;
+    const receipt = event.commitReceipt;
+    const applyAuthorized = acceptedResponse;
+    const applyAttempted = receipt?.canonicalApplyAttempted === true;
+    const applyCommitted = event.applyCommitted && receipt?.kind === 'committed';
+    const persistenceResult: SummaryAiDiagnosticTrace['m4PersistenceResult'] =
+      receipt?.persistenceResult ?? 'skipped';
+    const canonicalApplyResult = receipt?.canonicalApplyResult ?? 'skipped';
+    const usageResult = receipt?.usageResult ?? 'skipped';
+    const actualUsageBefore = receipt?.actualUsageBefore ?? null;
+    const actualUsageAfter = receipt?.actualUsageAfter ?? null;
+    const actualUsageDelta = receipt ? receipt.actualUsageDelta : null;
+    const usageFinalStateKnown = receipt
+      ? actualUsageAfter !== null && actualUsageDelta !== null
+      : true;
+    const meaningfulChangeDetected = Boolean(
+      acceptedResponse
+      && event.evidence.candidateHash
+      && event.snapshot
+      && event.evidence.candidateHash !== event.snapshot.rawSummarySourceHash,
+    );
+    const noOpDetected = acceptedResponse && !meaningfulChangeDetected;
+    const apiResponseKind = event.evidence.m4ProviderFailure
+      ? 'error'
+      : event.evidence.providerResponseKind === 'none'
+        ? 'empty'
+        : event.evidence.providerResponseKind;
+    const raceFailure = reason === 'stale_snapshot' || reason === 'operation_superseded';
+    const rejectionStage = applyCommitted
+      ? null
+      : raceFailure
+        ? 'race_guard'
+        : reason === 'persistence_failed'
+          ? 'persistence'
+          : reason === 'canonical_commit_failed'
+            ? 'canonical_apply'
+            : reason === 'usage_accounting_failed'
+              ? 'usage_accounting'
+              : reason === 'usage_rollback_failed'
+                ? 'usage_rollback'
+                : reason === 'usage_final_state_unknown'
+                  ? 'usage_accounting'
+              : reason === 'rollback_failed'
+                ? 'rollback'
+                : (reason || 'm4_terminal');
     const phaseStatus = event.evidence.phases;
     const writerStatus = event.evidence.writer.result;
     const evaluatorStatus = event.evidence.evaluator.result;
     this.patch({
       m4Operation: 'summary_v3_generate',
+      m4LegacyV2DiagnosticFieldsApplicable: false,
       m4SourceWasEmpty: String(event.input.exactVisibleSummary || '').trim() === '',
       m4AvailableFactCount: event.snapshot
         ? event.snapshot.manifest.selectedEntries.reduce((sum, entry) => sum + entry.facts.length, 0)
@@ -2522,23 +2745,49 @@ export class SummaryAiDiagnosticSession {
       m4RepairAttempted: event.evidence.repairAttempted,
       m4ApplyAuthorized: applyAuthorized,
       m4ApplyAttempted: applyAttempted,
-      m4ApplyCommitted: event.applyCommitted,
+      m4ApplyCommitted: applyCommitted,
+      m4PersistenceAttempted: receipt?.persistenceAttempted ?? false,
       m4PersistenceResult: persistenceResult,
+      m4CanonicalApplyAttempted: receipt?.canonicalApplyAttempted ?? false,
+      m4CanonicalApplyResult: canonicalApplyResult,
+      m4UsageAttempted: receipt?.usageAttempted ?? false,
+      m4UsageResult: usageResult,
+      m4UsageForwardWriteResult: receipt?.usageForwardWriteResult ?? 'not_attempted',
+      m4UsageVerificationResult: receipt?.usageVerificationResult ?? 'not_attempted',
+      m4UsageRollbackAttempted: receipt?.usageRollbackAttempted ?? false,
+      m4UsageRollbackResult: receipt?.usageRollbackResult ?? 'not_required',
+      m4UsageCountAtRequest: event.input.usageCountBefore,
+      m4UsageFinalStateKnown: usageFinalStateKnown,
+      m4ActualUsageBefore: actualUsageBefore,
+      m4ActualUsageAfter: actualUsageAfter,
+      m4ActualUsageDelta: actualUsageDelta,
+      m4RollbackAttempted: receipt?.rollbackAttempted ?? false,
+      m4CommittedSummaryHash: receipt?.committedSummaryHash ?? null,
+      m4CommittedContentLocale: receipt?.committedContentLocale ?? null,
+      m4CommitCandidateMatched: receipt?.candidateMatched ?? false,
+      m4RollbackResult: receipt?.rollbackResult ?? 'not_required',
       m4V2FallthroughCount: 0,
-      m4UsageDelta: event.usageAfter - Number(this.draft.usageCountBefore ?? 0),
-      finalCandidateSource: event.applyCommitted ? 'v3_writer_evaluator' : 'none',
+      m4UsageDelta: actualUsageDelta,
+      finalCandidateSource: acceptedResponse ? 'v3_writer_evaluator' : 'none',
       providerCandidatePresent: event.evidence.candidatePresent,
       providerCandidateHash: event.evidence.candidateHash,
       providerResponseKind: event.evidence.providerResponseKind,
       providerHttpStatus: event.evidence.m4ProviderFailure?.providerHttpStatus ?? null,
+      meaningfulChangeDetected,
+      noOpDetected,
+      apiResponseKind,
+      serverFallbackUsed: false,
+      clientFallbackUsed: false,
       repairAttempted: event.evidence.repairAttempted,
-      visibleApplySucceeded: event.applyCommitted,
-      countedAsSuccess: event.applyCommitted,
-      usageCountAfter: event.usageAfter,
-      finalPostconditionsPassed: event.applyCommitted,
+      visibleApplySucceeded: applyCommitted,
+      countedAsSuccess: applyCommitted,
+      // M4 uses commit-time receipt truth, never request-start arithmetic.
+      usageCountBefore: receipt ? actualUsageBefore : event.input.usageCountBefore,
+      usageCountAfter: receipt ? actualUsageAfter : event.input.usageCountBefore,
+      finalPostconditionsPassed: applyCommitted,
       finalTypedFailureReason: reason,
-      rejectionStage: event.applyCommitted ? null : (reason || 'm4_terminal'),
-      raceGuardResult: event.applyCommitted ? 'ok' : 'skipped',
+      rejectionStage,
+      raceGuardResult: raceFailure ? 'fail' : applyCommitted ? 'ok' : 'skipped',
     });
     this.stage('m4_route', 'ok');
     this.stage('m4_writer', writerStatus === 'succeeded' ? 'ok' : writerStatus === 'not_attempted' ? 'skipped' : 'fail', writerStatus);
@@ -2548,9 +2797,12 @@ export class SummaryAiDiagnosticSession {
       || phaseStatus.semantic !== 'not_evaluated'
       || phaseStatus.language_quality !== 'not_evaluated';
     this.stage('m4_validation', phaseFailed ? 'fail' : phaseEvaluated ? 'ok' : 'skipped', phaseFailed ? reason || undefined : undefined);
-    this.stage('visible_apply', event.applyCommitted ? 'ok' : 'skipped', event.applyCommitted ? undefined : (reason || 'not_reached'));
-    this.stage('post_write_validation', event.applyCommitted ? 'ok' : 'skipped', event.applyCommitted ? undefined : (reason || 'not_reached'));
-    this.stage('usage_accounting', event.applyCommitted ? 'ok' : 'skipped', event.applyCommitted ? undefined : 'not_reached');
+    this.stage('persistence', persistenceResult === 'passed' ? 'ok' : persistenceResult === 'failed' ? 'fail' : 'skipped', persistenceResult === 'failed' ? reason || undefined : undefined);
+    this.stage('visible_apply', canonicalApplyResult === 'passed' ? 'ok' : canonicalApplyResult === 'failed' ? 'fail' : 'skipped', canonicalApplyResult === 'failed' ? reason || undefined : undefined);
+    this.stage('post_write_validation', canonicalApplyResult === 'passed' ? 'ok' : canonicalApplyResult === 'failed' ? 'fail' : 'skipped', canonicalApplyResult === 'failed' ? reason || undefined : undefined);
+    this.stage('usage_accounting', usageResult === 'passed' ? 'ok' : usageResult === 'failed' ? 'fail' : 'skipped', usageResult === 'failed' ? reason || undefined : undefined);
+    this.stage('usage_rollback', receipt?.usageRollbackResult === 'succeeded' ? 'ok' : receipt?.usageRollbackResult === 'failed' || receipt?.usageRollbackResult === 'unknown' ? 'fail' : 'skipped', receipt?.usageRollbackResult === 'failed' || receipt?.usageRollbackResult === 'unknown' ? reason || undefined : undefined);
+    this.stage('rollback', receipt?.rollbackResult === 'succeeded' ? 'ok' : receipt?.rollbackResult === 'failed' ? 'fail' : 'skipped', receipt?.rollbackResult === 'failed' ? reason || undefined : undefined);
     this.stage('m4_terminal', 'ok', reason || undefined);
     if (event.kind === 'handled_failure' && event.internalRejectionAudit) {
       recordSummaryV3InternalRejectionAudit(event.internalRejectionAudit);
@@ -3604,9 +3856,13 @@ export class SummaryAiDiagnosticSession {
             ? this.draft.nullRequiredDiagnosticFields
             : [],
       }
-      : checkSummaryDiagnosticCompleteness(
-        withInvariants as Record<string, unknown>,
-      );
+      : this.draft.m4Operation === 'summary_v3_generate'
+        ? checkM4SummaryDiagnosticCompleteness(
+          withInvariants as Record<string, unknown>,
+        )
+        : checkSummaryDiagnosticCompleteness(
+          withInvariants as Record<string, unknown>,
+        );
     const withCompleteness = {
       ...withInvariants,
       diagnosticCompletenessPassed: completeness.passed,
@@ -3644,6 +3900,13 @@ export class SummaryAiDiagnosticSession {
         completenessPassed: Boolean(trace.diagnosticCompletenessPassed),
         usageCountBefore: trace.usageCountBefore,
         usageCountAfter: trace.usageCountAfter,
+        m4Operation: trace.m4Operation,
+        m4UsageCountAtRequest: trace.m4UsageCountAtRequest,
+        m4UsageAttempted: trace.m4UsageAttempted,
+        m4UsageFinalStateKnown: trace.m4UsageFinalStateKnown,
+        m4ActualUsageBefore: trace.m4ActualUsageBefore,
+        m4ActualUsageAfter: trace.m4ActualUsageAfter,
+        m4ActualUsageDelta: trace.m4ActualUsageDelta,
       });
     } catch {
       /* ignore */

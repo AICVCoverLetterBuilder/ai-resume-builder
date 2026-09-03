@@ -293,8 +293,16 @@ export type CvAiDiagnosticHistoryItem = {
   finalTypedFailureReason: string | null;
   invariantPassed: boolean;
   completenessPassed: boolean;
-  usageCountBefore: number;
-  usageCountAfter: number;
+  /** Legacy values remain numeric; M4 uses its typed fields below. */
+  usageCountBefore: number | null;
+  usageCountAfter: number | null;
+  m4Operation?: 'summary_v3_generate';
+  m4UsageCountAtRequest?: number;
+  m4UsageAttempted?: boolean;
+  m4UsageFinalStateKnown?: boolean;
+  m4ActualUsageBefore?: number | null;
+  m4ActualUsageAfter?: number | null;
+  m4ActualUsageDelta?: number | null;
 };
 
 export const CV_AI_DIAG_HISTORY_STORAGE_KEY = 'cvpro-cv-ai-diag-history-v1';
@@ -466,8 +474,14 @@ type SummaryLike = {
   visibleApplySucceeded?: boolean;
   visibleSummaryMatchesFinalHash?: boolean | null;
   countedAsSuccess?: boolean;
-  usageCountBefore?: number;
-  usageCountAfter?: number;
+  usageCountBefore?: number | null;
+  usageCountAfter?: number | null;
+  m4Operation?: 'summary_v3_generate';
+  m4UsageAttempted?: boolean;
+  m4UsageFinalStateKnown?: boolean;
+  m4ActualUsageBefore?: number | null;
+  m4ActualUsageAfter?: number | null;
+  m4ActualUsageDelta?: number | null;
   grammarValidationPassed?: boolean;
   hindiIncompleteSentenceCount?: number | null;
   hindiNominalExperienceFragmentDetected?: boolean | null;
@@ -1266,24 +1280,63 @@ export function checkSummaryDiagnosticInvariants(
       visibleApplySucceeded: false,
     });
   }
+  const isM4UsageAuthority = trace.m4Operation === 'summary_v3_generate';
   if (trace.countedAsSuccess && trace.visibleApplySucceeded) {
-    const before = trace.usageCountBefore ?? 0;
-    const after = trace.usageCountAfter ?? 0;
-    if (after !== before + 1) {
-      push('usage_increment_mismatch_success', {
-        usageCountBefore: before,
-        usageCountAfter: after,
-      });
+    if (isM4UsageAuthority) {
+      const before = trace.m4ActualUsageBefore;
+      const after = trace.m4ActualUsageAfter;
+      const delta = trace.m4ActualUsageDelta;
+      if (
+        trace.m4UsageFinalStateKnown !== true
+        || before === null || before === undefined
+        || after === null || after === undefined
+        || delta !== 1
+        || after !== before + 1
+      ) {
+        push('usage_increment_mismatch_success', {
+          m4ActualUsageBefore: before ?? null,
+          m4ActualUsageAfter: after ?? null,
+          m4ActualUsageDelta: delta ?? null,
+          m4UsageFinalStateKnown: trace.m4UsageFinalStateKnown ?? null,
+        });
+      }
+    } else {
+      const before = trace.usageCountBefore ?? 0;
+      const after = trace.usageCountAfter ?? 0;
+      if (after !== before + 1) {
+        push('usage_increment_mismatch_success', {
+          usageCountBefore: before,
+          usageCountAfter: after,
+        });
+      }
     }
   }
   if (!trace.countedAsSuccess && !trace.visibleApplySucceeded) {
-    const before = trace.usageCountBefore ?? 0;
-    const after = trace.usageCountAfter ?? 0;
-    if (after !== before) {
-      push('usage_changed_after_failed_apply', {
-        usageCountBefore: before,
-        usageCountAfter: after,
-      });
+    if (isM4UsageAuthority) {
+      if (trace.m4UsageAttempted === true) {
+        if (trace.m4UsageFinalStateKnown !== true) {
+          push('m4_usage_final_state_unknown', {
+            m4ActualUsageBefore: trace.m4ActualUsageBefore ?? null,
+            m4ActualUsageAfter: null,
+            m4ActualUsageDelta: null,
+          });
+        } else if (trace.m4ActualUsageDelta !== 0) {
+          push('m4_usage_changed_after_failed_operation', {
+            m4ActualUsageBefore: trace.m4ActualUsageBefore ?? null,
+            m4ActualUsageAfter: trace.m4ActualUsageAfter ?? null,
+            m4ActualUsageDelta: trace.m4ActualUsageDelta ?? null,
+          });
+        }
+      }
+    } else {
+      const before = trace.usageCountBefore ?? 0;
+      const after = trace.usageCountAfter ?? 0;
+      if (after !== before) {
+        push('usage_changed_after_failed_apply', {
+          usageCountBefore: before,
+          usageCountAfter: after,
+        });
+      }
     }
   }
   if (trace.grammarValidationPassed

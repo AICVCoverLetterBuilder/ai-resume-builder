@@ -21,8 +21,9 @@ import {
   AI_USAGE_RESET_EVENT,
   PRO_AI_SAFETY_CAP,
   PRO_AI_WINDOW_MS,
+  commitProAiUserAction,
   loadProAiRecord,
-  recordProAiUserActionSuccess,
+  type ProAiUsageCommitResult,
   type ProAiRecord,
 } from './ai-usage-policy';
 
@@ -94,7 +95,10 @@ interface AppContextType {
   resetClRegen: () => void;
   // Pro safety cap (hidden — configured PRO_AI_SAFETY_CAP per rolling window)
   canUseProAi: () => boolean;
+  /** Legacy fire-and-forget Pro AI accounting surface for non-M4 callers. */
   recordProAiSuccess: () => void;
+  /** Typed authoritative M4/V3 usage transaction. */
+  commitProAiSuccess: () => ProAiUsageCommitResult;
   /** Current Pro AI usage count in the active rolling window (0 when window expired). */
   getProAiUsageCount: () => number;
   // Draft persistence — timestamps for "Draft saved" indicators
@@ -443,11 +447,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return fresh.count < PRO_AI_SAFETY_CAP;
   }, [proAiRecord, readAiGateState]);
 
-  const recordProAiSuccess = useCallback(() => {
-    if (readAiGateState().status !== 'ready') return; // only track for Pro users
-    // Always re-read storage so an internal ledger reset cannot leave stale React state.
-    setProAiRecord(() => recordProAiUserActionSuccess(loadProAiRecord()));
+  const commitProAiSuccess = useCallback((): ProAiUsageCommitResult => {
+    const result = commitProAiUserAction({ aiGateReady: readAiGateState().status === 'ready' });
+    // React observes only a record returned by the authoritative storage transaction.
+    if (result.record) setProAiRecord(result.record);
+    return result;
   }, [readAiGateState]);
+
+  const recordProAiSuccess = useCallback((): void => {
+    void commitProAiSuccess();
+  }, [commitProAiSuccess]);
 
   const saveCv = useCallback((cv: CVData) => {
     const existingDraft = loadCvDraft();
@@ -579,7 +588,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       clGenerationCount, canGenerateCoverLetter, incrementClGeneration,
       aiRecommendUsed, canUseAiRecommend, markAiRecommendUsed,
       clRegenCount, canRegenerateCoverLetter, incrementClRegen, resetClRegen,
-      canUseProAi, recordProAiSuccess, getProAiUsageCount,
+      canUseProAi, recordProAiSuccess, commitProAiSuccess, getProAiUsageCount,
       lastCvSavedAt, lastClSavedAt, clearAllDrafts, persistCurrentDraft,
     }}>
       {children}

@@ -213,9 +213,13 @@ import {
   SUMMARY_V3_GENERATE_ACTION,
   classifySummaryV3GenerateRouting,
   isAiCoreV3Enabled,
+  hashSummaryV3Value,
   runExperienceV3EnhanceAdapter,
   runExperienceV3GenerateAdapter,
   runSummaryV3GenerateAdapter,
+  type SummaryV3CommitFailureReason,
+  type SummaryV3CommitReceipt,
+  type SummaryV3CommitRequest,
 } from '@/lib/ai-core-v3';
 import { motion } from 'framer-motion';
 import { toast } from 'sonner';
@@ -419,6 +423,7 @@ export default function CVBuilderPage() {
     incrementDownloads,
     markAiRecommendUsed,
     recordProAiSuccess,
+    commitProAiSuccess,
     getProAiUsageCount,
     lastCvSavedAt,
     getAiGate,
@@ -465,6 +470,184 @@ export default function CVBuilderPage() {
   const persistSummaryCvNow = useCallback((next: CVData) => {
     setCurrentCv(next);
   }, [setCurrentCv]);
+  const commitSummaryV3Candidate = useCallback((request: SummaryV3CommitRequest): SummaryV3CommitReceipt => {
+    const failed = (
+      reason: SummaryV3CommitFailureReason,
+      options: Partial<Omit<Extract<SummaryV3CommitReceipt, { kind: 'failed' }>,
+        'kind' | 'operationId' | 'requestId' | 'reason' | 'intendedCandidateHash'>> = {},
+    ): SummaryV3CommitReceipt => Object.freeze({
+      kind: 'failed' as const,
+      operationId: request.operationId,
+      requestId: request.requestId,
+      reason,
+      intendedCandidateHash: request.candidateHash,
+      canonicalAccepted: options.canonicalAccepted ?? false,
+      committedSummaryHash: options.committedSummaryHash ?? null,
+      committedContentLocale: options.committedContentLocale ?? null,
+      candidateMatched: options.candidateMatched ?? false,
+      persistenceAttempted: options.persistenceAttempted ?? false,
+      persistenceResult: options.persistenceResult ?? 'skipped',
+      canonicalApplyAttempted: options.canonicalApplyAttempted ?? false,
+      canonicalApplyResult: options.canonicalApplyResult ?? 'skipped',
+      usageAttempted: options.usageAttempted ?? false,
+      usageResult: options.usageResult ?? 'skipped',
+      usageForwardWriteResult: options.usageForwardWriteResult ?? 'not_attempted',
+      usageVerificationResult: options.usageVerificationResult ?? 'not_attempted',
+      usageRollbackAttempted: options.usageRollbackAttempted ?? false,
+      usageRollbackResult: options.usageRollbackResult ?? 'not_required',
+      actualUsageBefore: options.actualUsageBefore ?? null,
+      actualUsageAfter: options.actualUsageAfter ?? null,
+      actualUsageDelta: options.actualUsageDelta !== undefined
+        ? options.actualUsageDelta
+        : options.usageAttempted
+          ? null
+          : 0,
+      rollbackAttempted: options.rollbackAttempted ?? false,
+      rollbackResult: options.rollbackResult ?? 'not_required',
+    });
+    if (latestSummaryRequestIdRef.current !== request.operationId) {
+      return failed('operation_superseded');
+    }
+    if (hashSummaryV3Value(cvRef.current) !== request.previousCvHash) {
+      return failed('stale_snapshot');
+    }
+    const rollbackPreviousCv = (): boolean => {
+      try {
+        if (!persistCurrentCvTransactionally(request.previousCv)) return false;
+        cvRef.current = request.previousCv;
+        setCv(request.previousCv);
+        return hashSummaryV3Value(cvRef.current) === request.previousCvHash;
+      } catch {
+        return false;
+      }
+    };
+    let persisted = false;
+    try {
+      persisted = persistCurrentCvTransactionally(request.nextCv);
+    } catch {
+      persisted = false;
+    }
+    if (!persisted) {
+      return failed('persistence_failed', {
+        persistenceAttempted: true,
+        persistenceResult: 'failed',
+      });
+    }
+    try {
+      cvRef.current = request.nextCv;
+      setCv(request.nextCv);
+    } catch {
+      const rolledBack = rollbackPreviousCv();
+      return failed(rolledBack ? 'canonical_commit_failed' : 'rollback_failed', {
+        persistenceAttempted: true,
+        persistenceResult: 'passed',
+        canonicalApplyAttempted: true,
+        canonicalApplyResult: 'failed',
+        rollbackAttempted: true,
+        rollbackResult: rolledBack ? 'succeeded' : 'failed',
+      });
+    }
+    const committed = cvRef.current;
+    const committedSummaryHash = hashSummaryV3Value(committed.summary || '');
+    const committedContentLocale = String(committed.contentLocale || '');
+    const candidateMatched = hashSummaryV3Value(committed) === hashSummaryV3Value(request.nextCv)
+      && committedSummaryHash === request.candidateHash
+      && committed.summaryOrigin === 'ai_generated'
+      && String(committed.summaryGeneratedLocale || '').replace(/_/g, '-').toLowerCase()
+        === request.requestedLocale.replace(/_/g, '-').toLowerCase()
+      && committedContentLocale.replace(/_/g, '-').toLowerCase()
+        === request.requestedLocale.replace(/_/g, '-').toLowerCase();
+    if (!candidateMatched) {
+      const rolledBack = rollbackPreviousCv();
+      return failed(rolledBack ? 'canonical_commit_failed' : 'rollback_failed', {
+        persistenceAttempted: true,
+        persistenceResult: 'passed',
+        canonicalApplyAttempted: true,
+        canonicalApplyResult: 'failed',
+        committedSummaryHash,
+        committedContentLocale,
+        candidateMatched: false,
+        rollbackAttempted: true,
+        rollbackResult: rolledBack ? 'succeeded' : 'failed',
+      });
+    }
+    let usageCommit: ReturnType<typeof commitProAiSuccess>;
+    try {
+      usageCommit = commitProAiSuccess();
+    } catch {
+      const rolledBack = rollbackPreviousCv();
+      return failed(rolledBack ? 'usage_accounting_failed' : 'rollback_failed', {
+        persistenceAttempted: true,
+        persistenceResult: 'passed',
+        canonicalApplyAttempted: true,
+        canonicalApplyResult: 'passed',
+        usageAttempted: true,
+        usageResult: 'failed',
+        usageForwardWriteResult: 'unknown',
+        usageVerificationResult: 'unknown',
+        usageRollbackAttempted: false,
+        usageRollbackResult: 'unknown',
+        actualUsageDelta: null,
+        committedSummaryHash,
+        committedContentLocale,
+        candidateMatched: true,
+        rollbackAttempted: true,
+        rollbackResult: rolledBack ? 'succeeded' : 'failed',
+      });
+    }
+    if (!usageCommit.ok) {
+      const rolledBack = rollbackPreviousCv();
+      const usageReason: SummaryV3CommitFailureReason = usageCommit.reason === 'usage_rollback_failed'
+        || usageCommit.reason === 'usage_final_state_unknown'
+        ? usageCommit.reason
+        : 'usage_accounting_failed';
+      return failed(rolledBack ? usageReason : 'rollback_failed', {
+        persistenceAttempted: true,
+        persistenceResult: 'passed',
+        canonicalApplyAttempted: true,
+        canonicalApplyResult: 'passed',
+        usageAttempted: true,
+        usageResult: 'failed',
+        usageForwardWriteResult: usageCommit.forwardWriteResult,
+        usageVerificationResult: usageCommit.verificationResult,
+        usageRollbackAttempted: usageCommit.rollbackAttempted,
+        usageRollbackResult: usageCommit.rollbackResult,
+        actualUsageBefore: usageCommit.before,
+        actualUsageAfter: usageCommit.after,
+        actualUsageDelta: usageCommit.delta,
+        committedSummaryHash,
+        committedContentLocale,
+        candidateMatched: true,
+        rollbackAttempted: true,
+        rollbackResult: rolledBack ? 'succeeded' : 'failed',
+      });
+    }
+    return Object.freeze({
+      kind: 'committed' as const,
+      operationId: request.operationId,
+      requestId: request.requestId,
+      canonicalAccepted: true,
+      intendedCandidateHash: request.candidateHash,
+      committedSummaryHash,
+      committedContentLocale,
+      candidateMatched: true,
+      persistenceAttempted: true,
+      persistenceResult: 'passed' as const,
+      canonicalApplyAttempted: true,
+      canonicalApplyResult: 'passed' as const,
+      usageAttempted: true,
+      usageResult: 'passed' as const,
+      usageForwardWriteResult: usageCommit.forwardWriteResult,
+      usageVerificationResult: usageCommit.verificationResult,
+      usageRollbackAttempted: usageCommit.rollbackAttempted,
+      usageRollbackResult: usageCommit.rollbackResult,
+      actualUsageBefore: usageCommit.before,
+      actualUsageAfter: usageCommit.after,
+      actualUsageDelta: 1 as const,
+      rollbackAttempted: false,
+      rollbackResult: 'not_required' as const,
+    });
+  }, [commitProAiSuccess, persistCurrentCvTransactionally]);
   const [step, setStep] = useState(0);
   const [showPreview, setShowPreview] = useState(false);
   const [skillInput, setSkillInput] = useState('');
@@ -1323,21 +1506,7 @@ export default function CVBuilderPage() {
           }).key,
         }),
         getActiveOperationId: () => latestSummaryRequestIdRef.current || '',
-        writeCv: (next) => {
-          cvRef.current = next;
-          setCv(next);
-        },
-        projectPreviewSummary: (next) => {
-          const migrated = normalizeLegacyCvRuntime(next, requestedLocale);
-          const quality = applyCvContentQuality(migrated, requestedLocale, {
-            gender: migrated.personal?.gender,
-            summaryOrigin: migrated.summaryOrigin,
-          }).cv;
-          return omitInvalidLocalizedFieldsForPreview(quality, requestedLocale).summary;
-        },
-        persistCv: persistCurrentCvTransactionally,
-        incrementUsage: recordProAiSuccess,
-        getUsageCount: getProAiUsageCount,
+        commitCandidate: commitSummaryV3Candidate,
         getRouteHttpStatus: () => summaryV3RouteHttpStatus,
         onTerminal: (event) => {
           summaryV3TerminalEvent = event;
