@@ -1,0 +1,8 @@
+{
+  "revision": "android-production-api-host-contract-408-v3",
+  "publicProductionApiOrigin": "https://ai-resume-builder-six-gamma.vercel.app",
+  "protectedProjectApiOrigin": "https://ai-resume-builder-aicvcoverletterbuilders-projects.vercel.app",
+  "previewDeploymentHostSuffixes": [
+    "-aicvcoverletterbuilders-projects.vercel.app"
+  ]
+}

@@ -112,17 +112,19 @@ export function InternalSummaryAiDiagnosticsPanel({
     if (full.visibleApplySucceeded === false && full.countedAsSuccess) {
       warnings.push('final apply failed');
     }
-    if ((full.wrongLocaleUnitCount || 0) > 0) warnings.push('wrong locale');
-    if ((full.unsupportedClaimCount || 0) > 0) warnings.push('unsupported claim');
     if (full.m4Operation === 'summary_v3_generate') {
       if (usageView?.kind === 'm4_unknown') {
         warnings.push('usage final state unknown');
       } else if (usageView?.kind === 'm4_known' && !full.countedAsSuccess && usageView.delta !== 0) {
         warnings.push('usage changed after failed operation');
       }
-    } else if ((full.usageCountAfter ?? 0) !== (full.usageCountBefore ?? 0) + (full.countedAsSuccess ? 1 : 0)) {
-      // Legacy V2 remains numeric and uses its existing request-boundary rule.
-      warnings.push('usage mismatch');
+    } else {
+      if ((full.wrongLocaleUnitCount || 0) > 0) warnings.push('wrong locale');
+      if ((full.unsupportedClaimCount || 0) > 0) warnings.push('unsupported claim');
+      if ((full.usageCountAfter ?? 0) !== (full.usageCountBefore ?? 0) + (full.countedAsSuccess ? 1 : 0)) {
+        // Legacy V2 remains numeric and uses its existing request-boundary rule.
+        warnings.push('usage mismatch');
+      }
     }
   }
 
@@ -167,11 +169,11 @@ export function InternalSummaryAiDiagnosticsPanel({
           </div>
           <div>
             <dt className="inline font-medium text-foreground">duration count: </dt>
-            <dd className="inline">{summary.durationCount}</dd>
+            <dd className="inline">{summary.durationCount ?? 'n/a'}</dd>
           </div>
           <div>
             <dt className="inline font-medium text-foreground">independent final duration: </dt>
-            <dd className="inline">{summary.independentFinalDurationClaimCount}</dd>
+            <dd className="inline">{summary.independentFinalDurationClaimCount ?? 'n/a'}</dd>
           </div>
           <div>
             <dt className="inline font-medium text-foreground">visible duration after apply: </dt>
@@ -179,7 +181,11 @@ export function InternalSummaryAiDiagnosticsPanel({
           </div>
           <div>
             <dt className="inline font-medium text-foreground">duration validation: </dt>
-            <dd className="inline">{summary.durationValidationPassed ? 'pass' : 'fail'}</dd>
+            <dd className="inline">
+              {summary.durationValidationPassed == null
+                ? 'n/a'
+                : (summary.durationValidationPassed ? 'pass' : 'fail')}
+            </dd>
           </div>
           <div>
             <dt className="inline font-medium text-foreground">race guard: </dt>
@@ -213,6 +219,7 @@ export function InternalSummaryAiDiagnosticsPanel({
               <div><dt className="inline font-medium text-foreground">M4 evaluator: </dt><dd className="inline">{full.m4Evaluator?.result || 'unknown'} ({full.m4Evaluator?.attempted === true ? 'attempted' : full.m4Evaluator?.attempted === false ? 'not attempted' : 'unknown'})</dd></div>
               <div><dt className="inline font-medium text-foreground">M4 phases: </dt><dd className="inline">structural {full.m4Phases?.structural || 'n/a'} · semantic {full.m4Phases?.semantic || 'n/a'} · language {full.m4Phases?.language_quality || 'n/a'}</dd></div>
               <div><dt className="inline font-medium text-foreground">M4 candidate evidence: </dt><dd className="inline">{full.m4CandidatePresent ? `${full.m4CandidateUnitCount ?? 0} units / ${full.m4CandidateLength ?? 0} chars` : 'none'}</dd></div>
+              <div><dt className="inline font-medium text-foreground">M4 structured duration months: </dt><dd className="inline">{full.m4StructuredDurationMonths ?? 'n/a'}</dd></div>
               <div><dt className="inline font-medium text-foreground">M4 available/required/covered: </dt><dd className="inline">{full.m4AvailableFactCount ?? 'n/a'} / {full.m4RequiredFactCount ?? 'n/a'} / {full.m4CoveredFactCount ?? 'n/a'}</dd></div>
               <div><dt className="inline font-medium text-foreground">M4 apply/persistence/fallthrough: </dt><dd className="inline">{full.m4ApplyCommitted ? 'committed' : 'not committed'} / {full.m4PersistenceResult || 'n/a'} / {full.m4V2FallthroughCount ?? 0}</dd></div>
               <div><dt className="inline font-medium text-foreground">M4 request usage: </dt><dd className="inline">{m4RequestUsage ?? 'n/a'}</dd></div>

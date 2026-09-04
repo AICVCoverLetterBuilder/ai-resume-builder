@@ -6,7 +6,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
 import React from 'react';
 import { InternalSummaryAiDiagnosticsPanel } from '@/components/InternalSummaryAiDiagnosticsPanel';
@@ -15,10 +15,21 @@ import type {
   SummaryV3GenerateTerminalEvent,
 } from '@/lib/ai-core-v3/summary-generate';
 import {
+  checkM4SummaryDiagnosticApplicability,
+  checkM4SummaryDiagnosticCompleteness,
+  assertM4SummaryFieldAuthorityCoverage,
   clearSummaryAiDiagnosticsForTests,
   copySummaryAiDiagnosticsToClipboard,
+  getM4SummaryFieldAuthority,
   getLatestSummaryAiDiagnostic,
+  M4_SUMMARY_FIELD_AUTHORITY,
+  M4_SUMMARY_EXTERNAL_REQUIRED_FIELDS,
+  M4_SUMMARY_TERMINAL_RECEIPT_FIELDS,
+  projectSummaryAiDiagnosticApplicability,
+  SUMMARY_AI_DIAGNOSTIC_CONSTRUCTOR_FIELDS,
   SummaryAiDiagnosticSession,
+  type SummaryM4ExternalDiagnostic,
+  type SummaryV2ExternalDiagnostic,
 } from '@/lib/cv-summary-ai-diagnostics';
 import {
   clearCvAiDiagnosticHistory,
@@ -33,6 +44,7 @@ type M4Scenario = Readonly<{
   success: boolean;
   usageAttempted: boolean;
   reason: string | null;
+  snapshotAvailable?: boolean;
 }>;
 
 function baseCv() {
@@ -90,10 +102,13 @@ function terminalEvent(scenario: M4Scenario): SummaryV3GenerateTerminalEvent {
       usageCountBefore: scenario.requestBefore,
     },
     // Only the hash and selected-entry count are read by the diagnostic projection.
-    snapshot: {
-      rawSummarySourceHash: 'm4-panel-source',
-      manifest: { selectedEntries: [] },
-    },
+    snapshot: scenario.snapshotAvailable === false
+      ? undefined
+      : {
+          rawSummarySourceHash: 'm4-panel-source',
+          structuredTotalDurationMonths: 24,
+          manifest: { selectedEntries: [{ facts: [{ id: 'm4-panel-fact' }] }] },
+        },
     kind: scenario.success ? 'handled_success' : 'handled_failure',
     typedReason: scenario.reason,
     evidence: {
@@ -158,6 +173,38 @@ function commitM4(scenario: M4Scenario) {
   return session.commit();
 }
 
+function constructorFieldNames(): string[] {
+  const session = new SummaryAiDiagnosticSession({
+    uiLocale: 'de',
+    requestedLocale: 'de',
+    contentLocale: 'de',
+    templateId: 'm4-authority-inventory',
+    requestId: 'm4-authority-inventory-request',
+    usageCountBefore: 0,
+    operationMode: 'summary_generate',
+  });
+  return Object.keys((session as unknown as { draft: Record<string, unknown> }).draft).sort();
+}
+
+const LEGACY_DURATION_AND_FINALIZER_FIELDS = [
+  'structuredDurationMonths', 'localizedDurationPhraseHash', 'providerDurationClaimCount',
+  'sourceDurationClaimCount', 'fallbackDurationClaimCount', 'durationClaimCountBeforeStrip',
+  'numericDurationClaimCount', 'writtenDurationClaimCount', 'durationClaimsRemovedBeforeInsert',
+  'durationClaimCountAfterInsert', 'durationClaimCountAfterFinalize',
+  'independentFinalDurationClaimCount', 'visibleDurationClaimCountAfterApply',
+  'visibleDurationMatchesFinalizedCount', 'durationDetectorAgreement',
+  'durationInsertedExactlyOnce', 'durationFinalizerIdempotent',
+  'finalDurationRepresentationKind', 'finalDurationRepresentationCount', 'finalDurationHybridDetected',
+  'visibleDurationRepresentationKind', 'visibleDurationRepresentationCount',
+  'visibleDurationHybridDetected', 'durationSemanticValueMonths', 'durationRepresentationAgreement',
+  'finalRenderedDurationSemanticMonths', 'visibleRenderedDurationSemanticMonths',
+  'finalDurationSemanticDeltaMonths', 'visibleDurationSemanticDeltaMonths',
+  'finalDurationSemanticAgreementPassed', 'visibleDurationSemanticAgreementPassed',
+  'summaryDurationFinalizerRevision', 'durationPass1CandidateHash', 'durationPass2CandidateHash',
+  'durationPass1Hash', 'durationPass2Hash', 'durationSecondPassChanged',
+  'durationSecondPassChangeReason', 'durationValidationPassed',
+] as const;
+
 function commitLegacy(success: boolean) {
   const session = new SummaryAiDiagnosticSession({
     uiLocale: 'en',
@@ -208,16 +255,32 @@ describe('M4 Summary diagnostics panel usage truth', () => {
     });
     expect(trace.diagnosticInvariantFailures).toEqual([]);
     expect(trace.diagnosticInvariantCheckPassed).toBe(true);
+    expect(trace.diagnosticCompletenessPassed).toBe(true);
+    expect(trace.notApplicableDiagnosticFieldViolations).toEqual([]);
     expect(trace.m4UsageCountAtRequest).toBe(5);
     expect(trace.m4ActualUsageBefore).toBe(6);
     expect(trace.m4ActualUsageAfter).toBe(7);
     expect(trace.m4ActualUsageDelta).toBe(1);
+    expect(trace.m4StructuredDurationMonths).toBe(24);
+    expect(trace.m4LegacyV2DiagnosticFieldsApplicable).toBe(false);
+    // The M4 external view omits V2-only fields; the panel renders their label as n/a.
+    expect(trace).not.toHaveProperty('durationValidationPassed');
+    expect(trace).not.toHaveProperty('grammarValidationPassed');
+    expect(trace).not.toHaveProperty('groundingValidationPassed');
+    expect(trace).not.toHaveProperty('unitCount');
 
     const panel = renderPanelText();
     expect(panel).toContain('M4 request usage: 5');
     expect(panel).toContain('M4 usage: 6 → 7 (Δ +1)');
+    expect(panel).toContain('M4 structured duration months: 24');
+    expect(panel).toContain('M4 phases: structural passed · semantic passed · language passed');
     expect(panel).not.toContain('5 → 7');
     expect(panel).not.toContain('usage mismatch');
+    expect(panel).not.toContain('duration count: 0');
+    expect(panel).not.toContain('independent final duration: 0');
+    expect(panel).not.toContain('visible duration after apply: 0');
+    expect(panel).toContain('duration validation: n/a');
+    expect(panel).not.toContain('duration validation: fail');
     expect(getCvAiDiagnosticHistory('summary')[0]).toMatchObject({
       m4UsageCountAtRequest: 5,
       m4ActualUsageBefore: 6,
@@ -233,6 +296,129 @@ describe('M4 Summary diagnostics panel usage truth', () => {
       m4ActualUsageBefore: 6,
       m4ActualUsageAfter: 7,
       m4ActualUsageDelta: 1,
+      m4LegacyV2DiagnosticFieldsApplicable: false,
+      apiHostClassificationContractRevision: 'android-production-api-host-contract-408-v3',
+    });
+    expect(JSON.parse(copied[0])).not.toHaveProperty('durationValidationPassed');
+  });
+
+  it('exhaustively projects a real M4 success without V2 default sentinels', () => {
+    const constructorFields = constructorFieldNames();
+    expect([...SUMMARY_AI_DIAGNOSTIC_CONSTRUCTOR_FIELDS].sort()).toEqual(constructorFields);
+
+    const authorityFields = Object.values(M4_SUMMARY_FIELD_AUTHORITY).flat();
+    expect(new Set(authorityFields).size).toBe(authorityFields.length);
+    expect(authorityFields.filter((field) => constructorFields.includes(field)).sort())
+      .toEqual(constructorFields);
+    expect(M4_SUMMARY_TERMINAL_RECEIPT_FIELDS.every(
+      (field) => M4_SUMMARY_FIELD_AUTHORITY.M4_AUTHORITATIVE.includes(field),
+    )).toBe(true);
+    for (const field of constructorFields) {
+      expect(getM4SummaryFieldAuthority(field)).not.toBeNull();
+    }
+
+    const trace = commitM4({
+      requestBefore: 2, actualBefore: 2, actualAfter: 3, actualDelta: 1,
+      success: true, usageAttempted: true, reason: null,
+    });
+    expect(trace.diagnosticInvariantCheckPassed).toBe(true);
+    expect(trace.diagnosticCompletenessPassed).toBe(true);
+    expect(trace.privacyCheckPassed).toBe(true);
+    expect(trace.m4CandidatePresent).toBe(true);
+    expect(trace.m4CandidateUnitCount).toBe(1);
+    expect(trace.m4CandidateLength).toBe(12);
+    expect(trace.m4StructuredDurationMonths).toBe(24);
+    expect(trace.apiHostClassificationContractRevision).toBe('android-production-api-host-contract-408-v3');
+    expectTypeOf(trace.m4StructuredDurationMonths).toEqualTypeOf<number | null | undefined>();
+    if (trace.m4Operation !== 'summary_v3_generate') throw new Error('expected M4 trace');
+    const typedM4: SummaryM4ExternalDiagnostic = trace;
+    expectTypeOf(typedM4.m4StructuredDurationMonths).toEqualTypeOf<number | null>();
+    expectTypeOf(typedM4.apiHostClassificationContractRevision).toEqualTypeOf<string>();
+    // @ts-expect-error V2 duration evidence is forbidden by the M4 external contract.
+    const _forbiddenM4Duration: boolean = typedM4.durationValidationPassed;
+    expect(M4_SUMMARY_EXTERNAL_REQUIRED_FIELDS.filter((field) => !(field in trace))).toEqual([]);
+
+    for (const field of M4_SUMMARY_FIELD_AUTHORITY.M4_NOT_APPLICABLE) {
+      expect(trace).not.toHaveProperty(field);
+    }
+    for (const field of M4_SUMMARY_FIELD_AUTHORITY.PRESENT_BUT_NOT_EVALUATED) {
+      expect(trace).not.toHaveProperty(field);
+    }
+    for (const field of M4_SUMMARY_FIELD_AUTHORITY.V2_AUTHORITATIVE) {
+      expect(trace).not.toHaveProperty(field);
+    }
+    for (const field of LEGACY_DURATION_AND_FINALIZER_FIELDS) {
+      expect(getM4SummaryFieldAuthority(field)).toBe('M4_NOT_APPLICABLE');
+      expect(trace).not.toHaveProperty(field);
+    }
+
+    const sentinelLeak = checkM4SummaryDiagnosticApplicability({
+      m4Operation: 'summary_v3_generate',
+      m4LegacyV2DiagnosticFieldsApplicable: false,
+      providerDurationClaimCount: 0,
+      durationDetectorAgreement: false,
+      durationPass1Hash: '',
+      finalDurationRepresentationKind: [],
+    });
+    expect(sentinelLeak.notApplicableDiagnosticFieldViolations).toEqual([
+      'providerDurationClaimCount',
+      'durationDetectorAgreement',
+      'durationPass1Hash',
+      'finalDurationRepresentationKind',
+    ]);
+    const projection = projectSummaryAiDiagnosticApplicability({
+      m4Operation: 'summary_v3_generate',
+      m4LegacyV2DiagnosticFieldsApplicable: false,
+      unclassifiedFutureConstructorField: 0,
+    });
+    expect(projection).toMatchObject({
+      ok: false,
+      variant: 'm4',
+      unclassifiedFields: ['unclassifiedFutureConstructorField'],
+      projectionFailureReason: 'unclassified_field',
+    });
+    expect(projection.trace).not.toHaveProperty('unclassifiedFutureConstructorField');
+    expect(() => assertM4SummaryFieldAuthorityCoverage([
+      ...SUMMARY_AI_DIAGNOSTIC_CONSTRUCTOR_FIELDS,
+      'unclassifiedFutureConstructorField',
+    ])).toThrow('unclassified M4 diagnostic fields: unclassifiedFutureConstructorField');
+
+    const missingDuration = { ...trace } as Record<string, unknown>;
+    delete missingDuration.m4StructuredDurationMonths;
+    expect(checkM4SummaryDiagnosticCompleteness(missingDuration)).toMatchObject({
+      passed: false,
+      missingRequiredDiagnosticFields: ['m4StructuredDurationMonths'],
+    });
+    const missingHostRevision = { ...trace } as Record<string, unknown>;
+    delete missingHostRevision.apiHostClassificationContractRevision;
+    expect(checkM4SummaryDiagnosticCompleteness(missingHostRevision)).toMatchObject({
+      passed: false,
+      missingRequiredDiagnosticFields: ['apiHostClassificationContractRevision'],
+    });
+  });
+
+  it('keeps the V2 type evaluated and permits null M4 duration only without a failure snapshot', () => {
+    const v2Session = new SummaryAiDiagnosticSession({
+      uiLocale: 'en', requestedLocale: 'en', contentLocale: 'en', templateId: 'v2-type',
+      requestId: 'v2-type-request', usageCountBefore: 0, operationMode: 'summary_generate',
+    });
+    const v2 = v2Session.commit();
+    if (v2.m4Operation === 'summary_v3_generate') throw new Error('expected V2 trace');
+    const typedV2: SummaryV2ExternalDiagnostic = v2;
+    expectTypeOf(typedV2.durationValidationPassed).toEqualTypeOf<boolean | null>();
+    // @ts-expect-error M4 terminal identity is forbidden by the V2 external contract.
+    const _forbiddenV2Operation: 'summary_v3_generate' = typedV2.m4Operation;
+
+    const failure = commitM4({
+      requestBefore: 2, actualBefore: 2, actualAfter: 2, actualDelta: 0,
+      success: false, usageAttempted: false, reason: 'm4_validation_failed',
+      snapshotAvailable: false,
+    });
+    expect(failure).toMatchObject({
+      m4Operation: 'summary_v3_generate',
+      m4StructuredDurationMonths: null,
+      countedAsSuccess: false,
+      diagnosticCompletenessPassed: true,
     });
   });
 

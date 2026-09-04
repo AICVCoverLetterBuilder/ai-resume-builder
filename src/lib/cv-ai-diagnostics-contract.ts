@@ -42,6 +42,7 @@ import {
 } from './cv-experience-locale-rejection-truth-328';
 import { localesEquivalent, normalizeLocaleKey, canonicalizeContentLocale } from './cv-content-locale';
 import { resolveLocaleCandidate } from './i18n/translations';
+import apiHostClassificationContract from './ai-api-host-classification-contract.json';
 void SUMMARY_EXPLICIT_SKILL_PROVENANCE_320_REVISION;
 void SUMMARY_CANDIDATE_PHASE_SEPARATION_320_REVISION;
 void GERMAN_SUMMARY_RECOVERY_DISPATCH_320_REVISION;
@@ -53,6 +54,81 @@ void SUMMARY_REPAIR_SELECTION_TRUTH_323_REVISION;
 void EXPERIENCE_FACT_AUTHORITY_TRUTH_327_REVISION;
 void EXPERIENCE_PHASE_LOCALE_TRUTH_328_REVISION;
 void EXPERIENCE_REJECTION_LINEAGE_TRUTH_328_REVISION;
+
+export type AiApiHostClassificationContract = Readonly<{
+  revision: string;
+  publicProductionApiOrigin: string;
+  protectedProjectApiOrigin: string;
+  previewDeploymentHostSuffixes: readonly string[];
+}>;
+
+function requireDiagnosticHttpsOrigin(value: unknown, key: string): string {
+  if (typeof value !== 'string') throw new Error(`API host contract ${key} must be a string`);
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error(`API host contract ${key} must be a valid HTTPS origin`);
+  }
+  if (parsed.protocol !== 'https:' || value !== parsed.origin) {
+    throw new Error(`API host contract ${key} must be a canonical HTTPS origin`);
+  }
+  return parsed.origin;
+}
+
+function requireDiagnosticPreviewSuffixes(value: unknown): readonly string[] {
+  const key = 'previewDeploymentHostSuffixes';
+  if (!Array.isArray(value)) throw new Error(`API host contract ${key} must be an array`);
+  if (value.length === 0) throw new Error(`API host contract ${key} must not be empty`);
+  const seen = new Set<string>();
+  const suffixes = value.map((entry, index) => {
+    if (typeof entry !== 'string' || entry.length === 0) {
+      throw new Error(`API host contract ${key}[${index}] must be a non-empty string`);
+    }
+    if (entry !== entry.toLowerCase()) {
+      throw new Error(`API host contract ${key}[${index}] must be lowercase`);
+    }
+    if (entry === 'vercel.app' || entry === '.vercel.app') {
+      throw new Error(`API host contract ${key}[${index}] is too broad`);
+    }
+    if (!/^-[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*\.vercel\.app$/u.test(entry)) {
+      throw new Error(`API host contract ${key}[${index}] must be a lowercase Vercel hostname suffix beginning with -`);
+    }
+    if (seen.has(entry)) throw new Error(`API host contract ${key} must not contain duplicates`);
+    seen.add(entry);
+    return entry;
+  });
+  return Object.freeze(suffixes);
+}
+
+/** Browser-side semantic reader for the same checked-in host contract consumed by Node packaging. */
+export function readAiApiHostClassificationContract(candidate: unknown): AiApiHostClassificationContract {
+  if (!candidate || typeof candidate !== 'object') throw new Error('API host contract must be an object');
+  const source = candidate as Record<string, unknown>;
+  const revision = typeof source.revision === 'string' ? source.revision.trim() : '';
+  if (!revision) throw new Error('API host contract revision is required');
+  const publicProductionApiOrigin = requireDiagnosticHttpsOrigin(
+    source.publicProductionApiOrigin,
+    'publicProductionApiOrigin',
+  );
+  const protectedProjectApiOrigin = requireDiagnosticHttpsOrigin(
+    source.protectedProjectApiOrigin,
+    'protectedProjectApiOrigin',
+  );
+  if (publicProductionApiOrigin === protectedProjectApiOrigin) {
+    throw new Error('API host contract public and protected origins must differ');
+  }
+  return Object.freeze({
+    revision,
+    publicProductionApiOrigin,
+    protectedProjectApiOrigin,
+    previewDeploymentHostSuffixes: requireDiagnosticPreviewSuffixes(source.previewDeploymentHostSuffixes),
+  });
+}
+
+const validatedApiHostClassificationContract = readAiApiHostClassificationContract(
+  apiHostClassificationContract,
+);
 
 /** Stable contract revision — must survive minification in internal builds. */
 export const CV_AI_DIAGNOSTIC_CONTRACT_REVISION = 'cv-ai-diagnostics-v2' as const;
@@ -273,6 +349,7 @@ export type CvAiDiagnosticBuildIdentity = {
   apiBaseUrlConfigured: boolean;
   capacitorServerUrlConfigured: boolean;
   apiHostClass: 'production' | 'preview' | 'relative' | 'none' | 'unknown';
+  apiHostClassificationContractRevision: string;
   sourceCommitShort: string | null;
   sourceCommitStatus: 'embedded' | 'unavailable_by_contract';
 };
@@ -352,12 +429,21 @@ export function classifyApiHostClass(apiBaseUrl: string): CvAiDiagnosticBuildIde
   const base = (apiBaseUrl || '').trim();
   if (!base) return 'relative';
   try {
-    const host = new URL(base).hostname;
-    if (!host) return 'unknown';
-    if (host.includes('-git-') && host.endsWith('.vercel.app')) return 'preview';
-    if (host.endsWith('.vercel.app') || host.includes('ai-resume') || host.includes('cv')) {
-      return 'production';
+    const parsed = new URL(base);
+    const host = parsed.hostname.toLowerCase();
+    if (!host || parsed.protocol !== 'https:' || (base !== parsed.origin && base !== `${parsed.origin}/`)) {
+      return 'unknown';
     }
+    const productionOrigins = [
+      validatedApiHostClassificationContract.publicProductionApiOrigin,
+      validatedApiHostClassificationContract.protectedProjectApiOrigin,
+    ];
+    if (productionOrigins.includes(parsed.origin)) return 'production';
+    if (validatedApiHostClassificationContract.previewDeploymentHostSuffixes
+      .some((suffix) => host.endsWith(suffix) && host.length > suffix.length)) return 'preview';
+    // Older immutable Vercel previews use a git-slug hostname rather than the
+    // project-scope suffix above. It is a deployment shape, not a product-name heuristic.
+    if (host.endsWith('.vercel.app') && host.includes('-git-')) return 'preview';
     return 'unknown';
   } catch {
     return 'unknown';
@@ -405,7 +491,8 @@ export function buildCvAiDiagnosticBuildIdentity(options?: {
     apiBaseUrlConfigured: Boolean(apiConfigured),
     capacitorServerUrlConfigured: Boolean(capacitorConfigured),
     apiHostClass: options?.apiHostClass
-      || (apiConfigured ? 'production' : (capacitorConfigured ? 'unknown' : 'relative')),
+      ?? (apiConfigured ? 'unknown' : (capacitorConfigured ? 'unknown' : 'relative')),
+    apiHostClassificationContractRevision: validatedApiHostClassificationContract.revision,
     sourceCommitShort: commit.sourceCommitShort,
     sourceCommitStatus: commit.sourceCommitStatus,
   };

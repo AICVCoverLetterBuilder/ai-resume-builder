@@ -193,8 +193,6 @@ export type SummaryAiDiagStage = {
   reason?: string;
 };
 
-type SummaryDiagnosticCompleteness = ReturnType<typeof checkSummaryDiagnosticCompleteness>;
-
 /** Read-only M4/legacy presentation projection; never reads or infers ledger state. */
 export type SummaryUsageDiagnosticView =
   | Readonly<{ kind: 'legacy'; before: number; after: number; delta: number }>
@@ -264,14 +262,293 @@ export function formatSummaryUsageDiagnosticView(view: SummaryUsageDiagnosticVie
   return `${view.before} → ${view.after} (Δ ${view.delta >= 0 ? '+' : ''}${view.delta})`;
 }
 
+/**
+ * This is the complete set of fields initialized by SummaryAiDiagnosticSession.
+ * Keep it explicit: a new constructor field is unclassified until it is added
+ * here and the focused coverage test deliberately fails. It is the one M4/V2
+ * applicability inventory, not a panel-local list.
+ */
+export const SUMMARY_AI_DIAGNOSTIC_CONSTRUCTOR_FIELDS = Object.freeze(`
+schemaVersion marker capturedAt appVersionCode appVersionName nextBuildId buildChannel requestedLocale uiLocale storedContentLocale detectedSourceLocale selectedGender templateId operationMode rewriteStyle requestIdHash summarySourcePresent summarySourceLength summarySourceHash previousSummaryUsedAsFactSource summaryV2FactIdPathActive serbianStructuredDomainGateApplicable hindiWarehouseGrammarFieldsApplicable serbianStructuredDomainGateEvaluated serbianStructuredDomainGatePassed serbianStructuredDomainCurrentRequiredFactCount serbianStructuredDomainCurrentCoveredFactCount serbianStructuredDomainPriorRequiredFactCount serbianStructuredDomainPriorCoveredFactCount serbianStructuredDomainGateFailureReasons serbianStructuredDomainCurrentRequiredFactIds serbianStructuredDomainCurrentCoveredFactIds serbianStructuredDomainCurrentMissingFactIds serbianStructuredDomainPriorRequiredFactIds serbianStructuredDomainPriorCoveredFactIds serbianStructuredDomainPriorMissingFactIds serbianStructuredDomainCanonicalFactIdsByEntryHash serbianStructuredDomainGateInvariantFailure serbianEntryOwnedBuilderAvailable serbianEntryOwnedBuilderAttempted serbianEntryOwnedBuilderSucceeded serbianEntryOwnedBuilderOutputHash serbianEntryOwnedBuilderOutputLength serbianEntryOwnedBuilderSentenceCount serbianEntryOwnedBuilderTypedFailureReason repairSkipped repairSkipReason repairDeferred repairDeferredReason serbianEnrichSkipped serbianEnrichSkipReason serbianStructuredPayloadCreated serbianStructuredPayloadCurrentFactCount serbianStructuredPayloadPriorFactCount candidateTransformationKind candidateTransformationBeforeHash candidateTransformationAfterHash currentExperienceEntryCount currentExperienceEntryIdHashes currentRoleEntryIdHash currentRoleCandidateCount currentRoleResolutionRule summarySelectedEntryIdHashes summaryOmittedEntryIdHashes currentJobContextHash snapshotCreatedBeforeRequest snapshotMatchesApplyContext experienceFactCountsByEntryHash experienceCanonicalFactCountsByEntryHash experienceLocalesByEntryHash declaredExperienceLocaleByEntryHash detectedExperienceTextLocaleByEntryHash detectedExperienceLocaleConfidenceByEntryHash effectiveSourceLocaleByEntryHash effectiveSourceLocaleAuthorityByEntryHash localizedManifestLocaleByEntryHash localizationRequiredByEntryHash sameLocaleBypassUsedByEntryHash localizedManifestCacheHitByEntryHash localizationPrimaryFailureReason localizationRecoveryAttempted localizationRecoveryAccepted localizationSelectedEntryCount localizationSameLocaleBypassCount localizationValidatedCacheHitCount localizationProviderEntryCount localizationRecoveryEntryCount summaryExperienceLocaleDiagnosticsRevision summaryDurationSemanticNativeSurfaceRevision employmentStatesByEntryHash crossEntryFactCollisionCount crossEntryLeakageDetected leakedSourceEntryIdHashes leakedTargetEntryIdHash structuredDurationOwner structuredDurationMonths localizedDurationPhraseHash providerDurationClaimCount sourceDurationClaimCount fallbackDurationClaimCount durationClaimCountBeforeStrip numericDurationClaimCount writtenDurationClaimCount durationClaimsRemovedBeforeInsert durationClaimCountAfterInsert durationClaimCountAfterFinalize independentFinalDurationClaimCount visibleDurationClaimCountAfterApply visibleDurationMatchesFinalizedCount durationDetectorAgreement durationInsertedExactlyOnce durationFinalizerIdempotent finalDurationRepresentationKind finalDurationRepresentationCount finalDurationHybridDetected visibleDurationRepresentationKind visibleDurationRepresentationCount visibleDurationHybridDetected durationSemanticValueMonths durationRepresentationAgreement finalRenderedDurationSemanticMonths visibleRenderedDurationSemanticMonths finalDurationSemanticDeltaMonths visibleDurationSemanticDeltaMonths finalDurationSemanticAgreementPassed visibleDurationSemanticAgreementPassed contentLocaleBeforeRequest contentLocaleAfterApply storedContentLocaleBeforeRequest detectedVisibleContentLocaleBeforeRequest candidateTargetLocale finalContentLocaleAfterApply finalCandidateSource providerCandidatePresent deterministicCandidatePresent fallbackCandidatePresent providerHttpStatus providerResponseKind providerLocaleValidationPassed providerSentenceCount providerDuplicateSentenceCount providerUnsupportedClaimCount providerCrossEntryLeakageCount repairAttempted repairApplied fallbackAttempted fallbackApplied fallbackKind fallbackSentenceCount deterministicCandidateSentenceCount canonicalGroundingEnabled authoritativeEntryCount staleFactCandidateCount staleFactsRejectedCount unsupportedClaimCount duplicateSentenceCount nearDuplicateSentenceCount repeatedClauseCount currentEmploymentIntroductionCount repeatedEmploymentFactCount repeatedProfessionalLabelCount currentRoleConcreteFactCoverage genericizedMaterialFactCount priorRoleGroundingPassed currentRoleTitlePresent currentRoleTitleSource currentRoleEntryIdHash currentRoleTitleMatchesStructuredRole currentRoleOmittedDetected currentSlotForeignFactCount priorSlotForeignFactCount semanticCrossEntryLeakageDetected duplicatedPriorRoleFactCount priorRoleSemanticDuplicationDetected finalUnitRoleSlots summaryPipelineRevision summaryBuilderRevision summaryUnitSplitterRevision summaryGroundingRevision summaryDurationFinalizerRevision providerCandidateHash providerCandidateNormalizedHash deterministicCandidateHash deterministicCandidateNormalizedHash durationPass1CandidateHash durationPass2CandidateHash durationPass1Hash durationPass2Hash groundingInputCandidateHash finalValidatedCandidateHash visibleCandidateHashAfterApply providerCandidateEqualsDeterministicCandidate deterministicCandidateEqualsGroundingInput groundingInputEqualsFinalValidatedCandidate durationSecondPassChanged durationSecondPassChangeReason contextCurrentRoleResolved contextCurrentRoleLocalized candidateCurrentRoleTitlePresent candidateCurrentEmploymentIntroductionCount candidateCurrentRoleTitleMatchesStructuredRole candidateCurrentRoleOmittedDetected deterministicCurrentEntryIdHash deterministicPriorEntryIdHashes currentEntryMaterialKeys priorEntryMaterialKeys finalSentenceHashes finalSentenceRoleSlots flattenedFactArrayUsed previousSummaryTextUsedByDeterministicFallback providerTextUsedByDeterministicFallback perspectiveMode sourcePerspectiveMode providerPerspectiveMode finalPerspectiveMode perspectiveNormalizationAttempted perspectiveNormalizationApplied perspectiveValidationPassed genderValidationPassed tenseValidationPassed localeValidationPassed grammarValidationPassed durationValidationPassed groundingValidationPassed unitCount detectedLocaleByUnit detectedScriptByUnit wrongLocaleUnitCount wrongScriptUnitCount mixedLanguageUnitCount sourceLanguageLeakageDetected unexpectedLocaleCodes targetLocalePurityPassed targetScript finalPostconditionsPassed raceGuardResult visibleApplySucceeded visibleSummaryMatchesFinalHash contentLocaleUpdatedAfterApply countedAsSuccess usageCountBefore usageCountAfter finalTypedFailureReason rejectionStage stages
+`.trim().split(/\s+/u)
+  .filter((field, index, fields) => index === fields.indexOf(field))
+  .concat('currentRoleTitleEntryIdHash'));
+
+export type SummaryM4FieldAuthority =
+  | 'SHARED_AUTHORITATIVE'
+  | 'M4_AUTHORITATIVE'
+  | 'V2_AUTHORITATIVE'
+  | 'M4_NOT_APPLICABLE'
+  | 'PRESENT_BUT_NOT_EVALUATED'
+  | 'DEPRECATED';
+
+const M4_SHARED_CONSTRUCTOR_FIELDS = Object.freeze(`
+schemaVersion marker capturedAt appVersionCode appVersionName nextBuildId buildChannel requestedLocale uiLocale storedContentLocale detectedSourceLocale selectedGender templateId operationMode rewriteStyle requestIdHash summarySourcePresent summarySourceLength summarySourceHash previousSummaryUsedAsFactSource currentExperienceEntryCount currentExperienceEntryIdHashes currentRoleEntryIdHash currentRoleCandidateCount currentRoleResolutionRule summarySelectedEntryIdHashes summaryOmittedEntryIdHashes currentJobContextHash snapshotCreatedBeforeRequest snapshotMatchesApplyContext experienceFactCountsByEntryHash experienceCanonicalFactCountsByEntryHash experienceLocalesByEntryHash declaredExperienceLocaleByEntryHash detectedExperienceTextLocaleByEntryHash detectedExperienceLocaleConfidenceByEntryHash effectiveSourceLocaleByEntryHash effectiveSourceLocaleAuthorityByEntryHash localizationRequiredByEntryHash employmentStatesByEntryHash contentLocaleBeforeRequest storedContentLocaleBeforeRequest detectedVisibleContentLocaleBeforeRequest finalCandidateSource finalPostconditionsPassed raceGuardResult visibleApplySucceeded countedAsSuccess usageCountBefore usageCountAfter finalTypedFailureReason rejectionStage stages
+`.trim().split(/\s+/u));
+
+/** Legacy finalizer fields with no M4 authority, including the whole duration family. */
+const M4_NOT_APPLICABLE_CONSTRUCTOR_FIELDS = Object.freeze(`
+structuredDurationOwner structuredDurationMonths localizedDurationPhraseHash providerDurationClaimCount sourceDurationClaimCount fallbackDurationClaimCount durationClaimCountBeforeStrip numericDurationClaimCount writtenDurationClaimCount durationClaimsRemovedBeforeInsert durationClaimCountAfterInsert durationClaimCountAfterFinalize independentFinalDurationClaimCount visibleDurationClaimCountAfterApply visibleDurationMatchesFinalizedCount durationDetectorAgreement durationInsertedExactlyOnce durationFinalizerIdempotent finalDurationRepresentationKind finalDurationRepresentationCount finalDurationHybridDetected visibleDurationRepresentationKind visibleDurationRepresentationCount visibleDurationHybridDetected durationSemanticValueMonths durationRepresentationAgreement finalRenderedDurationSemanticMonths visibleRenderedDurationSemanticMonths finalDurationSemanticDeltaMonths visibleDurationSemanticDeltaMonths finalDurationSemanticAgreementPassed visibleDurationSemanticAgreementPassed summaryDurationFinalizerRevision durationPass1CandidateHash durationPass2CandidateHash durationPass1Hash durationPass2Hash durationSecondPassChanged durationSecondPassChangeReason durationValidationPassed contentLocaleAfterApply finalContentLocaleAfterApply visibleSummaryMatchesFinalHash contentLocaleUpdatedAfterApply
+`.trim().split(/\s+/u));
+
+/** Terminal-only receipt facts populated from real M4 response evidence. */
+const M4_TERMINAL_RECEIPT_FIELDS = Object.freeze([
+  'meaningfulChangeDetected',
+  'noOpDetected',
+  'apiResponseKind',
+  'serverFallbackUsed',
+  'clientFallbackUsed',
+  'providerCandidatePresent',
+  'providerCandidateHash',
+  'providerResponseKind',
+  'providerHttpStatus',
+  'repairAttempted',
+] as const);
+export const M4_SUMMARY_TERMINAL_RECEIPT_FIELDS = M4_TERMINAL_RECEIPT_FIELDS;
+const M4_TERMINAL_RECEIPT_FIELD_SET = new Set<string>(M4_TERMINAL_RECEIPT_FIELDS);
+
+/** Values may exist in a V2 draft, but M4 never evaluates or exports them. */
+const M4_PRESENT_BUT_NOT_EVALUATED_CONSTRUCTOR_FIELDS = Object.freeze(`
+providerCandidatePresent deterministicCandidatePresent fallbackCandidatePresent providerHttpStatus providerResponseKind providerLocaleValidationPassed providerSentenceCount providerDuplicateSentenceCount providerUnsupportedClaimCount providerCrossEntryLeakageCount repairAttempted repairApplied fallbackAttempted fallbackApplied fallbackKind fallbackSentenceCount deterministicCandidateSentenceCount providerCandidateHash providerCandidateNormalizedHash deterministicCandidateHash deterministicCandidateNormalizedHash groundingInputCandidateHash finalValidatedCandidateHash visibleCandidateHashAfterApply providerCandidateEqualsDeterministicCandidate deterministicCandidateEqualsGroundingInput groundingInputEqualsFinalValidatedCandidate candidateTransformationKind candidateTransformationBeforeHash candidateTransformationAfterHash previousSummaryTextUsedByDeterministicFallback providerTextUsedByDeterministicFallback
+`.trim().split(/\s+/u).filter((field) => !M4_TERMINAL_RECEIPT_FIELD_SET.has(field)));
+
+const M4_DEPRECATED_CONSTRUCTOR_FIELDS = Object.freeze([
+  'summaryV2FactIdPathActive',
+] as const);
+
+const M4_SHARED_FIELD_SET = new Set(M4_SHARED_CONSTRUCTOR_FIELDS);
+const M4_NOT_APPLICABLE_FIELD_SET = new Set(M4_NOT_APPLICABLE_CONSTRUCTOR_FIELDS);
+const M4_PRESENT_BUT_NOT_EVALUATED_FIELD_SET = new Set(M4_PRESENT_BUT_NOT_EVALUATED_CONSTRUCTOR_FIELDS);
+const M4_DEPRECATED_FIELD_SET = new Set<string>(M4_DEPRECATED_CONSTRUCTOR_FIELDS);
+
+/** Deliberate V2 authority decisions. Never derive this list from leftovers. */
+const M4_V2_AUTHORITATIVE_CONSTRUCTOR_FIELDS = Object.freeze(`
+serbianStructuredDomainGateApplicable hindiWarehouseGrammarFieldsApplicable serbianStructuredDomainGateEvaluated serbianStructuredDomainGatePassed serbianStructuredDomainCurrentRequiredFactCount serbianStructuredDomainCurrentCoveredFactCount serbianStructuredDomainPriorRequiredFactCount serbianStructuredDomainPriorCoveredFactCount serbianStructuredDomainGateFailureReasons serbianStructuredDomainCurrentRequiredFactIds serbianStructuredDomainCurrentCoveredFactIds serbianStructuredDomainCurrentMissingFactIds serbianStructuredDomainPriorRequiredFactIds serbianStructuredDomainPriorCoveredFactIds serbianStructuredDomainPriorMissingFactIds serbianStructuredDomainCanonicalFactIdsByEntryHash serbianStructuredDomainGateInvariantFailure serbianEntryOwnedBuilderAvailable serbianEntryOwnedBuilderAttempted serbianEntryOwnedBuilderSucceeded serbianEntryOwnedBuilderOutputHash serbianEntryOwnedBuilderOutputLength serbianEntryOwnedBuilderSentenceCount serbianEntryOwnedBuilderTypedFailureReason repairSkipped repairSkipReason repairDeferred repairDeferredReason serbianEnrichSkipped serbianEnrichSkipReason serbianStructuredPayloadCreated serbianStructuredPayloadCurrentFactCount serbianStructuredPayloadPriorFactCount localizedManifestLocaleByEntryHash sameLocaleBypassUsedByEntryHash localizedManifestCacheHitByEntryHash localizationPrimaryFailureReason localizationRecoveryAttempted localizationRecoveryAccepted localizationSelectedEntryCount localizationSameLocaleBypassCount localizationValidatedCacheHitCount localizationProviderEntryCount localizationRecoveryEntryCount summaryExperienceLocaleDiagnosticsRevision summaryDurationSemanticNativeSurfaceRevision crossEntryFactCollisionCount crossEntryLeakageDetected leakedSourceEntryIdHashes leakedTargetEntryIdHash candidateTargetLocale canonicalGroundingEnabled authoritativeEntryCount staleFactCandidateCount staleFactsRejectedCount unsupportedClaimCount duplicateSentenceCount nearDuplicateSentenceCount repeatedClauseCount currentEmploymentIntroductionCount repeatedEmploymentFactCount repeatedProfessionalLabelCount currentRoleConcreteFactCoverage genericizedMaterialFactCount priorRoleGroundingPassed currentRoleTitlePresent currentRoleTitleSource currentRoleTitleMatchesStructuredRole currentRoleOmittedDetected currentSlotForeignFactCount priorSlotForeignFactCount semanticCrossEntryLeakageDetected duplicatedPriorRoleFactCount priorRoleSemanticDuplicationDetected finalUnitRoleSlots summaryPipelineRevision summaryBuilderRevision summaryUnitSplitterRevision summaryGroundingRevision contextCurrentRoleResolved contextCurrentRoleLocalized candidateCurrentRoleTitlePresent candidateCurrentEmploymentIntroductionCount candidateCurrentRoleTitleMatchesStructuredRole candidateCurrentRoleOmittedDetected deterministicCurrentEntryIdHash deterministicPriorEntryIdHashes currentEntryMaterialKeys priorEntryMaterialKeys finalSentenceHashes finalSentenceRoleSlots flattenedFactArrayUsed perspectiveMode sourcePerspectiveMode providerPerspectiveMode finalPerspectiveMode perspectiveNormalizationAttempted perspectiveNormalizationApplied perspectiveValidationPassed genderValidationPassed tenseValidationPassed localeValidationPassed grammarValidationPassed groundingValidationPassed unitCount detectedLocaleByUnit detectedScriptByUnit wrongLocaleUnitCount wrongScriptUnitCount mixedLanguageUnitCount sourceLanguageLeakageDetected unexpectedLocaleCodes targetLocalePurityPassed targetScript currentRoleTitleEntryIdHash
+`.trim().split(/\s+/u));
+const M4_V2_AUTHORITATIVE_FIELD_SET = new Set(M4_V2_AUTHORITATIVE_CONSTRUCTOR_FIELDS);
+
+/** Fields emitted only by the M4 terminal receipt or common commit envelope. */
+const M4_NON_CONSTRUCTOR_AUTHORITATIVE_FIELDS = Object.freeze(`
+operationKind diagnosticContractRevision compiledDiagnosticMarker assetRevision cvAiDiagnosticsV2299Revision internalDiagnosticsEnabled internalResetEnabled internalBuildContractUsed serverUrlConfigured apiBaseUrlConfigured capacitorServerUrlConfigured apiHostClass apiHostClassificationContractRevision sourceCommitShort sourceCommitStatus diagnosticInvariantCheckPassed diagnosticInvariantFailureCount diagnosticInvariantFailures diagnosticCompletenessPassed missingRequiredDiagnosticFields nullRequiredDiagnosticFields notApplicableDiagnosticFieldViolations unexpectedDiagnosticFieldTypes diagnosticPayloadByteSize diagnosticPayloadTruncated diagnosticTruncatedSection diagnosticPrivacyViolations privacyCheckPassed m4Operation m4LegacyV2DiagnosticFieldsApplicable m4SourceWasEmpty m4StructuredDurationMonths m4AvailableFactCount m4RequiredFactCount m4CoveredFactCount m4OwnershipResult m4RouteHttpStatus m4Writer m4Evaluator m4ProviderFailure m4Phases m4CandidatePresent m4CandidateHash m4CandidateLength m4CandidateUnitCount m4CandidateUnitHashes m4CandidateUnitLengths m4SemanticViolationCount m4SemanticViolationCodes m4LanguageQualityViolationCount m4LanguageQualityViolationCodes m4ViolationFactIdHashesByCode m4ViolationEntryIdHashesByCode m4PrimaryValidationRejectionCode m4RepairAttempted m4ApplyAuthorized m4ApplyAttempted m4ApplyCommitted m4PersistenceAttempted m4PersistenceResult m4CanonicalApplyAttempted m4CanonicalApplyResult m4UsageAttempted m4UsageResult m4UsageForwardWriteResult m4UsageVerificationResult m4UsageRollbackAttempted m4UsageRollbackResult m4UsageCountAtRequest m4UsageFinalStateKnown m4ActualUsageBefore m4ActualUsageAfter m4ActualUsageDelta m4RollbackAttempted m4CommittedSummaryHash m4CommittedContentLocale m4CommitCandidateMatched m4RollbackResult m4V2FallthroughCount m4UsageDelta
+`.trim().split(/\s+/u));
+
+const M4_NON_CONSTRUCTOR_FIELD_SET = new Set([
+  ...M4_NON_CONSTRUCTOR_AUTHORITATIVE_FIELDS,
+  ...M4_TERMINAL_RECEIPT_FIELDS,
+]);
+
+export const M4_SUMMARY_FIELD_AUTHORITY = Object.freeze({
+  SHARED_AUTHORITATIVE: M4_SHARED_CONSTRUCTOR_FIELDS,
+  M4_AUTHORITATIVE: Object.freeze([
+    ...M4_NON_CONSTRUCTOR_AUTHORITATIVE_FIELDS,
+    ...M4_TERMINAL_RECEIPT_FIELDS,
+  ]),
+  V2_AUTHORITATIVE: M4_V2_AUTHORITATIVE_CONSTRUCTOR_FIELDS,
+  M4_NOT_APPLICABLE: M4_NOT_APPLICABLE_CONSTRUCTOR_FIELDS,
+  PRESENT_BUT_NOT_EVALUATED: M4_PRESENT_BUT_NOT_EVALUATED_CONSTRUCTOR_FIELDS,
+  DEPRECATED: M4_DEPRECATED_CONSTRUCTOR_FIELDS,
+});
+
+const M4_OPTIONAL_EXTERNAL_FIELDS = Object.freeze([
+  'cvAiDiagnosticsV2299Revision',
+  'diagnosticTruncatedSection',
+] as const);
+export const M4_SUMMARY_EXTERNAL_REQUIRED_FIELDS = Object.freeze([
+  ...M4_SHARED_CONSTRUCTOR_FIELDS,
+  ...M4_NON_CONSTRUCTOR_AUTHORITATIVE_FIELDS,
+  ...M4_TERMINAL_RECEIPT_FIELDS,
+].filter((field) => !M4_OPTIONAL_EXTERNAL_FIELDS.includes(
+  field as (typeof M4_OPTIONAL_EXTERNAL_FIELDS)[number],
+)));
+
+/** Kept as a compatibility export; it now covers every non-shared constructor field. */
+export const M4_LEGACY_V2_DIAGNOSTIC_FIELDS = Object.freeze(
+  SUMMARY_AI_DIAGNOSTIC_CONSTRUCTOR_FIELDS.filter((field) => !M4_SHARED_FIELD_SET.has(field)
+    && !M4_TERMINAL_RECEIPT_FIELD_SET.has(field)),
+);
+
+export function getM4SummaryFieldAuthority(field: string): SummaryM4FieldAuthority | null {
+  if (M4_SHARED_FIELD_SET.has(field)) return 'SHARED_AUTHORITATIVE';
+  if (M4_NON_CONSTRUCTOR_FIELD_SET.has(field)) return 'M4_AUTHORITATIVE';
+  if (M4_V2_AUTHORITATIVE_FIELD_SET.has(field)) return 'V2_AUTHORITATIVE';
+  if (M4_NOT_APPLICABLE_FIELD_SET.has(field)) return 'M4_NOT_APPLICABLE';
+  if (M4_PRESENT_BUT_NOT_EVALUATED_FIELD_SET.has(field)) return 'PRESENT_BUT_NOT_EVALUATED';
+  if (M4_DEPRECATED_FIELD_SET.has(field)) return 'DEPRECATED';
+  return null;
+}
+
+/** Strict assertion boundary for tests/build checks; production projection never calls it. */
+export function assertM4SummaryFieldAuthorityCoverage(fields: readonly string[]): void {
+  const unclassified = dedupeStableStrings(fields.filter((field) => !getM4SummaryFieldAuthority(field)));
+  if (unclassified.length > 0) {
+    throw new Error(`unclassified M4 diagnostic fields: ${unclassified.join(',')}`);
+  }
+  const categories = Object.values(M4_SUMMARY_FIELD_AUTHORITY);
+  const duplicateFields = dedupeStableStrings(
+    categories.flat().filter((field, index, all) => all.indexOf(field) !== index),
+  );
+  if (duplicateFields.length > 0) {
+    throw new Error(`duplicate M4 diagnostic field authority: ${duplicateFields.join(',')}`);
+  }
+}
+
+export function isM4LegacyV2DiagnosticFieldsApplicable(trace: Record<string, unknown>): boolean {
+  return trace.m4Operation !== 'summary_v3_generate'
+    && trace.m4LegacyV2DiagnosticFieldsApplicable !== false;
+}
+
+export type M4SummaryApplicabilityCheck = Readonly<{
+  unclassifiedFields: readonly string[];
+  notApplicableDiagnosticFieldViolations: readonly string[];
+  unexpectedDiagnosticFieldTypes: readonly string[];
+}>;
+
+/** Validates the external M4 view without overloading null-required diagnostics. */
+export function checkM4SummaryDiagnosticApplicability(
+  trace: Readonly<Record<string, unknown>>,
+): M4SummaryApplicabilityCheck {
+  if (isM4LegacyV2DiagnosticFieldsApplicable(trace as Record<string, unknown>)) {
+    return Object.freeze({ unclassifiedFields: [], notApplicableDiagnosticFieldViolations: [], unexpectedDiagnosticFieldTypes: [] });
+  }
+  const unclassifiedFields: string[] = [];
+  const notApplicableDiagnosticFieldViolations: string[] = [];
+  for (const field of Object.keys(trace)) {
+    const authority = getM4SummaryFieldAuthority(field);
+    if (!authority) unclassifiedFields.push(field);
+    else if (authority === 'V2_AUTHORITATIVE'
+      || authority === 'M4_NOT_APPLICABLE'
+      || authority === 'PRESENT_BUT_NOT_EVALUATED'
+      || authority === 'DEPRECATED') {
+      notApplicableDiagnosticFieldViolations.push(field);
+    }
+  }
+  const unexpectedDiagnosticFieldTypes: string[] = [];
+  if (trace.m4Operation !== 'summary_v3_generate') {
+    unexpectedDiagnosticFieldTypes.push('m4Operation:not_summary_v3_generate');
+  }
+  if (trace.m4LegacyV2DiagnosticFieldsApplicable !== false) {
+    unexpectedDiagnosticFieldTypes.push('m4LegacyV2DiagnosticFieldsApplicable:not_false');
+  }
+  return Object.freeze({
+    unclassifiedFields: dedupeStableStrings(unclassifiedFields),
+    notApplicableDiagnosticFieldViolations: dedupeStableStrings(notApplicableDiagnosticFieldViolations),
+    unexpectedDiagnosticFieldTypes: dedupeStableStrings(unexpectedDiagnosticFieldTypes),
+  });
+}
+
+export type SummaryM4ProjectedDiagnostic = Readonly<Record<string, unknown> & {
+  m4Operation: 'summary_v3_generate';
+  m4LegacyV2DiagnosticFieldsApplicable: false;
+}>;
+
+export type SummaryDiagnosticProjectionResult =
+  | Readonly<{
+      ok: true;
+      variant: 'v2';
+      trace: Readonly<Record<string, unknown>>;
+      unclassifiedFields: readonly [];
+      notApplicableFieldViolations: readonly [];
+    }>
+  | Readonly<{
+      ok: true;
+      variant: 'm4';
+      trace: SummaryM4ProjectedDiagnostic;
+      unclassifiedFields: readonly [];
+      notApplicableFieldViolations: readonly [];
+    }>
+  | Readonly<{
+      ok: false;
+      variant: 'm4';
+      trace: SummaryM4ProjectedDiagnostic;
+      unclassifiedFields: readonly string[];
+      notApplicableFieldViolations: readonly string[];
+      projectionFailureReason:
+        | 'unclassified_field'
+        | 'invalid_field_authority'
+        | 'projection_contract_mismatch';
+    }>;
+
+function isSummaryM4ProjectedDiagnostic(
+  trace: Readonly<Record<string, unknown>>,
+): trace is SummaryM4ProjectedDiagnostic {
+  return trace.m4Operation === 'summary_v3_generate'
+    && trace.m4LegacyV2DiagnosticFieldsApplicable === false;
+}
+
+/** Applies the sole positive M4 external-view authority before every persisted view. */
+export function projectSummaryAiDiagnosticApplicability(
+  trace: Readonly<Record<string, unknown>>,
+): SummaryDiagnosticProjectionResult {
+  if (isM4LegacyV2DiagnosticFieldsApplicable(trace)) {
+    return Object.freeze({
+      ok: true,
+      variant: 'v2',
+      trace: Object.freeze({ ...trace }),
+      unclassifiedFields: [] as const,
+      notApplicableFieldViolations: [] as const,
+    });
+  }
+  const projected: Record<string, unknown> = { ...trace };
+  const unclassifiedFields: string[] = [];
+  for (const field of Object.keys(projected)) {
+    const authority = getM4SummaryFieldAuthority(field);
+    if (!authority) {
+      unclassifiedFields.push(field);
+      delete projected[field];
+      continue;
+    }
+    if (authority === 'V2_AUTHORITATIVE'
+      || authority === 'M4_NOT_APPLICABLE'
+      || authority === 'PRESENT_BUT_NOT_EVALUATED'
+      || authority === 'DEPRECATED') {
+      delete projected[field];
+    }
+  }
+  const safeTrace = Object.freeze(projected);
+  if (!isSummaryM4ProjectedDiagnostic(safeTrace)) {
+    const normalizedTrace = Object.freeze({
+      ...safeTrace,
+      m4Operation: 'summary_v3_generate' as const,
+      m4LegacyV2DiagnosticFieldsApplicable: false as const,
+    });
+    return Object.freeze({
+      ok: false,
+      variant: 'm4',
+      trace: normalizedTrace,
+      unclassifiedFields: dedupeStableStrings(unclassifiedFields),
+      notApplicableFieldViolations: [],
+      projectionFailureReason: 'projection_contract_mismatch' as const,
+    });
+  }
+  const unknown = dedupeStableStrings(unclassifiedFields);
+  if (unknown.length > 0) {
+    return Object.freeze({
+      ok: false,
+      variant: 'm4',
+      trace: safeTrace,
+      unclassifiedFields: unknown,
+      notApplicableFieldViolations: [],
+      projectionFailureReason: 'unclassified_field' as const,
+    });
+  }
+  return Object.freeze({
+    ok: true,
+    variant: 'm4',
+    trace: safeTrace,
+    unclassifiedFields: [] as const,
+    notApplicableFieldViolations: [] as const,
+  });
+}
+
 /** M4 has explicit shared and M4-owned requirements; V2-only fields are absent. */
 const M4_DIAGNOSTIC_APPLICABILITY = Object.freeze({
   sharedRequired: Object.freeze([
     'diagnosticContractRevision', 'schemaVersion', 'requestedLocale', 'finalCandidateSource',
-    'providerCandidatePresent', 'deterministicCandidatePresent', 'countedAsSuccess',
+    'countedAsSuccess',
     'visibleApplySucceeded', 'meaningfulChangeDetected',
     'noOpDetected', 'apiResponseKind', 'serverFallbackUsed', 'clientFallbackUsed',
-    'apiBaseUrlConfigured', 'capacitorServerUrlConfigured', 'sourceCommitStatus',
+    'apiBaseUrlConfigured', 'capacitorServerUrlConfigured', 'apiHostClassificationContractRevision',
+    'sourceCommitStatus',
   ] as const),
   m4Required: Object.freeze([
     'm4Operation', 'm4LegacyV2DiagnosticFieldsApplicable', 'm4SourceWasEmpty', 'm4OwnershipResult',
@@ -287,6 +564,7 @@ const M4_DIAGNOSTIC_APPLICABILITY = Object.freeze({
   nullableWhenUnknown: Object.freeze([
     'usageCountBefore', 'usageCountAfter', 'm4UsageCountAtRequest', 'm4UsageFinalStateKnown',
     'm4ActualUsageBefore', 'm4ActualUsageAfter', 'm4ActualUsageDelta', 'm4UsageDelta',
+    'm4StructuredDurationMonths',
   ] as const),
 });
 
@@ -296,9 +574,17 @@ const M4_DIAGNOSTIC_APPLICABILITY = Object.freeze({
  * duration-owner fields are explicitly inapplicable rather than fabricated.
  * The shared contract still checks every route-independent field and marker.
  */
-function checkM4SummaryDiagnosticCompleteness(
+type M4SummaryDiagnosticCompleteness = Readonly<{
+  passed: boolean;
+  missingRequiredDiagnosticFields: string[];
+  nullRequiredDiagnosticFields: string[];
+  notApplicableDiagnosticFieldViolations: string[];
+  unexpectedDiagnosticFieldTypes: string[];
+}>;
+
+export function checkM4SummaryDiagnosticCompleteness(
   trace: Record<string, unknown>,
-): SummaryDiagnosticCompleteness {
+): M4SummaryDiagnosticCompleteness {
   const missing: string[] = [];
   const nullish: string[] = [];
   const requirePresent = (key: string) => {
@@ -314,16 +600,18 @@ function checkM4SummaryDiagnosticCompleteness(
   for (const key of M4_DIAGNOSTIC_APPLICABILITY.sharedRequired) requireValue(key);
   for (const key of M4_DIAGNOSTIC_APPLICABILITY.m4Required) requireValue(key);
 
-  const noCandidate = trace.finalCandidateSource === 'none';
-  for (const key of [
-    'grammarValidationPassed',
-    'groundingValidationPassed',
-    'durationValidationPassed',
-  ]) {
-    requirePresent(key);
-    if (!noCandidate && (trace[key] === null || trace[key] === undefined)) {
-      nullish.push(key);
-    }
+  const applicability = checkM4SummaryDiagnosticApplicability(trace);
+  const unexpectedTypes = [...applicability.unexpectedDiagnosticFieldTypes];
+  const structuredDuration = trace.m4StructuredDurationMonths;
+  if (structuredDuration !== null && structuredDuration !== undefined
+    && (typeof structuredDuration !== 'number'
+      || !Number.isFinite(structuredDuration)
+      || !Number.isInteger(structuredDuration)
+      || structuredDuration < 0)) {
+    unexpectedTypes.push('m4StructuredDurationMonths:not_nonnegative_integer_or_null');
+  }
+  if (trace.countedAsSuccess === true && structuredDuration === null) {
+    unexpectedTypes.push('m4StructuredDurationMonths:null_on_success');
   }
 
   const markerCheck = validateCvAiDiagnosticMarkerField({
@@ -354,13 +642,23 @@ function checkM4SummaryDiagnosticCompleteness(
   for (const key of M4_DIAGNOSTIC_APPLICABILITY.nullableWhenUnknown) requirePresent(key);
 
   return {
-    passed: missing.length === 0 && nullish.length === 0,
+    passed: missing.length === 0
+      && nullish.length === 0
+      && applicability.unclassifiedFields.length === 0
+      && applicability.notApplicableDiagnosticFieldViolations.length === 0
+      && unexpectedTypes.length === 0,
     missingRequiredDiagnosticFields: dedupeStableStrings(missing),
     nullRequiredDiagnosticFields: dedupeStableStrings(nullish),
+    notApplicableDiagnosticFieldViolations: [
+      ...applicability.unclassifiedFields,
+      ...applicability.notApplicableDiagnosticFieldViolations,
+    ],
+    unexpectedDiagnosticFieldTypes: dedupeStableStrings(unexpectedTypes),
   };
 }
 
-export type SummaryAiDiagnosticTrace = {
+/** Full mutable session shape. Persisted consumers use the discriminated external union below. */
+export type SummaryAiDiagnosticDraft = {
   schemaVersion: typeof SUMMARY_AI_TRACE_SCHEMA_VERSION;
   marker: string;
   capturedAt: string;
@@ -663,8 +961,8 @@ export type SummaryAiDiagnosticTrace = {
   perspectiveContractMatched?: boolean | null;
   perspectiveNormalizationAttempted: boolean | null;
   perspectiveNormalizationApplied: boolean | null;
-  perspectiveValidationPassed: boolean;
-  genderValidationPassed: boolean;
+  perspectiveValidationPassed: boolean | null;
+  genderValidationPassed: boolean | null;
   roleTitleGenderValidationPassed?: boolean | null;
   roleTitleSurfaceEvidence?: Array<{
     entryIdHash: string;
@@ -673,8 +971,8 @@ export type SummaryAiDiagnosticTrace = {
     expectedSurfaceHash: string | null;
     actualSurfaceHash: string;
   }> | null;
-  tenseValidationPassed: boolean;
-  localeValidationPassed: boolean;
+  tenseValidationPassed: boolean | null;
+  localeValidationPassed: boolean | null;
   /** Null means no candidate existed, so this candidate-only gate was not evaluated. */
   grammarValidationPassed: boolean | null;
   /** Null means no candidate existed, so this candidate-only gate was not evaluated. */
@@ -682,15 +980,15 @@ export type SummaryAiDiagnosticTrace = {
   /** Null means no candidate existed, so this candidate-only gate was not evaluated. */
   groundingValidationPassed: boolean | null;
   /** Per-sentence target-locale purity (build 271/272). */
-  unitCount: number;
-  detectedLocaleByUnit: Array<string | null>;
-  detectedScriptByUnit: string[];
-  wrongLocaleUnitCount: number;
-  wrongScriptUnitCount: number;
-  mixedLanguageUnitCount: number;
-  sourceLanguageLeakageDetected: boolean;
-  unexpectedLocaleCodes: string[];
-  targetLocalePurityPassed: boolean;
+  unitCount: number | null;
+  detectedLocaleByUnit: Array<string | null> | null;
+  detectedScriptByUnit: string[] | null;
+  wrongLocaleUnitCount: number | null;
+  wrongScriptUnitCount: number | null;
+  mixedLanguageUnitCount: number | null;
+  sourceLanguageLeakageDetected: boolean | null;
+  unexpectedLocaleCodes: string[] | null;
+  targetLocalePurityPassed: boolean | null;
   targetScript: string | null;
   structuredRoleLocaleValidationPassed?: boolean | null;
   currentRoleLocalizationValidationPassed?: boolean | null;
@@ -713,7 +1011,7 @@ export type SummaryAiDiagnosticTrace = {
   raceGuardResult: 'ok' | 'fail' | 'skipped';
   visibleApplySucceeded: boolean;
   visibleSummaryMatchesFinalHash: boolean | null;
-  contentLocaleUpdatedAfterApply: boolean;
+  contentLocaleUpdatedAfterApply: boolean | null;
   countedAsSuccess: boolean;
   usageCountBefore: number | null;
   usageCountAfter: number | null;
@@ -766,6 +1064,7 @@ export type SummaryAiDiagnosticTrace = {
   apiBaseUrlConfigured?: boolean;
   capacitorServerUrlConfigured?: boolean;
   apiHostClass?: string | null;
+  apiHostClassificationContractRevision?: string;
   sourceCommitStatus?: string | null;
   providerRejectionReason?: string | null;
   providerTypedRejectionReason?: string | null;
@@ -841,9 +1140,12 @@ export type SummaryAiDiagnosticTrace = {
   diagnosticCompletenessPassed?: boolean;
   missingRequiredDiagnosticFields?: string[];
   nullRequiredDiagnosticFields?: string[];
+  /** M4 external view contained a V2-only field that should have been omitted. */
+  notApplicableDiagnosticFieldViolations?: string[];
   unexpectedDiagnosticFieldTypes?: string[];
   diagnosticPayloadByteSize?: number;
   diagnosticPayloadTruncated?: boolean;
+  diagnosticTruncatedSection?: string;
   diagnosticPrivacyViolations?: string[];
   privacyCheckPassed?: boolean;
   /** M4 Summary V3 terminal evidence; safe metadata only. */
@@ -851,6 +1153,8 @@ export type SummaryAiDiagnosticTrace = {
   /** False is the explicit M4 not-applicable marker for legacy V2-only fields. */
   m4LegacyV2DiagnosticFieldsApplicable?: false;
   m4SourceWasEmpty?: boolean;
+  /** Immutable M4 manifest fact; never a V2 finalizer claim. */
+  m4StructuredDurationMonths?: number | null;
   m4AvailableFactCount?: number | null;
   m4RequiredFactCount?: number | null;
   m4CoveredFactCount?: number | null;
@@ -903,6 +1207,169 @@ export type SummaryAiDiagnosticTrace = {
   m4UsageDelta?: number | null;
 };
 
+type SummaryM4OnlyField = Extract<keyof SummaryAiDiagnosticDraft, `m4${string}`>;
+
+type SummaryM4SharedExternalField =
+  | 'schemaVersion'
+  | 'marker'
+  | 'capturedAt'
+  | 'appVersionCode'
+  | 'appVersionName'
+  | 'nextBuildId'
+  | 'buildChannel'
+  | 'requestedLocale'
+  | 'uiLocale'
+  | 'storedContentLocale'
+  | 'detectedSourceLocale'
+  | 'selectedGender'
+  | 'templateId'
+  | 'operationMode'
+  | 'rewriteStyle'
+  | 'requestIdHash'
+  | 'summarySourcePresent'
+  | 'summarySourceLength'
+  | 'summarySourceHash'
+  | 'previousSummaryUsedAsFactSource'
+  | 'currentExperienceEntryCount'
+  | 'currentExperienceEntryIdHashes'
+  | 'currentRoleEntryIdHash'
+  | 'currentRoleCandidateCount'
+  | 'currentRoleResolutionRule'
+  | 'summarySelectedEntryIdHashes'
+  | 'summaryOmittedEntryIdHashes'
+  | 'currentJobContextHash'
+  | 'snapshotCreatedBeforeRequest'
+  | 'snapshotMatchesApplyContext'
+  | 'experienceFactCountsByEntryHash'
+  | 'experienceCanonicalFactCountsByEntryHash'
+  | 'experienceLocalesByEntryHash'
+  | 'declaredExperienceLocaleByEntryHash'
+  | 'detectedExperienceTextLocaleByEntryHash'
+  | 'detectedExperienceLocaleConfidenceByEntryHash'
+  | 'effectiveSourceLocaleByEntryHash'
+  | 'effectiveSourceLocaleAuthorityByEntryHash'
+  | 'localizationRequiredByEntryHash'
+  | 'employmentStatesByEntryHash'
+  | 'contentLocaleBeforeRequest'
+  | 'storedContentLocaleBeforeRequest'
+  | 'detectedVisibleContentLocaleBeforeRequest'
+  | 'finalCandidateSource'
+  | 'finalPostconditionsPassed'
+  | 'raceGuardResult'
+  | 'visibleApplySucceeded'
+  | 'countedAsSuccess'
+  | 'usageCountBefore'
+  | 'usageCountAfter'
+  | 'finalTypedFailureReason'
+  | 'rejectionStage'
+  | 'stages'
+  | 'operationKind'
+  | 'diagnosticContractRevision'
+  | 'compiledDiagnosticMarker'
+  | 'assetRevision'
+  | 'cvAiDiagnosticsV2299Revision'
+  | 'internalDiagnosticsEnabled'
+  | 'internalResetEnabled'
+  | 'internalBuildContractUsed'
+  | 'serverUrlConfigured'
+  | 'apiBaseUrlConfigured'
+  | 'capacitorServerUrlConfigured'
+  | 'apiHostClass'
+  | 'apiHostClassificationContractRevision'
+  | 'sourceCommitShort'
+  | 'sourceCommitStatus'
+  | 'diagnosticInvariantCheckPassed'
+  | 'diagnosticInvariantFailureCount'
+  | 'diagnosticInvariantFailures'
+  | 'diagnosticCompletenessPassed'
+  | 'missingRequiredDiagnosticFields'
+  | 'nullRequiredDiagnosticFields'
+  | 'notApplicableDiagnosticFieldViolations'
+  | 'unexpectedDiagnosticFieldTypes'
+  | 'diagnosticPayloadByteSize'
+  | 'diagnosticPayloadTruncated'
+  | 'diagnosticPrivacyViolations'
+  | 'privacyCheckPassed'
+  | 'meaningfulChangeDetected'
+  | 'noOpDetected'
+  | 'apiResponseKind'
+  | 'serverFallbackUsed'
+  | 'clientFallbackUsed'
+  | 'providerCandidatePresent'
+  | 'providerCandidateHash'
+  | 'providerResponseKind'
+  | 'providerHttpStatus'
+  | 'repairAttempted';
+
+type SummaryM4ForbiddenField = Exclude<
+  keyof SummaryAiDiagnosticDraft,
+  SummaryM4SharedExternalField | SummaryM4OnlyField | 'diagnosticTruncatedSection'
+>;
+
+export type SummaryM4ExternalDiagnostic = Readonly<
+  Required<Pick<
+    SummaryAiDiagnosticDraft,
+    Exclude<SummaryM4SharedExternalField | SummaryM4OnlyField, 'cvAiDiagnosticsV2299Revision'>
+  >>
+  & Pick<SummaryAiDiagnosticDraft, 'cvAiDiagnosticsV2299Revision' | 'diagnosticTruncatedSection'>
+  & { [K in SummaryM4ForbiddenField]?: never }
+  & {
+    m4Operation: 'summary_v3_generate';
+    m4LegacyV2DiagnosticFieldsApplicable: false;
+    m4StructuredDurationMonths: number | null;
+  }
+>;
+
+export type SummaryV2ExternalDiagnostic = Readonly<
+  Omit<SummaryAiDiagnosticDraft, SummaryM4OnlyField>
+  & { [K in Exclude<SummaryM4OnlyField, 'm4Operation'>]?: never }
+  & { m4Operation?: undefined }
+>;
+
+/** Truthful persisted/exported contract consumed by latest, copy, panel, and history projection. */
+export type SummaryAiDiagnosticTrace =
+  | SummaryV2ExternalDiagnostic
+  | SummaryM4ExternalDiagnostic;
+
+function deepFreezeSummaryDiagnostic<T extends object>(value: T, seen = new WeakSet<object>()): T {
+  if (seen.has(value)) return value;
+  seen.add(value);
+  for (const child of Object.values(value)) {
+    if (child && typeof child === 'object') deepFreezeSummaryDiagnostic(child, seen);
+  }
+  return Object.freeze(value);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isPersistedSummaryM4Diagnostic(value: unknown): value is SummaryM4ExternalDiagnostic {
+  if (!isRecord(value)
+    || value.m4Operation !== 'summary_v3_generate'
+    || value.m4LegacyV2DiagnosticFieldsApplicable !== false) return false;
+  if (M4_SUMMARY_EXTERNAL_REQUIRED_FIELDS.some((key) => !(key in value))) return false;
+  const structuredDuration = value.m4StructuredDurationMonths;
+  if (structuredDuration !== null
+    && (typeof structuredDuration !== 'number'
+      || !Number.isFinite(structuredDuration)
+      || !Number.isInteger(structuredDuration)
+      || structuredDuration < 0)) return false;
+  return Object.keys(value).every((field) => {
+    const authority = getM4SummaryFieldAuthority(field);
+    return authority === 'SHARED_AUTHORITATIVE' || authority === 'M4_AUTHORITATIVE';
+  });
+}
+
+function isPersistedSummaryV2Diagnostic(value: unknown): value is SummaryV2ExternalDiagnostic {
+  if (!isRecord(value) || value.m4Operation === 'summary_v3_generate') return false;
+  return value.schemaVersion === SUMMARY_AI_TRACE_SCHEMA_VERSION
+    && typeof value.capturedAt === 'string'
+    && typeof value.requestedLocale === 'string'
+    && typeof value.countedAsSuccess === 'boolean'
+    && Array.isArray(value.stages);
+}
+
 let latestSummaryTrace: SummaryAiDiagnosticTrace | null = null;
 let latestSummaryV3InternalRejectionAudit: SummaryV3InternalRejectionAudit | null = null;
 
@@ -922,7 +1389,7 @@ export type SummaryAiDiagSessionInput = {
 export class SummaryAiDiagnosticSession {
   private stages: SummaryAiDiagStage[] = [];
   private committedTrace: SummaryAiDiagnosticTrace | null = null;
-  private draft: Partial<SummaryAiDiagnosticTrace> & {
+  private draft: Partial<SummaryAiDiagnosticDraft> & {
     schemaVersion: typeof SUMMARY_AI_TRACE_SCHEMA_VERSION;
     capturedAt: string;
     requestIdHash: string;
@@ -1195,7 +1662,7 @@ export class SummaryAiDiagnosticSession {
     this.stages.push({ name, status, reason });
   }
 
-  patch(partial: Partial<SummaryAiDiagnosticTrace>): void {
+  patch(partial: Partial<SummaryAiDiagnosticDraft>): void {
     const { marker: _ignoredMarker, ...safe } = partial;
     Object.assign(this.draft, safe);
     const markerPatch = sanitizeCvAiDiagnosticMarkerPatch('summary', partial);
@@ -1291,7 +1758,7 @@ export class SummaryAiDiagnosticSession {
     const genderRoleDiag = diag as {
       genderValidationPassed?: boolean;
       roleTitleGenderValidationPassed?: boolean | null;
-      roleTitleSurfaceEvidence?: SummaryAiDiagnosticTrace['roleTitleSurfaceEvidence'];
+      roleTitleSurfaceEvidence?: SummaryAiDiagnosticDraft['roleTitleSurfaceEvidence'];
     };
     const sourceLocales = (diag as { sourceLocalesByEntryHash?: Record<string, string> }).sourceLocalesByEntryHash || {};
     const localizationSource = (diag as { localizationSource?: string | null }).localizationSource || null;
@@ -2669,7 +3136,7 @@ export class SummaryAiDiagnosticSession {
     const applyAuthorized = acceptedResponse;
     const applyAttempted = receipt?.canonicalApplyAttempted === true;
     const applyCommitted = event.applyCommitted && receipt?.kind === 'committed';
-    const persistenceResult: SummaryAiDiagnosticTrace['m4PersistenceResult'] =
+    const persistenceResult: SummaryAiDiagnosticDraft['m4PersistenceResult'] =
       receipt?.persistenceResult ?? 'skipped';
     const canonicalApplyResult = receipt?.canonicalApplyResult ?? 'skipped';
     const usageResult = receipt?.usageResult ?? 'skipped';
@@ -2716,6 +3183,7 @@ export class SummaryAiDiagnosticSession {
       m4Operation: 'summary_v3_generate',
       m4LegacyV2DiagnosticFieldsApplicable: false,
       m4SourceWasEmpty: String(event.input.exactVisibleSummary || '').trim() === '',
+      m4StructuredDurationMonths: event.snapshot?.structuredTotalDurationMonths ?? null,
       m4AvailableFactCount: event.snapshot
         ? event.snapshot.manifest.selectedEntries.reduce((sum, entry) => sum + entry.facts.length, 0)
         : null,
@@ -3812,7 +4280,7 @@ export class SummaryAiDiagnosticSession {
       apiHostClass: classifyApiHostClass(apiBase),
       internalBuildContractUsed: INTERNAL_AI_RESET_ENABLED ? true : false,
     });
-    const base = {
+    const projection = projectSummaryAiDiagnosticApplicability({
       ...this.draft,
       stages: this.stages,
       ...identity,
@@ -3820,13 +4288,14 @@ export class SummaryAiDiagnosticSession {
       cvAiDiagnosticsV2299Revision: CV_AI_DIAGNOSTICS_V2_299_REVISION,
       operationKind: 'summary' as const,
       marker: SUMMARY_AI_DIAG_MARKER,
-    };
+    });
+    const base = projection.trace;
     // Preapply gate already decided invariant/completeness truth for this operation.
     // Never recompute under a different success/visible snapshot after rejection —
     // that silently flips diagnosticInvariantCheckPassed from false → true.
     const preapplyGateFailed = this.draft.rejectionStage === 'diagnostic_preapply_gate'
       && this.stages.some((s) => s.name === 'diagnostic_preapply_gate' && s.status === 'fail');
-    const invariants = preapplyGateFailed
+    const evaluatedInvariants = preapplyGateFailed
       && typeof this.draft.diagnosticInvariantCheckPassed === 'boolean'
       ? {
         passed: this.draft.diagnosticInvariantCheckPassed,
@@ -3837,13 +4306,26 @@ export class SummaryAiDiagnosticSession {
       : checkSummaryDiagnosticInvariants(
         base as Parameters<typeof checkSummaryDiagnosticInvariants>[0],
       );
+    const projectionInvariantFailures = projection.ok
+      ? []
+      : [{
+          invariantCode: 'summary_diagnostic_projection_failed',
+          observed: {
+            unclassifiedFieldCount: projection.unclassifiedFields.length,
+            notApplicableFieldViolationCount: projection.notApplicableFieldViolations.length,
+          },
+        }];
+    const invariants = {
+      passed: evaluatedInvariants.passed && projection.ok,
+      failures: [...evaluatedInvariants.failures, ...projectionInvariantFailures],
+    };
     const withInvariants = {
       ...base,
       diagnosticInvariantCheckPassed: invariants.passed,
       diagnosticInvariantFailureCount: invariants.failures.length,
       diagnosticInvariantFailures: invariants.failures,
     };
-    const completeness = preapplyGateFailed
+    const evaluatedCompleteness = preapplyGateFailed
       && typeof this.draft.diagnosticCompletenessPassed === 'boolean'
       ? {
         passed: this.draft.diagnosticCompletenessPassed,
@@ -3855,20 +4337,38 @@ export class SummaryAiDiagnosticSession {
           Array.isArray(this.draft.nullRequiredDiagnosticFields)
             ? this.draft.nullRequiredDiagnosticFields
             : [],
+        notApplicableDiagnosticFieldViolations: [],
+        unexpectedDiagnosticFieldTypes: [],
       }
       : this.draft.m4Operation === 'summary_v3_generate'
         ? checkM4SummaryDiagnosticCompleteness(
           withInvariants as Record<string, unknown>,
         )
-        : checkSummaryDiagnosticCompleteness(
-          withInvariants as Record<string, unknown>,
-        );
+        : {
+          ...checkSummaryDiagnosticCompleteness(
+            withInvariants as Record<string, unknown>,
+          ),
+          notApplicableDiagnosticFieldViolations: [],
+          unexpectedDiagnosticFieldTypes: [],
+        };
+    const projectionApplicabilityFailures = projection.ok
+      ? []
+      : [...projection.unclassifiedFields, ...projection.notApplicableFieldViolations];
+    const completeness = {
+      ...evaluatedCompleteness,
+      passed: evaluatedCompleteness.passed && projection.ok,
+      notApplicableDiagnosticFieldViolations: dedupeStableStrings([
+        ...evaluatedCompleteness.notApplicableDiagnosticFieldViolations,
+        ...projectionApplicabilityFailures,
+      ]),
+    };
     const withCompleteness = {
       ...withInvariants,
       diagnosticCompletenessPassed: completeness.passed,
       missingRequiredDiagnosticFields: completeness.missingRequiredDiagnosticFields,
       nullRequiredDiagnosticFields: completeness.nullRequiredDiagnosticFields,
-      unexpectedDiagnosticFieldTypes: [],
+      notApplicableDiagnosticFieldViolations: completeness.notApplicableDiagnosticFieldViolations,
+      unexpectedDiagnosticFieldTypes: completeness.unexpectedDiagnosticFieldTypes,
     };
     const privacy = assertCvAiDiagnosticPrivacy(withCompleteness);
     const sized = maybeTruncateDiagnosticPayload({
@@ -3876,7 +4376,10 @@ export class SummaryAiDiagnosticSession {
       diagnosticPrivacyViolations: privacy,
       privacyCheckPassed: privacy.length === 0,
     } as Record<string, unknown>);
-    const trace = sized as unknown as SummaryAiDiagnosticTrace;
+    const persistedCandidate = JSON.parse(JSON.stringify(sized)) as Record<string, unknown>;
+    const trace: SummaryAiDiagnosticTrace = projection.variant === 'm4'
+      ? deepFreezeSummaryDiagnostic(persistedCandidate as SummaryM4ExternalDiagnostic)
+      : deepFreezeSummaryDiagnostic(persistedCandidate as SummaryV2ExternalDiagnostic);
     this.committedTrace = trace;
     latestSummaryTrace = trace;
     try {
@@ -3925,12 +4428,12 @@ function readStored(): SummaryAiDiagnosticTrace | null {
     if (typeof localStorage === 'undefined') return null;
     const raw = localStorage.getItem(SUMMARY_AI_DIAG_STORAGE_KEY);
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as SummaryAiDiagnosticTrace;
-    if (!parsed || typeof parsed !== 'object') {
+    const parsed: unknown = JSON.parse(raw);
+    if (!isPersistedSummaryM4Diagnostic(parsed) && !isPersistedSummaryV2Diagnostic(parsed)) {
       localStorage.removeItem(SUMMARY_AI_DIAG_STORAGE_KEY);
       return null;
     }
-    return parsed;
+    return deepFreezeSummaryDiagnostic(parsed);
   } catch {
     try {
       if (typeof localStorage !== 'undefined') {
@@ -4067,8 +4570,8 @@ export function summarizeSummaryAiDiagnostic(trace: SummaryAiDiagnosticTrace | n
   locale: string;
   finalStage: string;
   typedFailureReason: string;
-  durationCount: number;
-  independentFinalDurationClaimCount: number;
+  durationCount: number | null;
+  independentFinalDurationClaimCount: number | null;
   visibleDurationClaimCountAfterApply: number | null;
   durationValidationPassed: boolean | null;
   raceGuardResult: string;
@@ -4081,19 +4584,28 @@ export function summarizeSummaryAiDiagnostic(trace: SummaryAiDiagnosticTrace | n
 } | null {
   if (!trace) return null;
   const last = trace.stages[trace.stages.length - 1];
+  let durationCount: number | null = null;
+  let independentFinalDurationClaimCount: number | null = null;
+  let visibleDurationClaimCountAfterApply: number | null = null;
+  let durationValidationPassed: boolean | null = null;
+  if (trace.m4Operation !== 'summary_v3_generate') {
+    durationCount = trace.independentFinalDurationClaimCount;
+    independentFinalDurationClaimCount = trace.independentFinalDurationClaimCount;
+    visibleDurationClaimCountAfterApply = trace.visibleDurationClaimCountAfterApply ?? null;
+    durationValidationPassed = trace.durationValidationPassed ?? null;
+  }
   return {
     timestamp: trace.capturedAt,
     locale: trace.requestedLocale,
     finalStage: last?.name || 'unknown',
     typedFailureReason: trace.finalTypedFailureReason || 'none',
-    durationCount: trace.independentFinalDurationClaimCount
-      ?? trace.durationClaimCountAfterFinalize,
-    independentFinalDurationClaimCount: trace.independentFinalDurationClaimCount,
-    visibleDurationClaimCountAfterApply: trace.visibleDurationClaimCountAfterApply,
-    durationValidationPassed: trace.durationValidationPassed,
-    raceGuardResult: trace.raceGuardResult,
-    applied: trace.visibleApplySucceeded,
-    finalCandidateSource: trace.finalCandidateSource,
+    durationCount,
+    independentFinalDurationClaimCount,
+    visibleDurationClaimCountAfterApply,
+    durationValidationPassed,
+    raceGuardResult: trace.raceGuardResult || 'skipped',
+    applied: trace.visibleApplySucceeded === true,
+    finalCandidateSource: trace.finalCandidateSource ?? null,
     invariantPassed: trace.diagnosticInvariantCheckPassed ?? null,
     completenessPassed: trace.diagnosticCompletenessPassed ?? null,
     success: Boolean(trace.countedAsSuccess),
