@@ -13,6 +13,7 @@ import {
   hashExperienceEntryId,
 } from './cv-experience-entry-isolation';
 import { fingerprintText } from './cv-export-diagnostics';
+import { resolveSummarySourceLocale } from './cv-summary-source-locale';
 
 export type ExportIntegrityEntryResult = {
   entryIdHash: string;
@@ -54,11 +55,11 @@ export function auditCvExportIntegrity(
 ): ExportIntegrityAuditResult {
   const reasons: string[] = [];
   const summary = (cv.summary || '').trim();
-  const summaryLocale = (
-    (cv.summaryGeneratedLocale as Locale | undefined)
-    || (cv.contentLocale as Locale | undefined)
-    || locale
-  ) as Locale;
+  const summaryResolution = resolveSummarySourceLocale(cv);
+  // The requested export locale is an output target, never evidence for the
+  // source language of an existing Summary. Keep a neutral diagnostic locale
+  // when source evidence is unresolved, then fail the Summary audit below.
+  const summaryLocale = (summaryResolution.locale || 'en') as Locale;
   const summaryPurity = summary
     ? validateAiUnitLocalePurity(summary, summaryLocale, {
       kind: 'summary_sentence',
@@ -75,6 +76,10 @@ export function auditCvExportIntegrity(
   const requireDuration = options?.requireSummaryDuration !== false
     && Boolean(cv.summaryOrigin && cv.summaryOrigin !== 'user');
   let summaryOk = summaryPurity.ok;
+  if (summary && summaryResolution.resolution === 'unresolved') {
+    reasons.push('summary_source_locale_unresolved');
+    summaryOk = false;
+  }
   if (summary && !summaryPurity.ok) {
     reasons.push('summary_locale_impurity');
     summaryOk = false;

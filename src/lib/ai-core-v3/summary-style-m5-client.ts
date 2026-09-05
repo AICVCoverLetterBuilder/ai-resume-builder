@@ -1,5 +1,6 @@
 import type { CVData, WorkExperience } from '@/lib/types';
 import { buildExperienceDurationSnapshot } from '@/lib/cv-experience-duration';
+import { hashSummarySourceLocaleText } from '@/lib/cv-summary-source-locale';
 import {
   canonicalSummaryV3StyleLocale,
   createSummaryV3StyleOperationSnapshot,
@@ -208,7 +209,18 @@ export async function runSummaryV3StyleClientOperation(
   if (!valid) return { kind: 'terminal', status: transport.status || 422, reason: 'candidate_identity_mismatch' };
   const before = dependencies.getLiveCv();
   if (hashSummaryV3Value(before) !== hashSummaryV3Value(input.cv)) return { kind: 'terminal', status: 409, reason: 'stale_snapshot' };
-  const next = { ...before, summary: candidate.text as string, summaryOrigin: 'ai_generated' as const, summaryGeneratedLocale: requestedLocale, summaryGenerationContextKey: input.jobContextKey, contentLocale: requestedLocale };
+  const next = {
+    ...before,
+    summary: candidate.text as string,
+    summaryOrigin: 'ai_generated' as const,
+    summaryGeneratedLocale: requestedLocale,
+    summarySourceLocale: requestedLocale,
+    summarySourceLocaleTextHash: hashSummarySourceLocaleText(candidate.text as string),
+    summaryGenerationContextKey: input.jobContextKey,
+    // M5 styles remain same-locale; preserve the document/default fallback so
+    // a future mixed-locale Summary cannot relabel untouched Experience text.
+    contentLocale: before.contentLocale,
+  };
   let receipt: SummaryV3CommitReceipt;
   try {
     receipt = dependencies.commitCandidate({ operationId: input.operationId, requestId: input.requestId, previousCvHash: hashSummaryV3Value(before), candidateHash: hashSummaryV3Value(candidate.text as string), requestedLocale, usageCountBefore: input.usageCountBefore, previousCv: before, nextCv: next });

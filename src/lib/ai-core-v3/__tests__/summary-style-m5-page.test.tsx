@@ -6,6 +6,7 @@ import { resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createEmptyCv } from '@/lib/cv-defaults';
 import { resolveSummaryCurrentRole } from '@/lib/cv-summary-current-role';
+import { hashSummarySourceLocaleText } from '@/lib/cv-summary-source-locale';
 import { translations, type Locale } from '@/lib/i18n/translations';
 import type { CVData } from '@/lib/types';
 import * as aiClientRequest from '@/lib/ai-client-request';
@@ -89,8 +90,10 @@ async function actualPageStyleFlow(options: {
   readonly uiLocale?: Locale;
   readonly contentLocale?: string;
   readonly summary?: string;
+  readonly summarySourceLocale?: string;
+  readonly candidateText?: string;
   readonly safeNoOp?: boolean;
-}): Promise<{ m5Requests: Array<Record<string, unknown>>; legacyRequests: Array<Record<string, unknown>>; beginLocales: string[]; commitCalls: number; usageCalls: number; successToasts: number; errorToasts: number }> {
+}): Promise<{ m5Requests: Array<Record<string, unknown>>; legacyRequests: Array<Record<string, unknown>>; beginLocales: string[]; commitCalls: number; usageCalls: number; successToasts: number; errorToasts: number; finalCv: CVData }> {
   const savedEnabled = process.env.NEXT_PUBLIC_AI_CORE_V3_ENABLED;
   const savedServerEnabled = process.env.AI_CORE_V3_ENABLED;
   cleanup(); localStorage.clear(); sessionStorage.clear();
@@ -99,6 +102,11 @@ async function actualPageStyleFlow(options: {
   pageRuntimeCv = cvFor(fixtureLocale, options.summary ?? 'Existing Summary.');
   pageRuntimeCv.runtimeMigrationVersion = 3;
   pageRuntimeCv.contentLocale = options.contentLocale as CVData['contentLocale'] || pageRuntimeCv.contentLocale;
+  if (options.summarySourceLocale) {
+    pageRuntimeCv.summarySourceLocale = options.summarySourceLocale;
+    pageRuntimeCv.summarySourceLocaleTextHash = hashSummarySourceLocaleText(pageRuntimeCv.summary);
+    pageRuntimeCv.summaryGeneratedLocale = options.summarySourceLocale;
+  }
   pageRequests = []; pageLegacyRequests = []; pageCommitCalls = 0; pageUsageCalls = 0; pageToastSuccess.mockReset(); pageToastError.mockReset();
   pageM4Adapter.mockReset().mockResolvedValue({ kind: 'not_applicable' as const });
   process.env.NEXT_PUBLIC_AI_CORE_V3_ENABLED = options.enabled === false ? 'false' : 'true';
@@ -113,7 +121,7 @@ async function actualPageStyleFlow(options: {
       const normalized = normalizeSummaryV3StyleRouteRequest(action as SummaryV3StyleRouteAction, body as unknown as SummaryV3StyleRouteParams, 2000);
       const snapshot = createSummaryV3StyleOperationSnapshot(normalized);
       const data = options.safeNoOp === false
-        ? candidateResponse(snapshot, options.style, snapshot.requestedLocale, 'M5 page candidate')
+        ? candidateResponse(snapshot, options.style, snapshot.requestedLocale, options.candidateText || 'M5 page candidate')
         : safeNoOpResponse(snapshot, options.style);
       return { data, response: { ok: true, status: 200, headers: { get: () => null } } };
     }
@@ -142,6 +150,7 @@ async function actualPageStyleFlow(options: {
       usageCalls: pageUsageCalls,
       successToasts: pageToastSuccess.mock.calls.length,
       errorToasts: pageToastError.mock.calls.length,
+      finalCv: pageRuntimeCv,
     };
   } finally {
     beginSpy.mockRestore(); cleanup(); localStorage.clear(); sessionStorage.clear();
@@ -169,6 +178,8 @@ function commitPageM4Candidate(
     summary: text,
     summaryOrigin: 'ai_generated' as const,
     summaryGeneratedLocale: input.requestedLocale as CVData['contentLocale'],
+    summarySourceLocale: input.requestedLocale,
+    summarySourceLocaleTextHash: hashSummarySourceLocaleText(text),
     summaryGenerationContextKey: input.jobContextHash,
     contentLocale: input.requestedLocale as CVData['contentLocale'],
   };
@@ -423,7 +434,7 @@ describe('M5.3 Summary style client/page boundary', () => {
     expect(page).toContain('runSummaryV3StyleClientOperation');
     const m5Handler = page.slice(page.indexOf('const handleSummaryV3Style'), page.indexOf('const handleRewrite'));
     expect(m5Handler).not.toContain('document.querySelector');
-    expect(m5Handler).toContain('canonicalizeContentLocale');
+    expect(m5Handler).toContain('canonicalizeSummarySourceLocale');
     expect(m5Handler).toContain('currentRoleExperienceId');
   });
 
@@ -445,6 +456,30 @@ describe('M5.3 Summary style client/page boundary', () => {
     expect(result.legacyRequests).toHaveLength(0);
   });
 
+  it.each(['shorter', 'stronger', 'professional'] as const)('derives %s source/requested locale from actual mixed-locale page state and commits atomically', async (style) => {
+    const summary = 'Prüft Prozesse und koordiniert Termine.';
+    const candidate = 'Prüft Prozesse und koordiniert Termine zuverlässig.';
+    const result = await actualPageStyleFlow({
+      style,
+      uiLocale: 'fr',
+      contentLocale: 'en',
+      summary,
+      summarySourceLocale: 'de',
+      candidateText: candidate,
+      safeNoOp: false,
+    });
+    expect(result.m5Requests).toHaveLength(1);
+    expect(result.m5Requests[0]?.requestedLocale).toBe('de');
+    expect(result.m5Requests[0]?.sourceLocale).toBe('de');
+    expect(result.m5Requests[0]?.visibleSummary).toBe(summary);
+    expect(result.commitCalls).toBe(1);
+    expect(result.usageCalls).toBe(1);
+    expect(result.finalCv.contentLocale).toBe('en');
+    expect(result.finalCv.summary).toBe(candidate);
+    expect(result.finalCv.summarySourceLocale).toBe('de');
+    expect(result.finalCv.summarySourceLocaleTextHash).toBe(hashSummarySourceLocaleText(candidate));
+  });
+
   it.each(['shorter', 'stronger', 'professional'] as const)('executes the existing legacy path when V3 is disabled for %s', async (style) => {
     const result = await actualPageStyleFlow({ style, enabled: false });
     expect(result.m5Requests).toHaveLength(0);
@@ -458,6 +493,29 @@ describe('M5.3 Summary style client/page boundary', () => {
     expect(result.beginLocales).toEqual(['en']);
     expect(result.m5Requests[0]?.requestedLocale).toBe('en');
     expect(result.m5Requests[0]?.sourceLocale).toBe('en');
+  });
+
+  it('uses a valid current-text Summary binding for a mixed-locale M5 style request', async () => {
+    const summary = 'Prüft Prozesse und koordiniert Termine.';
+    const mixed = cvFor('de', summary);
+    mixed.contentLocale = 'en';
+    mixed.summarySourceLocale = 'de';
+    mixed.summarySourceLocaleTextHash = hashSummarySourceLocaleText(summary);
+    const { capturedRequest, commitRequest, outcome } = await run({
+      liveCv: mixed,
+      locale: 'de',
+      requestedLocale: 'de',
+      sourceLocale: 'de',
+      style: 'shorter',
+    });
+    expect(outcome.kind).toBe('committed');
+    expect(capturedRequest?.requestedLocale).toBe('de');
+    expect(capturedRequest?.sourceLocale).toBe('de');
+    expect(commitRequest?.nextCv.contentLocale).toBe('en');
+    expect(commitRequest?.nextCv.summarySourceLocale).toBe('de');
+    expect(commitRequest?.nextCv.summarySourceLocaleTextHash).toBe(
+      hashSummarySourceLocaleText(commitRequest?.nextCv.summary || ''),
+    );
   });
 
   it('preserves pt-BR canonical identity through the actual page/content-locale boundary', async () => {

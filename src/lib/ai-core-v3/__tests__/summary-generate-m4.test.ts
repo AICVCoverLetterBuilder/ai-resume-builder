@@ -50,6 +50,7 @@ import { M4_SUMMARY_GENERATE_AAB552_INITIAL_EVALUATOR_TIMEOUT_OBSERVATION } from
 import { M4_SUMMARY_GENERATE_AAB553_FULL_INITIAL_EVALUATOR_TIMEOUT_OBSERVATION } from '../fixtures/m4-summary-generate-aab553-full-initial-evaluator-timeout-observation';
 import { M4_SUMMARY_GENERATE_AAB554_VISIBLE_READBACK_OBSERVATION } from '../fixtures/m4-summary-generate-aab554-visible-readback-observation';
 import { SummaryAiDiagnosticSession, formatSummaryAiDiagnosticForCopy } from '../../cv-summary-ai-diagnostics';
+import { hashSummarySourceLocaleText } from '../../cv-summary-source-locale';
 import {
   AI_CLIENT_TIMEOUT_MS,
   AI_PLATFORM_MAX_DURATION_S,
@@ -770,6 +771,8 @@ describe('M4 transactional apply, preview, rollback, and usage', () => {
     const run = await harness();
     expect(run.result.kind).toBe('handled_success'); expect(run.live.summary).toBe(run.response.candidate.text);
     expect(run.live.summaryOrigin).toBe('ai_generated'); expect(run.live.summaryGeneratedLocale).toBe('en');
+    expect(run.live.summarySourceLocale).toBe('en');
+    expect(run.live.summarySourceLocaleTextHash).toBe(hashSummarySourceLocaleText(run.live.summary));
     expect(run.live.summaryGenerationContextKey).toBe('context-m4'); expect(run.live.canonicalSummary).toContain('STALE SUMMARY');
   });
 

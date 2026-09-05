@@ -2511,7 +2511,8 @@ export function prepareExportReadyCv(
       || e.crossEntryLeakageDetected
     ));
   const hardSummary = (!integrity.summaryOk && (
-    integrity.reasons.includes('summary_locale_impurity')
+    integrity.reasons.includes('summary_source_locale_unresolved')
+    || integrity.reasons.includes('summary_locale_impurity')
     || integrity.reasons.includes('summary_duration_count')
   ));
   if (hardEntries.length || hardSummary) {

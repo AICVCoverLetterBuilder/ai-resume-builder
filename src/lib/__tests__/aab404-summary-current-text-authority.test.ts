@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { CVData, WorkExperience } from '@/lib/types';
 import {
   applyCanonicalSummaryEdit,
@@ -13,6 +13,20 @@ import {
   SUMMARY_STALE_REBOUND_LOCALE_GUARD_REVISION,
 } from '@/lib/cv-summary-current-text-authority';
 import { prepareExportReadyCv } from '@/lib/prepare-export-ready-cv';
+
+const summarySourceLocaleMockState = vi.hoisted(() => ({ forceUnresolved: false }));
+
+vi.mock('@/lib/cv-summary-source-locale', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/cv-summary-source-locale')>();
+  return {
+    ...actual,
+    resolveSummarySourceLocale: (cv: Parameters<typeof actual.resolveSummarySourceLocale>[0]) => (
+      summarySourceLocaleMockState.forceUnresolved
+        ? { locale: null, resolution: 'unresolved' as const }
+        : actual.resolveSummarySourceLocale(cv)
+    ),
+  };
+});
 
 const REF = '2026-08-07';
 const DEVICE_SUMMARY = [
@@ -251,5 +265,45 @@ describe('AAB-404 Summary current-text authority', () => {
     expect(edited.summaryGeneratedLocale).toBeUndefined();
     expect(edited.summaryGenerationContextKey).toBeUndefined();
     expect(edited.contentLocale).toBe('es');
+  });
+
+  it('fails the final export integrity gate for unresolved Summary source even when English purity passes', () => {
+    const englishExperience = '- Designed reliable services.\n- Documented operational decisions.';
+    const unresolved = {
+      ...deviceCv(),
+      summary: 'Designed reliable services and documented operational decisions.',
+      summaryOrigin: 'user' as const,
+      summaryGeneratedLocale: undefined,
+      summarySourceLocale: undefined,
+      summarySourceLocaleTextHash: undefined,
+      contentLocale: undefined,
+      canonicalSnapshot: undefined,
+      experience: [{
+        id: 'current', company: 'Nova', position: 'Platform Engineer',
+        startDate: '2024-01', endDate: '', isPresent: true,
+        description: englishExperience,
+        originalUserDescription: englishExperience,
+        canonicalDescription: englishExperience,
+        descriptionOrigin: 'user' as const,
+        descriptionSourceLocale: 'en' as const,
+        descriptionSourceLocaleTextHash: hashExperienceSourceLocaleText(englishExperience),
+      }],
+    };
+    summarySourceLocaleMockState.forceUnresolved = true;
+    let prepared: ReturnType<typeof prepareExportReadyCv>;
+    try {
+      prepared = prepareExportReadyCv(unresolved, 'en', 'modern-minimal', {
+        referenceDate: REF,
+      });
+    } finally {
+      summarySourceLocaleMockState.forceUnresolved = false;
+    }
+    expect(prepared.ok).toBe(false);
+    if (prepared.ok) return;
+    expect(prepared.stage).toBe('validate_locale_integrity');
+    expect(prepared.reason).toBe('summary_source_locale_unresolved');
+    expect(prepared.diagnostics.exportIntegrityReasons).toContain('summary_source_locale_unresolved');
+    expect(prepared.diagnostics.exportIntegrityReasons).not.toContain('summary_locale_impurity');
+    expect(prepared.diagnostics.exportIntegrityReasons).not.toContain('summary_duration_count');
   });
 });

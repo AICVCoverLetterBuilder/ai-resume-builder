@@ -136,6 +136,12 @@ import {
   resolveCommittedAppliedVisibleContentLocale,
 } from '@/lib/cv-content-locale';
 import {
+  canonicalizeSummarySourceLocale,
+  hashSummarySourceLocaleText,
+  resolveSummarySourceLocale,
+  summaryV3CandidateBindingMatches,
+} from '@/lib/cv-summary-source-locale';
+import {
   buildExperienceJobContext,
   experienceJobContextsMatch,
   resolveExperienceAiGrounding,
@@ -552,13 +558,20 @@ export default function CVBuilderPage() {
     const committed = cvRef.current;
     const committedSummaryHash = hashSummaryV3Value(committed.summary || '');
     const committedContentLocale = String(committed.contentLocale || '');
-    const candidateMatched = hashSummaryV3Value(committed) === hashSummaryV3Value(request.nextCv)
-      && committedSummaryHash === request.candidateHash
-      && committed.summaryOrigin === 'ai_generated'
-      && String(committed.summaryGeneratedLocale || '').replace(/_/g, '-').toLowerCase()
-        === request.requestedLocale.replace(/_/g, '-').toLowerCase()
-      && committedContentLocale.replace(/_/g, '-').toLowerCase()
-        === request.requestedLocale.replace(/_/g, '-').toLowerCase();
+    const candidateMatched = summaryV3CandidateBindingMatches({
+      requestedLocale: request.requestedLocale,
+      committedSourceLocale: committed.summarySourceLocale,
+      committedGeneratedLocale: committed.summaryGeneratedLocale,
+      committedSummaryOrigin: committed.summaryOrigin,
+      committedSummary: committed.summary || '',
+      committedSummaryHash,
+      intendedCandidateHash: request.candidateHash,
+      committedSummarySourceLocaleTextHash: committed.summarySourceLocaleTextHash,
+      committedCvHash: hashSummaryV3Value(committed),
+      intendedCvHash: hashSummaryV3Value(request.nextCv),
+      committedContentLocale,
+      intendedContentLocale: request.nextCv.contentLocale,
+    });
     if (!candidateMatched) {
       const rolledBack = rollbackPreviousCv();
       return failed(rolledBack ? 'canonical_commit_failed' : 'rollback_failed', {
@@ -3296,7 +3309,9 @@ export default function CVBuilderPage() {
   const handleSummaryV3Style = async (style: 'shorter' | 'stronger' | 'professional') => {
     if (rewritingStyle) return;
     const liveCvAtPress = cvRef.current;
-    const contentLocale = canonicalSummaryV3StyleLocale(canonicalizeContentLocale(String(liveCvAtPress.contentLocale || '')));
+    const summarySource = resolveSummarySourceLocale(liveCvAtPress);
+    const summarySourceLocale = canonicalizeSummarySourceLocale(summarySource.locale);
+    const contentLocale = canonicalSummaryV3StyleLocale(summarySourceLocale);
     if (!contentLocale) {
       toast.error(aiErrorMessage('generation_validation_failed', locale));
       return;

@@ -31,6 +31,10 @@ import { refreshProvenanceAfterMaterialUserEdit } from './cv-experience-ai-outpu
 import type { CvExperienceDescriptionOrigin } from './types';
 import { buildExperienceJobContext } from './cv-experience-job-context';
 import { hashExperienceSourceLocaleText } from './cv-experience-source-locale';
+import {
+  hashSummarySourceLocaleText,
+  resolveSummarySourceLocale,
+} from './cv-summary-source-locale';
 import { captureSummaryV2Snapshot } from './cv-summary-v2/snapshot';
 import { buildSummaryV2SelectionManifest } from './cv-summary-v2/manifest';
 import { analyzeSummaryV2FinalUnitOwnership } from './cv-summary-v2/unit-ownership';
@@ -726,29 +730,41 @@ export function isProjectionFresh(
 }
 
 export function applyCanonicalSummaryEdit(cv: CVData, summary: string, uiLocale: Locale): CVData {
+  // Header/UI locale is presentation state, never Summary source authority.
+  void uiLocale;
+  const resolvedBeforeEdit = resolveSummarySourceLocale(cv);
   const next = {
     ...cv,
     summary,
-    contentLocale: uiLocale,
     summaryOrigin: 'user' as const,
     summaryGeneratedLocale: undefined,
     summaryGenerationContextKey: undefined,
+    ...(resolvedBeforeEdit.locale && summary.trim()
+      ? {
+        summarySourceLocale: resolvedBeforeEdit.locale,
+        summarySourceLocaleTextHash: hashSummarySourceLocaleText(summary),
+      }
+      : {
+        summarySourceLocale: undefined,
+        summarySourceLocaleTextHash: undefined,
+      }),
     updatedAt: new Date().toISOString(),
   };
   const snap = cv.canonicalSnapshot;
+  const editLocale = resolvedBeforeEdit.locale;
   if (!snap || snap.canonicalState !== 'valid') {
     const soft = { ...next, canonicalSummary: summary };
-    if (!contentEligibleForValidCanonical(soft, uiLocale)) return soft;
+    if (!editLocale || !contentEligibleForValidCanonical(soft, editLocale)) return soft;
     return sealCanonicalFromValidatedSource(soft, {
-      locale: uiLocale,
+      locale: editLocale,
       createdFrom: 'user_structured_input',
       revise: true,
     });
   }
-  if (uiLocale === snap.canonicalLocale) {
+  if (editLocale === snap.canonicalLocale) {
     const soft = { ...next, canonicalSummary: summary };
     // Mid-typing incomplete text must not destroy a valid snapshot or invent needs_rebuild.
-    if (!contentEligibleForValidCanonical(soft, uiLocale)) return soft;
+    if (!contentEligibleForValidCanonical(soft, editLocale)) return soft;
     return sealCanonicalFromValidatedSource(soft, {
       locale: snap.canonicalLocale,
       createdFrom: 'user_structured_input',

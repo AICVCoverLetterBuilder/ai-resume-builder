@@ -178,6 +178,10 @@ export interface CVData {
   contentLocale?: Locale;
   /** Locale of the last generated Summary, when the visible Summary is AI-authored. */
   summaryGeneratedLocale?: string;
+  /** Locale of the exact current visible Summary text, when hash-bound. */
+  summarySourceLocale?: string;
+  /** Hash of the normalized visible Summary text to which summarySourceLocale is bound. */
+  summarySourceLocaleTextHash?: string;
   /** Idempotent persisted-runtime migration marker. */
   runtimeMigrationVersion?: number;
   /** Privacy-safe persisted trace for a completed structural snapshot repair. */

@@ -14,6 +14,7 @@ import { immutableCopy } from './immutability';
 import { createSummaryFactManifest } from './summary-manifest';
 import { INTERNAL_AI_RESET_ENABLED } from '../build-channel';
 import type { AggregateValidationResult, AiCoreV3Violation } from './validators';
+import { hashSummarySourceLocaleText } from '../cv-summary-source-locale';
 
 export const SUMMARY_V3_GENERATE_ACTION = 'summary_v3_generate' as const;
 
@@ -848,8 +849,12 @@ export function applySummaryV3GenerateTransaction(
     summary: response.candidate.text,
     summaryOrigin: 'ai_generated',
     summaryGeneratedLocale: snapshot.requestedLocale,
+    summarySourceLocale: snapshot.requestedLocale,
+    summarySourceLocaleTextHash: hashSummarySourceLocaleText(response.candidate.text),
     summaryGenerationContextKey: snapshot.jobContextHash,
-    contentLocale: snapshot.requestedLocale as CVData['contentLocale'],
+    // M4 remains same-locale, but Summary writes must not promote a field-level
+    // locale into the document/default fallback during a partial state.
+    contentLocale: before.contentLocale,
   }) as CVData;
   const request = immutableCopy({
     operationId: snapshot.operationId,

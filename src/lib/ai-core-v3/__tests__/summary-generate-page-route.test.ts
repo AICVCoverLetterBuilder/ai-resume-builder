@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { translations, type Locale } from '../../i18n/translations';
 import type { CVData } from '../../types';
 import { SUMMARY_AI_DIAG_STORAGE_KEY } from '../../cv-summary-ai-diagnostics';
+import { hashSummarySourceLocaleText } from '../../cv-summary-source-locale';
 import {
   AI_CLIENT_TIMEOUT_MS,
   AI_PLATFORM_MAX_DURATION_S,
@@ -211,6 +212,8 @@ async function actualGeneralSummaryFlow(options: {
         summary: candidate,
         summaryOrigin: 'ai_generated' as const,
         summaryGeneratedLocale: adapterInput.requestedLocale as Locale,
+        summarySourceLocale: adapterInput.requestedLocale,
+        summarySourceLocaleTextHash: hashSummarySourceLocaleText(candidate),
         summaryGenerationContextKey: adapterInput.jobContextHash,
       };
       const receipt = dependencies.commitCandidate({
