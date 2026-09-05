@@ -221,6 +221,8 @@ import {
   type SummaryV3CommitReceipt,
   type SummaryV3CommitRequest,
 } from '@/lib/ai-core-v3';
+import { runSummaryV3StyleClientOperation } from '@/lib/ai-core-v3/summary-style-m5-client';
+import { canonicalSummaryV3StyleLocale } from '@/lib/ai-core-v3/summary-style-m5';
 import { motion } from 'framer-motion';
 import { toast } from 'sonner';
 import {
@@ -442,10 +444,10 @@ export default function CVBuilderPage() {
   // matches when its response arrives is a stale/out-of-order response and
   // must never be applied, regardless of which locale it was requested in.
   const latestSummaryRequestIdRef = useRef<string | null>(null);
+  const latestRewriteRequestIdRef = useRef<string | null>(null);
   const latestBulletsRequestIdRef = useRef<Record<string, string>>({});
   /** Race guard: latest job-context key per experience for bullets AI. */
   const latestBulletsContextKeyRef = useRef<Record<string, string>>({});
-  const latestRewriteRequestIdRef = useRef<string | null>(null);
   const summaryApplyOwnershipRef = useRef(createSummaryApplyOwnershipState());
   void SUMMARY_TRANSACTIONAL_APPLY_387_REVISION;
   const SUMMARY_CVREF_SINGLE_WRITER_REVISION =
@@ -3291,8 +3293,71 @@ export default function CVBuilderPage() {
     }
   };
 
+  const handleSummaryV3Style = async (style: 'shorter' | 'stronger' | 'professional') => {
+    if (rewritingStyle) return;
+    const liveCvAtPress = cvRef.current;
+    const contentLocale = canonicalSummaryV3StyleLocale(canonicalizeContentLocale(String(liveCvAtPress.contentLocale || '')));
+    if (!contentLocale) {
+      toast.error(aiErrorMessage('generation_validation_failed', locale));
+      return;
+    }
+    const proToken = getCurrentProTokenOrToast(() => setSummaryAiModal(true));
+    if (!proToken) return;
+    const reqCtx = beginAiClientRequest(`summary_style:${style}`, contentLocale);
+    const requestedLocale = contentLocale;
+    const currentRole = resolveSummaryCurrentRole(liveCvAtPress.experience);
+    latestSummaryRequestIdRef.current = reqCtx.requestId;
+    const countBefore = getProAiUsageCount();
+    const controller = new AbortController();
+    const timer = scheduleClientAbort(controller, resolveClientAbortTimeoutMs(AI_CLIENT_TIMEOUT_MS));
+    setRewritingStyle(style);
+    try {
+      const outcome = await runSummaryV3StyleClientOperation({
+        enabled: true,
+        style,
+        operationId: reqCtx.requestId,
+        requestId: reqCtx.requestId,
+        cv: liveCvAtPress,
+        currentRoleExperienceId: currentRole?.id || null,
+        requestedLocale,
+        sourceLocale: contentLocale,
+        jobContextKey: buildExperienceJobContext({ position: currentRole?.position || liveCvAtPress.personal.jobTitle, locale: requestedLocale }).key,
+        referenceDateIso: new Date().toISOString().slice(0, 10),
+        usageCountBefore: countBefore,
+        proToken,
+        createdAt: reqCtx.startedAt,
+      }, {
+        request: async (body) => {
+          const { data, response } = await apiFetch<unknown>('/api/generate', { body, signal: controller.signal });
+          return { data, status: response.status };
+        },
+        getLiveCv: () => cvRef.current,
+        getActiveOperationId: () => latestSummaryRequestIdRef.current || '',
+        commitCandidate: commitSummaryV3Candidate,
+      });
+      finishAiClientRequest({
+        ctx: reqCtx,
+        isProVerified: true,
+        countBefore,
+        countAfter: outcome.kind === 'committed' ? getProAiUsageCount() : countBefore,
+        httpStatus: outcome.status,
+        error: outcome.kind === 'committed' || outcome.kind === 'safe_no_op' || outcome.reason === 'operation_superseded' ? null : { code: 'generation_validation_failed', httpStatus: outcome.status },
+        responseSource: outcome.kind === 'committed' ? 'provider' : 'blocked',
+      });
+      if (outcome.kind === 'committed') toast.success(t.cv.genSuccess);
+      else if (outcome.kind === 'terminal' && outcome.reason !== 'operation_superseded') toast.error(aiErrorMessage('generation_validation_failed', requestedLocale));
+    } finally {
+      clearTimeout(timer);
+      setRewritingStyle(null);
+    }
+  };
+
   const handleRewrite = async (style: 'shorter' | 'stronger' | 'professional') => {
     if (rewritingStyle) return;
+    if (isAiCoreV3Enabled({ AI_CORE_V3_ENABLED: process.env.NEXT_PUBLIC_AI_CORE_V3_ENABLED })) {
+      await handleSummaryV3Style(style);
+      return;
+    }
     const liveCvAtPress = cvRef.current;
     const liveSummaryAtPress = (liveCvAtPress.summary || '').trim();
     const buttonId = summaryRewriteButtonId(style);
