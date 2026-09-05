@@ -108,6 +108,12 @@ import {
   type SummaryV3WriterResponse,
 } from '@/lib/ai-core-v3/summary-generate-server';
 import type { SummaryV3ProviderPhase } from '@/lib/ai-core-v3/summary-generate';
+import {
+  executeSummaryV3StyleRoute,
+  isSummaryV3StyleRouteAction,
+  normalizeSummaryV3StyleRouteRequest,
+  type SummaryV3StyleProviderInvocation,
+} from '@/lib/ai-core-v3/summary-style-m5-provider';
 
 /**
  * Explicit Vercel serverless function execution budget (seconds).
@@ -2050,6 +2056,52 @@ Rules:
         serverFallbackUsed: false,
         clientFallbackUsed: false,
       });
+    }
+
+    if (isSummaryV3StyleRouteAction(action)) {
+      // M5.2 owns only the three exact same-locale Summary style operations.
+      // The shared adapter delegates domain validation and repair policy to M5.1.
+      const v3Enabled = isAiCoreV3Enabled({
+        AI_CORE_V3_ENABLED: process.env.AI_CORE_V3_ENABLED ?? process.env.NEXT_PUBLIC_AI_CORE_V3_ENABLED,
+      });
+      if (!v3Enabled) {
+        return jsonResponse({
+          ok: false,
+          action,
+          typedReason: 'v3_feature_disabled',
+        }, { status: 409 });
+      }
+      deadlineAt = computeSummaryV3ServerDeadline(serverReceivedAt);
+      const m5Request = normalizeSummaryV3StyleRouteRequest(action, params, serverReceivedAt);
+      const result = await executeSummaryV3StyleRoute(m5Request, {
+        timeoutForPhase: (phase) => phase === 'initial_writer'
+          ? SUMMARY_V3_INITIAL_WRITER_TIMEOUT_MS
+          : phase === 'initial_evaluator'
+            ? SUMMARY_V3_INITIAL_EVALUATOR_TIMEOUT_MS
+            : AI_PROVIDER_CALL_TIMEOUT_MS,
+        invoke: async (invocation: SummaryV3StyleProviderInvocation) => {
+          const response = await callWithRetry({
+            model: MODEL,
+            max_tokens: invocation.role === 'writer' ? 1800 : 1400,
+            temperature: 0,
+            system: invocation.role === 'writer'
+              ? `You are the single AI Core V3 Summary style writer. Invoke only the ${invocation.toolName} tool and preserve every required identity and fact.`
+              : `You are the independent non-writing AI Core V3 Summary style evaluator. Invoke only the ${invocation.toolName} tool and return structured evidence only.`,
+            tools: [invocation.tool],
+            tool_choice: invocation.toolChoice,
+            messages: [{ role: 'user', content: invocation.prompt }],
+          }, deadlineAt, undefined, invocation.timeoutMs, invocation.role === 'writer' ? 'provider' : 'verifier', undefined, false);
+          return response;
+        },
+      });
+      const status = result.kind === 'candidate_ready' || result.kind === 'safe_no_op'
+        ? 200
+        : result.kind === 'not_applicable'
+          ? 422
+          : /(?:_request_failed|_transport_malformed)$/u.test(result.typedReason)
+            ? 502
+            : 422;
+      return jsonResponse(result, { status });
     }
 
     if (action === SUMMARY_V3_GENERATE_ACTION) {
