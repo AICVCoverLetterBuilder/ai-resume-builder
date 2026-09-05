@@ -52,16 +52,17 @@ function exp(id: string, company: string, position: string, startDate: string, e
 
 /**
  * Sanitized shape from the persisted device record: an app-generated known
- * title was historically stamped as manual even though its declared source
- * locale remains foreign. This must not override the terminal target-locale
- * title authority.
+ * title was selected from the app-owned graphic-designer occupation catalog
+ * and remains stale for the current target locale. Title-specific provenance
+ * authorizes the existing target-locale projection.
  */
 function staleAppOwnedGraphicDesigner(exp: WorkExperience, positionSourceLocale: string): WorkExperience {
   return {
     ...exp,
     position: 'Grafički dizajner',
-    positionProvenance: 'manual',
-    positionUserEdited: true,
+    positionProvenance: 'occupation_option',
+    positionSourceKey: 'graphic_designer',
+    positionUserEdited: false,
     positionSourceLocale,
     descriptionOrigin: 'ai_generated',
     generatedDescription: exp.description,
@@ -144,7 +145,7 @@ describe('AAB491 incoherent canonical snapshot downstream closure', () => {
 
   it('repairs only the contradicted stale app-owned known title provenance', () => {
     const staleGraphicDesigner = {
-      position: 'Grafički dizajner', positionProvenance: 'manual', positionUserEdited: true, positionSourceLocale: 'hi', descriptionOrigin: 'ai_generated',
+      position: 'Grafički dizajner', positionProvenance: 'occupation_option', positionSourceKey: 'graphic_designer', positionUserEdited: false, positionSourceLocale: 'hi', descriptionOrigin: 'ai_generated',
     };
     expect(resolveExperienceTitleForDisplay(staleGraphicDesigner, 'sr', 'female')).toBe('Grafička dizajnerka');
     expect(resolveExperienceTitleForDisplay(staleGraphicDesigner, 'sr', 'male')).toBe('Grafički dizajner');

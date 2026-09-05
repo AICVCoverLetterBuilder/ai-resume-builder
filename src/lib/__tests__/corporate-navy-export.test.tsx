@@ -296,7 +296,7 @@ function androidStressCv(): CVData {
   };
 }
 
-async function captureDocx(data: CVData): Promise<{ documentXml: string; text: string }> {
+async function captureDocx(data: CVData, locale: 'en' | 'sr' = 'en'): Promise<{ documentXml: string; text: string }> {
   const blobByUrl = new Map<string, Blob>();
   let capturedBlob: Blob | null = null;
   Object.defineProperty(URL, 'createObjectURL', { value: vi.fn(), configurable: true, writable: true });
@@ -311,7 +311,7 @@ async function captureDocx(data: CVData): Promise<{ documentXml: string; text: s
     capturedBlob = blobByUrl.get(this.href) ?? null;
   });
 
-  await exportToDOCX(data, 'corporate-navy-docx-test', 'en', 'corporate-navy');
+  await exportToDOCX(data, 'corporate-navy-docx-test', locale, 'corporate-navy');
   expect(capturedBlob).not.toBeNull();
   const zip = await JSZip.loadAsync(await capturedBlob!.arrayBuffer());
   const documentXml = await zip.file('word/document.xml')!.async('string');
@@ -411,6 +411,48 @@ describe('Corporate Navy export', () => {
 
     expect(templateComponents['corporate-navy']).toBe(CorporateNavyTemplate);
     expect(html).toContain('data-template-id="corporate-navy"');
+  });
+
+  test('Corporate Navy date leaves use the filtered hyphen contract across Preview, PDF, and DOCX', async () => {
+    const noPhotoPersonal = {
+      ...cv().personal,
+      photoEnabled: false,
+      photo: undefined,
+      originalPhoto: undefined,
+    };
+    const data = cv({
+      personal: noPhotoPersonal,
+      summary: '',
+      education: [],
+      experience: [
+        { id: 'current', company: 'Current', position: 'Role', startDate: '2026-03', endDate: '', isPresent: true, description: '' },
+        { id: 'start-only', company: 'Start Only', position: 'Role', startDate: '2024-01', endDate: '', isPresent: false, description: '' },
+        { id: 'range', company: 'Range', position: 'Role', startDate: '2020-01', endDate: '2022-12', isPresent: false, description: '' },
+      ],
+    });
+    const html = renderToStaticMarkup(<CorporateNavyTemplate data={data} locale="sr" />);
+    expect(html).toContain('2026-03 - Trenutno');
+    expect(html).toContain('2024-01');
+    expect(html).toContain('2020-01 - 2022-12');
+    expect(html).not.toContain('2024-01 -');
+    expect(html).not.toContain('2024-01 –');
+
+    const { instances } = installDirectPdfMocks();
+    const mod = await import('@/lib/export');
+    await mod.buildCorporateNavyPagedPdfBlob(data, 'sr');
+    const drawn = instances[0]?.drawnText ?? [];
+    expect(drawn).toContain('2026-03 - Trenutno');
+    expect(drawn).toContain('2024-01');
+    expect(drawn).not.toContain('2024-01 -');
+    expect(drawn).not.toContain('2024-01 –');
+    expect(drawn).toContain('2020-01 - 2022-12');
+
+    const { text } = await captureDocx(data, 'sr');
+    expect(text).toContain('2026-03 - Trenutno');
+    expect(text).toContain('2024-01');
+    expect(text).toContain('2020-01 - 2022-12');
+    expect(text).not.toContain('2024-01 -');
+    expect(text).not.toContain('2024-01 –');
   });
 
   test('dedicated PDF renderer has compact navy header, left info, right circular photo, and bottom columns', () => {

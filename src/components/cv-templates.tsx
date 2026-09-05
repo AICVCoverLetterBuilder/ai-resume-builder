@@ -1145,16 +1145,19 @@ export function CorporateNavyTemplate({ data, locale }: TemplateProps) {
         {data.experience.length > 0 && (
           <section className="mb-7">
             <h2 className="text-[10px] font-bold uppercase tracking-[0.2em] text-[#0F172A] border-b border-gray-200 pb-1 mb-4">{L.experience}</h2>
-            {data.experience.map(exp => (
-              <div key={exp.id} className="mb-5">
-                <div className="flex justify-between items-baseline">
-                  <h3 className="font-bold text-gray-900">{exp.position}</h3>
-                  <span className="text-xs text-gray-400">{exp.startDate} – {exp.isPresent ? L.present : exp.endDate}</span>
+            {data.experience.map(exp => {
+              const date = [exp.startDate, exp.isPresent ? L.present : exp.endDate].filter(Boolean).join(' - ');
+              return (
+                <div key={exp.id} className="mb-5">
+                  <div className="flex justify-between items-baseline">
+                    <h3 className="font-bold text-gray-900">{exp.position}</h3>
+                    {date && <span className="text-xs text-gray-400">{date}</span>}
+                  </div>
+                  <p className="text-blue-700 text-xs font-medium mt-0.5">{exp.company}</p>
+                  <p className="mt-2 text-gray-600 whitespace-pre-line">{exp.description}</p>
                 </div>
-                <p className="text-blue-700 text-xs font-medium mt-0.5">{exp.company}</p>
-                <p className="mt-2 text-gray-600 whitespace-pre-line">{exp.description}</p>
-              </div>
-            ))}
+              );
+            })}
           </section>
         )}
         {data.education.length > 0 && (

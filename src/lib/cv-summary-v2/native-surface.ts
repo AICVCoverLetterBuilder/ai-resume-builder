@@ -415,6 +415,7 @@ export function realizeFirstPersonDutyClause(
   locale: Locale,
   employmentState: SummaryV2EmploymentState,
   gender?: string | null,
+  shellSuppliesCompletedAuxiliary = false,
 ): string {
   const tense = dutyTenseFromEmploymentState(employmentState);
   const raw = (bullet || '').replace(/[.;。؟।]+$/u, '').trim();
@@ -426,6 +427,7 @@ export function realizeFirstPersonDutyClause(
       locale,
       employmentState,
       gender,
+      shellSuppliesCompletedAuxiliary,
     });
     return realized.text;
   }
@@ -560,7 +562,13 @@ export function buildNativeFirstPersonDutyTail(
   gender?: string | null,
 ): string {
   const clauses = bullets
-    .map((b) => realizeFirstPersonDutyClause(b, locale, employmentState, gender))
+    .map((b) => realizeFirstPersonDutyClause(
+      b,
+      locale,
+      employmentState,
+      gender,
+      employmentState === 'completed',
+    ))
     .filter(Boolean);
   if (!clauses.length) return '';
   if (locale === 'fr') {
