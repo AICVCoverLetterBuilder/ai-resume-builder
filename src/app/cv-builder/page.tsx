@@ -229,6 +229,11 @@ import {
 } from '@/lib/ai-core-v3';
 import { runSummaryV3StyleClientOperation } from '@/lib/ai-core-v3/summary-style-m5-client';
 import { canonicalSummaryV3StyleLocale } from '@/lib/ai-core-v3/summary-style-m5';
+import {
+  createContentLocalizeM6Operation,
+  type ContentLocalizeM6TargetLocale,
+} from '@/lib/ai-core-v3/content-localize-m6';
+import { runContentLocalizeV3ClientOperation } from '@/lib/ai-core-v3/content-localize-v3-client';
 import { motion } from 'framer-motion';
 import { toast } from 'sonner';
 import {
@@ -244,6 +249,7 @@ import { JobAnalysisResultScreen, JobAnalysisLoadingState } from '@/components/J
 import { TemplatePreview } from '@/components/TemplatePreview';
 import { CvExportCopyDiagnosticsButton } from '@/components/CvExportDiagnosticsControls';
 import { TemplatePreviewFullscreenModal } from '@/components/TemplatePreviewFullscreenModal';
+import { TargetContentLocaleDialog } from '@/components/ai/TargetContentLocaleDialog';
 import {
   createElegantFormalPortraitPhoto,
   isCleanElegantFormalPortraitPhoto,
@@ -419,6 +425,14 @@ function recordSummaryLocalizationDiagnostics(
     localizedManifestCacheHitByEntryHash,
   });
 }
+
+type SummaryTranslateDialogIntent = Readonly<{
+  sourceText: string;
+  sourceTextHash: string;
+  sourceLocale: Locale;
+  boundSourceLocale: string | undefined;
+  boundSourceTextHash: string | undefined;
+}>;
 
 export default function CVBuilderPage() {
   const { t, locale } = useI18n();
@@ -693,6 +707,8 @@ export default function CVBuilderPage() {
   experienceV3LevelRef.current = expLevel;
   const [isSummaryGenerating, setIsSummaryGenerating] = useState(false);
   const [rewritingStyle, setRewritingStyle] = useState<string | null>(null);
+  const [summaryTranslateIntent, setSummaryTranslateIntent] = useState<SummaryTranslateDialogIntent | null>(null);
+  const [summaryTranslateTargetLocale, setSummaryTranslateTargetLocale] = useState<ContentLocalizeM6TargetLocale | null>(null);
   const [generatingBulletsId, setGeneratingBulletsId] = useState<string | null>(null);
   const [activeLanguageSuggestionIndex, setActiveLanguageSuggestionIndex] = useState(-1);
   const [showSkillSuggestions, setShowSkillSuggestions] = useState(false);
@@ -3367,6 +3383,117 @@ export default function CVBuilderPage() {
     }
   };
 
+  const closeSummaryTranslateDialog = () => {
+    setSummaryTranslateIntent(null);
+    setSummaryTranslateTargetLocale(null);
+  };
+
+  const openSummaryTranslateDialog = () => {
+    const liveCv = cvRef.current;
+    const sourceText = String(liveCv.summary || '');
+    if (!sourceText.trim()) {
+      toast.error(aiErrorMessage('generation_validation_failed', locale));
+      return;
+    }
+    // M6.2 is the sole current-text Summary locale authority. The UI locale,
+    // document locale, and canonical grounding never participate here.
+    const source = resolveSummarySourceLocale(liveCv);
+    if (!source.locale) {
+      toast.error(aiErrorMessage('generation_validation_failed', locale));
+      return;
+    }
+    setSummaryTranslateTargetLocale(null);
+    setSummaryTranslateIntent({
+      sourceText,
+      sourceTextHash: hashSummarySourceLocaleText(sourceText),
+      sourceLocale: source.locale,
+      boundSourceLocale: liveCv.summarySourceLocale,
+      boundSourceTextHash: liveCv.summarySourceLocaleTextHash,
+    });
+  };
+
+  const confirmSummaryTranslate = async () => {
+    const intent = summaryTranslateIntent;
+    const targetLocale = summaryTranslateTargetLocale;
+    if (!intent || !targetLocale) return;
+
+    const liveCvAtConfirm = cvRef.current;
+    const currentSourceText = String(liveCvAtConfirm.summary || '');
+    const currentSource = resolveSummarySourceLocale(liveCvAtConfirm);
+    // A dialog authorizes only the exact current visible Summary and its exact
+    // M6.2 binding captured at open. Any intervening edit fails closed.
+    const sourceIsCurrent = currentSourceText === intent.sourceText
+      && hashSummarySourceLocaleText(currentSourceText) === intent.sourceTextHash
+      && currentSource.locale === intent.sourceLocale
+      && liveCvAtConfirm.summarySourceLocale === intent.boundSourceLocale
+      && liveCvAtConfirm.summarySourceLocaleTextHash === intent.boundSourceTextHash;
+    if (!sourceIsCurrent || !currentSource.locale || targetLocale === currentSource.locale) {
+      closeSummaryTranslateDialog();
+      toast.error(aiErrorMessage('generation_validation_failed', locale));
+      return;
+    }
+
+    const proToken = getCurrentProTokenOrToast(() => setSummaryAiModal(true));
+    if (!proToken) return;
+
+    const reqCtx = beginAiClientRequest('summary_translate', targetLocale);
+    const operation = createContentLocalizeM6Operation({
+      operationId: reqCtx.requestId,
+      requestId: reqCtx.requestId,
+      kind: 'summary',
+      targetLocale,
+      confirmed: true,
+      cv: liveCvAtConfirm,
+    });
+    if (operation.status !== 'request_ready' || operation.snapshot.kind !== 'summary') {
+      closeSummaryTranslateDialog();
+      toast.error(aiErrorMessage('generation_validation_failed', locale));
+      return;
+    }
+
+    // The dialog is now consumed. A later explicit Translate action may safely
+    // supersede this request through the one existing Summary race authority.
+    closeSummaryTranslateDialog();
+    latestSummaryRequestIdRef.current = reqCtx.requestId;
+    const countBefore = getProAiUsageCount();
+    const controller = new AbortController();
+    const timer = scheduleClientAbort(controller, resolveClientAbortTimeoutMs(AI_CLIENT_TIMEOUT_MS));
+    try {
+      const outcome = await runContentLocalizeV3ClientOperation({
+        snapshot: operation.snapshot,
+        cv: liveCvAtConfirm,
+        proToken,
+        usageCountBefore: countBefore,
+      }, {
+        request: async (body) => {
+          const { data, response } = await apiFetch<unknown>('/api/generate', {
+            body,
+            signal: controller.signal,
+          });
+          return { data, status: response.status };
+        },
+        getLiveCv: () => cvRef.current,
+        getActiveOperationId: () => latestSummaryRequestIdRef.current || '',
+        commitCandidate: commitSummaryV3Candidate,
+      });
+      finishAiClientRequest({
+        ctx: reqCtx,
+        isProVerified: true,
+        countBefore,
+        countAfter: outcome.kind === 'committed' ? getProAiUsageCount() : countBefore,
+        httpStatus: outcome.status,
+        error: outcome.kind === 'committed' || outcome.reason === 'operation_superseded'
+          ? null
+          : { code: 'generation_validation_failed', httpStatus: outcome.status },
+        responseSource: outcome.kind === 'committed' ? 'provider' : 'blocked',
+      });
+      if (outcome.kind === 'committed') toast.success(t.cv.genSuccess);
+      else if (outcome.reason !== 'operation_superseded') toast.error(aiErrorMessage('generation_validation_failed', locale));
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
   const handleRewrite = async (style: 'shorter' | 'stronger' | 'professional') => {
     if (rewritingStyle) return;
     if (isAiCoreV3Enabled({ AI_CORE_V3_ENABLED: process.env.NEXT_PUBLIC_AI_CORE_V3_ENABLED })) {
@@ -5436,6 +5563,12 @@ export default function CVBuilderPage() {
                       subtitle={isSummaryGenerating ? undefined : t.cv.generateSubtext}
                       showArrow
                     />
+                    <PremiumAIButton
+                      onClick={openSummaryTranslateDialog}
+                      icon={Wand2}
+                      label={t.cv.translate}
+                      showArrow
+                    />
                     {INTERNAL_AI_RESET_ENABLED ? <SummaryAiCopyDiagnosticsButton /> : null}
                     <div className="space-y-2">
                       <p className="text-xs font-medium text-foreground/60">{t.cv.rewrite}:</p>
@@ -5457,7 +5590,7 @@ export default function CVBuilderPage() {
                     <textarea
                       data-summary-v3-editor
                       value={cv.summary}
-                      onChange={e => setCv(prev => applyCanonicalSummaryEdit(prev, e.target.value, locale))}
+                      onChange={e => commitCvUpdate(prev => applyCanonicalSummaryEdit(prev, e.target.value, locale))}
                       className={textareaClass + ' min-h-[180px]'}
                       placeholder={t.cv.summaryPlaceholder}
                     />
@@ -5693,6 +5826,14 @@ export default function CVBuilderPage() {
       <AiRecommendProModal
         open={aiRecommendModal}
         onClose={() => setAiRecommendModal(false)}
+      />
+      <TargetContentLocaleDialog
+        open={summaryTranslateIntent !== null}
+        sourceLocale={summaryTranslateIntent?.sourceLocale || null}
+        targetLocale={summaryTranslateTargetLocale}
+        onTargetLocaleChange={setSummaryTranslateTargetLocale}
+        onConfirm={confirmSummaryTranslate}
+        onCancel={closeSummaryTranslateDialog}
       />
       <TemplatePreviewFullscreenModal
         open={fullscreenTemplateId !== null}
