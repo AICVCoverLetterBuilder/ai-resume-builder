@@ -108,6 +108,10 @@ function baseCv(options?: {
     skills: [],
     certifications: [],
     languages: [],
+    templateId: 'modern-minimal',
+    region: 'EU',
+    createdAt: '2025-01-01T00:00:00.000Z',
+    updatedAt: '2025-01-01T00:00:00.000Z',
   };
 }
 
@@ -364,7 +368,7 @@ describe('AAB414 Experience transaction ownership / post-write truth', () => {
     expect(visible.visibleDescriptionMatchesFinalHash).toBe(true);
   });
 
-  it('derives locale/fact/predicate/hash truth from one snapshot and keeps completeness coherent', () => {
+  it('derives hash/fact/predicate truth from one snapshot while locale purity remains upstream finalization truth', () => {
     const visible = validateVisibleExperienceCoverage({
       sourceDescription: DEVICE_SOURCE,
       visibleText: DEVICE_SOURCE,
@@ -374,7 +378,11 @@ describe('AAB414 Experience transaction ownership / post-write truth', () => {
     expect(visible.visibleDescriptionMatchesFinalHash).toBe(false);
     expect(visible.visibleFactCoveragePassed).toBe(false);
     expect(visible.visiblePredicateCoveragePassed).toBe(false);
-    expect(visible.visibleLocaleValidationPassed).toBe(false);
+    // This post-write helper proves that the visible field materialized the
+    // already-finalized candidate. Target-locale purity is established before
+    // it reaches this helper, so a hash-mismatched arbitrary visible string is
+    // not reclassified here as a second language detector.
+    expect(visible.visibleLocaleValidationPassed).toBe(true);
 
     const post = checkExperiencePostapplyDiagnosticCompleteness({
       applyAuthorized: true,
@@ -392,7 +400,7 @@ describe('AAB414 Experience transaction ownership / post-write truth', () => {
       visibleCoveredPredicateCount: 0,
       visiblePredicateCoveragePassed: false,
       visibleNormalizedHash: visible.visibleNormalizedHash,
-      visibleLocaleValidationPassed: false,
+      visibleLocaleValidationPassed: true,
       visibleTenseValidationPassed: true,
     });
     expect(post.passed).toBe(true);
@@ -426,23 +434,53 @@ describe('AAB414 Experience transaction ownership / post-write truth', () => {
       visibleCoveredPredicateCount: 0,
       visiblePredicateCoveragePassed: false,
       visibleNormalizedHash: visible.visibleNormalizedHash,
-      visibleLocaleValidationPassed: false,
+      visibleLocaleValidationPassed: true,
       visibleTenseValidationPassed: true,
     });
     const trace = session.commit();
-    expect(trace.postapplyDiagnosticCompletenessPassed).toBe(true);
+    // A failed/uncommitted apply has no post-apply success claim. The direct
+    // completeness probe above remains complete, while the session truthfully
+    // leaves the committed-only post-apply field unset.
+    expect(trace.postapplyDiagnosticCompletenessPassed).toBeNull();
     expect(trace.postapplyMissingRequiredDiagnosticFields).toEqual([]);
     expect(trace.postapplyNullRequiredDiagnosticFields).toEqual([]);
   });
 
-  it('wires write-failure identity only to an actual transaction write failure', async () => {
+  it('reports write failure only when the transaction cannot materialize the selected final hash', () => {
     expect(EXPERIENCE_TRANSACTION_OWNERSHIP_414_REVISION)
       .toBe('experience-transaction-ownership-414-v1');
-    const page = await import('node:fs/promises').then((fs) => (
-      fs.readFile('src/app/cv-builder/page.tsx', 'utf8')
-    ));
-    expect(page).toContain('const actualWriteFailure = !applyTransaction.ok;');
-    expect(page).toMatch(/finalTypedFailureReason:\s*actualWriteFailure[\s\S]*?'visible_apply_write_failed'[\s\S]*?'visible_apply_validation_failed'/);
-    expect(page).not.toContain("diagSession.stage('temporary_visible_write', 'ok');");
+    const cv = baseCv({ description: DEVICE_SOURCE, generatedDescription: '' });
+    const cvRef = { current: cv };
+    const failed = commitExperienceApplyTransactionally({
+      cvRef,
+      ownership: createExperienceApplyOwnershipState(),
+      locale: 'hi',
+      experienceId: DEVICE_ID,
+      finalized: finalized(SAFE_HI, 'ai_generated'),
+      operationSourceText: DEVICE_SOURCE,
+      currentVisibleText: DEVICE_SOURCE,
+      operationId: 'req-write-failure-414',
+      scheduleReactCv: () => {},
+      // An attempted write that returns the untouched CV cannot materialize
+      // the selected candidate hash and must fail before publication.
+      applyToCv: (base) => base,
+    });
+    expect(failed.ok).toBe(false);
+    expect(failed.lifecycle.failureKind).toBe('write_did_not_materialize_selected_hash');
+    expect(cvRef.current).toBe(cv);
+
+    const succeeded = commitExperienceApplyTransactionally({
+      cvRef: { current: cv },
+      ownership: createExperienceApplyOwnershipState(),
+      locale: 'hi',
+      experienceId: DEVICE_ID,
+      finalized: finalized(SAFE_HI, 'ai_generated'),
+      operationSourceText: DEVICE_SOURCE,
+      currentVisibleText: DEVICE_SOURCE,
+      operationId: 'req-write-success-414',
+      scheduleReactCv: () => {},
+    });
+    expect(succeeded.ok).toBe(true);
+    expect(succeeded.lifecycle.failureKind).toBe('none');
   });
 });

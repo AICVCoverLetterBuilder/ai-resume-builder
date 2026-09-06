@@ -1,6 +1,7 @@
 'use client';
 
 import { syncCvRefFromReactState } from '@/lib/cv-summary-cvref-react-sync';
+import { shouldAcceptIncomingCurrentCv } from '@/lib/cv-current-state-sync';
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import Header from '@/components/Header';
 import Footer from '@/components/Footer';
@@ -150,7 +151,17 @@ import {
 } from '@/lib/cv-experience-job-context';
 import {
   resolveExperienceAiAuthoritativeSource,
+  applyGeneratedExperienceDescription,
 } from '@/lib/cv-experience-provenance';
+import {
+  hashExperienceSourceLocaleText,
+  resolveExperienceSourceLocale,
+} from '@/lib/cv-experience-source-locale';
+import {
+  commitExperienceApplyTransactionally,
+  createExperienceApplyOwnershipState,
+  rollbackExperienceApplyTransactionally,
+} from '@/lib/cv-experience-transactional-apply';
 import {
   resolveExperienceTextareaProvenance,
   EXPERIENCE_AI_OUTPUT_PROVENANCE_304_REVISION,
@@ -233,7 +244,12 @@ import {
   createContentLocalizeM6Operation,
   type ContentLocalizeM6TargetLocale,
 } from '@/lib/ai-core-v3/content-localize-m6';
-import { runContentLocalizeV3ClientOperation } from '@/lib/ai-core-v3/content-localize-v3-client';
+import {
+  runContentLocalizeV3ClientOperation,
+  runContentLocalizeV3ExperienceClientOperation,
+  type ContentLocalizeV3ExperienceCommitRequest,
+  type ContentLocalizeV3ExperienceCommitReceipt,
+} from '@/lib/ai-core-v3/content-localize-v3-client';
 import { motion } from 'framer-motion';
 import { toast } from 'sonner';
 import {
@@ -258,6 +274,40 @@ import {
 } from '@/lib/elegant-formal-photo';
 
 const emptyCV = createEmptyCv;
+
+/** Summary transactions own only Summary fields; Experience transactions may
+ * legitimately commit concurrently without invalidating or being overwritten
+ * by a Summary candidate. */
+function summaryTransactionProjection(cv: CVData): unknown {
+  return {
+    summary: cv.summary,
+    summaryOrigin: cv.summaryOrigin,
+    summaryGeneratedLocale: cv.summaryGeneratedLocale,
+    summarySourceLocale: cv.summarySourceLocale,
+    summarySourceLocaleTextHash: cv.summarySourceLocaleTextHash,
+    canonicalSummary: cv.canonicalSummary,
+    canonicalSnapshot: cv.canonicalSnapshot,
+    contentLocale: cv.contentLocale,
+  };
+}
+
+function summaryTransactionHash(cv: CVData): string {
+  return hashSummaryV3Value(summaryTransactionProjection(cv));
+}
+
+function mergeSummaryTransactionCv(base: CVData, summarySource: CVData): CVData {
+  return {
+    ...base,
+    summary: summarySource.summary,
+    summaryOrigin: summarySource.summaryOrigin,
+    summaryGeneratedLocale: summarySource.summaryGeneratedLocale,
+    summarySourceLocale: summarySource.summarySourceLocale,
+    summarySourceLocaleTextHash: summarySource.summarySourceLocaleTextHash,
+    canonicalSummary: summarySource.canonicalSummary,
+    canonicalSnapshot: summarySource.canonicalSnapshot,
+    contentLocale: summarySource.contentLocale,
+  };
+}
 
 const emptyExp = (): WorkExperience => ({
   id: crypto.randomUUID(),
@@ -434,6 +484,15 @@ type SummaryTranslateDialogIntent = Readonly<{
   boundSourceTextHash: string | undefined;
 }>;
 
+type ExperienceTranslateDialogIntent = Readonly<{
+  experienceEntryId: string;
+  sourceText: string;
+  sourceTextHash: string;
+  sourceLocale: Locale;
+  boundSourceLocale: string | undefined;
+  boundSourceTextHash: string | undefined;
+}>;
+
 export default function CVBuilderPage() {
   const { t, locale } = useI18n();
   const {
@@ -452,6 +511,10 @@ export default function CVBuilderPage() {
   } = useApp();
   const [cv, setCv] = useState<CVData>(currentCv || emptyCV());
   const cvRef = useRef<CVData>(cv);
+  // This is local current-state synchronization, not an AI transaction owner.
+  // A manual edit stays authoritative until the store publishes that same
+  // immutable CV snapshot back to this page.
+  const pendingLocalCvRef = useRef<CVData | null>(null);
   /** Last prepareExportReadyCv result for release diagnostics (non-PII). */
   const lastExportPrepareRef = useRef<PrepareExportReadyResult | null>(null);
   const lastExportRawCvRef = useRef<CVData | null>(null);
@@ -477,6 +540,7 @@ export default function CVBuilderPage() {
     setCv((prev) => {
       const next = updater(prev);
       cvRef.current = next;
+      pendingLocalCvRef.current = next;
       if (next.templateId !== prev.templateId) {
         setCurrentCv(next);
       }
@@ -530,22 +594,24 @@ export default function CVBuilderPage() {
     if (latestSummaryRequestIdRef.current !== request.operationId) {
       return failed('operation_superseded');
     }
-    if (hashSummaryV3Value(cvRef.current) !== request.previousCvHash) {
+    if (summaryTransactionHash(cvRef.current) !== summaryTransactionHash(request.previousCv)) {
       return failed('stale_snapshot');
     }
     const rollbackPreviousCv = (): boolean => {
       try {
-        if (!persistCurrentCvTransactionally(request.previousCv)) return false;
-        cvRef.current = request.previousCv;
-        setCv(request.previousCv);
-        return hashSummaryV3Value(cvRef.current) === request.previousCvHash;
+        const restored = mergeSummaryTransactionCv(cvRef.current, request.previousCv);
+        if (!persistCurrentCvTransactionally(restored)) return false;
+        cvRef.current = restored;
+        setCv(restored);
+        return summaryTransactionHash(cvRef.current) === summaryTransactionHash(request.previousCv);
       } catch {
         return false;
       }
     };
+    const nextCv = mergeSummaryTransactionCv(cvRef.current, request.nextCv);
     let persisted = false;
     try {
-      persisted = persistCurrentCvTransactionally(request.nextCv);
+      persisted = persistCurrentCvTransactionally(nextCv);
     } catch {
       persisted = false;
     }
@@ -556,8 +622,8 @@ export default function CVBuilderPage() {
       });
     }
     try {
-      cvRef.current = request.nextCv;
-      setCv(request.nextCv);
+      cvRef.current = nextCv;
+      setCv(nextCv);
     } catch {
       const rolledBack = rollbackPreviousCv();
       return failed(rolledBack ? 'canonical_commit_failed' : 'rollback_failed', {
@@ -581,8 +647,8 @@ export default function CVBuilderPage() {
       committedSummaryHash,
       intendedCandidateHash: request.candidateHash,
       committedSummarySourceLocaleTextHash: committed.summarySourceLocaleTextHash,
-      committedCvHash: hashSummaryV3Value(committed),
-      intendedCvHash: hashSummaryV3Value(request.nextCv),
+      committedCvHash: summaryTransactionHash(committed),
+      intendedCvHash: summaryTransactionHash(request.nextCv),
       committedContentLocale,
       intendedContentLocale: request.nextCv.contentLocale,
     });
@@ -677,6 +743,158 @@ export default function CVBuilderPage() {
       rollbackResult: 'not_required' as const,
     });
   }, [commitProAiSuccess, persistCurrentCvTransactionally]);
+
+  const commitExperienceTranslationCandidate = useCallback((
+    request: ContentLocalizeV3ExperienceCommitRequest,
+  ): ContentLocalizeV3ExperienceCommitReceipt => {
+    const failed = (reason: string): ContentLocalizeV3ExperienceCommitReceipt => ({ kind: 'failed', reason });
+    if (latestBulletsRequestIdRef.current[request.experienceEntryId] !== request.operationId) {
+      return failed('operation_superseded');
+    }
+    const before = cvRef.current;
+    const entry = before.experience.find((item) => item.id === request.experienceEntryId);
+    if (!entry) return failed('experience_entry_missing');
+    if (entry.description !== request.sourceText
+      || hashExperienceSourceLocaleText(entry.description || '') !== request.sourceTextHash) {
+      return failed('stale_snapshot');
+    }
+
+    const finalized = {
+      blocked: false,
+      text: request.translatedText,
+      origin: 'ai_generated' as const,
+      roleDutyConflict: false,
+      countedAsSuccess: true,
+      diagnostics: { sourceLocale: request.sourceLocale },
+    };
+    const scheduleReactCv = (next: CVData) => {
+      cvRef.current = next;
+      setCv(next);
+    };
+    // The existing M2/M3 latest-entry request map is the sole live race
+    // authority. The generic helper state is operation-local only: it records
+    // this transaction's write/rollback lifecycle and cannot supersede a
+    // different Generate/Enhance/Translate operation.
+    const transactionOwnership = createExperienceApplyOwnershipState();
+    const transaction = commitExperienceApplyTransactionally({
+      cvRef,
+      ownership: transactionOwnership,
+      locale: request.targetLocale as Locale,
+      experienceId: request.experienceEntryId,
+      finalized,
+      operationSourceText: request.sourceText,
+      currentVisibleText: entry.description || '',
+      operationId: request.operationId,
+      scheduleReactCv,
+      applyToCv: (base, targetLocale, experienceId, selected) => ({
+        ...base,
+        experience: base.experience.map((candidate) => {
+          if (candidate.id !== experienceId) return candidate;
+          const translated = applyGeneratedExperienceDescription(candidate, selected.text, {
+            locale: targetLocale,
+            origin: 'ai_generated',
+            confirmGeneratedAsGrounding: false,
+            requestHash: request.operationId,
+            operationMode: 'translate',
+            sourceLocale: request.sourceLocale,
+          });
+          return {
+            ...translated,
+            descriptionSourceLocale: request.targetLocale,
+            descriptionSourceLocaleTextHash: hashExperienceSourceLocaleText(selected.text),
+          };
+        }),
+      }),
+    });
+    const rollback = (): boolean => {
+      const rolledBack = rollbackExperienceApplyTransactionally({
+        cvRef,
+        ownership: transactionOwnership,
+        experienceId: request.experienceEntryId,
+        previousCv: transaction.previousCv,
+        scheduleReactCv,
+      });
+      if (!rolledBack) return false;
+      try {
+        if (!persistCurrentCvTransactionally(transaction.previousCv)) return false;
+        cvRef.current = transaction.previousCv;
+        setCv(transaction.previousCv);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    if (!transaction.ok || !transaction.writtenCv) {
+      return failed(transaction.lifecycle.failureKind === 'source_changed_before_write'
+        ? 'stale_snapshot'
+        : transaction.lifecycle.failureKind === 'entry_missing'
+          ? 'experience_entry_missing'
+          : 'transaction_apply_failed');
+    }
+
+    // The transaction's candidate is only a write receipt. Re-read the sole
+    // page authority after schedule/write before persistence or usage.
+    const authoritativeAfterWrite = cvRef.current;
+    const writtenEntry = authoritativeAfterWrite.experience.find(
+      (candidate) => candidate.id === request.experienceEntryId,
+    );
+    const provenance = writtenEntry?.aiOutputProvenance;
+    const otherEntriesBefore = before.experience.filter(
+      (candidate) => candidate.id !== request.experienceEntryId,
+    );
+    const otherEntriesAfter = authoritativeAfterWrite.experience.filter(
+      (candidate) => candidate.id !== request.experienceEntryId,
+    );
+    const readbackPassed = Boolean(
+      writtenEntry
+      && writtenEntry.description === request.translatedText
+      && hashExperienceSourceLocaleText(writtenEntry.description || '') === request.candidateTextHash
+      && writtenEntry.descriptionOrigin === 'ai_generated'
+      && writtenEntry.descriptionSourceLocale === request.targetLocale
+      && writtenEntry.descriptionSourceLocaleTextHash === request.candidateTextHash
+      && writtenEntry.generatedDescription === request.translatedText
+      && writtenEntry.generatedLocale === request.targetLocale
+      && provenance?.experienceEntryId === request.experienceEntryId
+      && provenance.sourceLocale === request.sourceLocale
+      && provenance.targetLocale === request.targetLocale
+      && provenance.operationMode === 'translate'
+      && writtenEntry.position === entry.position
+      && writtenEntry.company === entry.company
+      && writtenEntry.startDate === entry.startDate
+      && writtenEntry.endDate === entry.endDate
+      && writtenEntry.isPresent === entry.isPresent
+      && writtenEntry.originalUserDescription === entry.originalUserDescription
+      && writtenEntry.canonicalDescription === entry.canonicalDescription
+      && summaryTransactionHash(authoritativeAfterWrite) === summaryTransactionHash(before)
+      && otherEntriesAfter.length === otherEntriesBefore.length
+      && otherEntriesAfter.every((candidate, index) => candidate === otherEntriesBefore[index]),
+    );
+    if (!readbackPassed) return failed(rollback() ? 'readback_failed' : 'rollback_failed');
+    let persisted = false;
+    try {
+      persisted = persistCurrentCvTransactionally(authoritativeAfterWrite);
+    } catch {
+      persisted = false;
+    }
+    if (!persisted) return failed(rollback() ? 'persistence_failed' : 'rollback_failed');
+    cvRef.current = authoritativeAfterWrite;
+    setCv(authoritativeAfterWrite);
+
+    let usageCommit: ReturnType<typeof commitProAiSuccess>;
+    try {
+      usageCommit = commitProAiSuccess();
+    } catch {
+      return failed(rollback() ? 'usage_accounting_failed' : 'rollback_failed');
+    }
+    if (!usageCommit.ok) return failed(rollback() ? 'usage_accounting_failed' : 'rollback_failed');
+    return {
+      kind: 'committed',
+      operationId: request.operationId,
+      requestId: request.requestId,
+      experienceEntryId: request.experienceEntryId,
+      candidateTextHash: request.candidateTextHash,
+    };
+  }, [commitProAiSuccess, persistCurrentCvTransactionally]);
   const [step, setStep] = useState(0);
   const [showPreview, setShowPreview] = useState(false);
   const [skillInput, setSkillInput] = useState('');
@@ -709,6 +927,9 @@ export default function CVBuilderPage() {
   const [rewritingStyle, setRewritingStyle] = useState<string | null>(null);
   const [summaryTranslateIntent, setSummaryTranslateIntent] = useState<SummaryTranslateDialogIntent | null>(null);
   const [summaryTranslateTargetLocale, setSummaryTranslateTargetLocale] = useState<ContentLocalizeM6TargetLocale | null>(null);
+  const [experienceTranslateIntent, setExperienceTranslateIntent] = useState<ExperienceTranslateDialogIntent | null>(null);
+  const [experienceTranslateTargetLocale, setExperienceTranslateTargetLocale] = useState<ContentLocalizeM6TargetLocale | null>(null);
+  const experienceTranslateConfirmingRef = useRef(false);
   const [generatingBulletsId, setGeneratingBulletsId] = useState<string | null>(null);
   const [activeLanguageSuggestionIndex, setActiveLanguageSuggestionIndex] = useState(-1);
   const [showSkillSuggestions, setShowSkillSuggestions] = useState(false);
@@ -734,6 +955,12 @@ export default function CVBuilderPage() {
 
   useEffect(() => {
     if (currentCv) {
+      if (!shouldAcceptIncomingCurrentCv({
+        pendingLocalCv: pendingLocalCvRef.current,
+        incomingCv: currentCv,
+      })) {
+        return;
+      }
       if (!shouldAcceptIncomingSummaryCv({
         ownership: summaryApplyOwnershipRef.current,
         incomingCv: currentCv,
@@ -741,6 +968,7 @@ export default function CVBuilderPage() {
       })) {
         return;
       }
+      pendingLocalCvRef.current = null;
       setCv(currentCv);
       cvRef.current = currentCv;
     }
@@ -910,10 +1138,18 @@ export default function CVBuilderPage() {
   };
 
   const addExperience = () => setCv(prev => ({ ...prev, experience: [...prev.experience, emptyExp()] }));
-  const removeExperience = (id: string) => setCv(prev => ({ ...prev, experience: prev.experience.filter(e => e.id !== id) }));
+  const invalidateExperienceOperation = (id: string) => {
+    latestBulletsRequestIdRef.current = { ...latestBulletsRequestIdRef.current, [id]: '' };
+    delete latestBulletsContextKeyRef.current[id];
+  };
+  const removeExperience = (id: string) => {
+    invalidateExperienceOperation(id);
+    commitCvUpdate(prev => ({ ...prev, experience: prev.experience.filter(e => e.id !== id) }));
+  };
   const updateExperience = (id: string, field: string, value: string | boolean) => {
     // Sync cvRef immediately so AI Improvement can read the latest textarea
     // without waiting for React's post-paint useEffect.
+    invalidateExperienceOperation(id);
     commitCvUpdate((prev) => applyCanonicalExperienceEdit(prev, id, field, value, locale));
   };
 
@@ -3494,6 +3730,116 @@ export default function CVBuilderPage() {
     }
   };
 
+  const closeExperienceTranslateDialog = () => {
+    setExperienceTranslateIntent(null);
+    setExperienceTranslateTargetLocale(null);
+  };
+
+  const openExperienceTranslateDialog = (experienceEntryId: string) => {
+    const liveCv = cvRef.current;
+    const entry = liveCv.experience.find((candidate) => candidate.id === experienceEntryId);
+    const sourceText = entry?.description || '';
+    if (!entry || !sourceText.trim()) return;
+    const source = resolveExperienceSourceLocale(entry, liveCv.canonicalSnapshot);
+    if (!source.locale) return;
+    experienceTranslateConfirmingRef.current = false;
+    setExperienceTranslateTargetLocale(null);
+    setExperienceTranslateIntent({
+      experienceEntryId,
+      sourceText,
+      sourceTextHash: hashExperienceSourceLocaleText(sourceText),
+      sourceLocale: source.locale,
+      boundSourceLocale: entry.descriptionSourceLocale,
+      boundSourceTextHash: entry.descriptionSourceLocaleTextHash,
+    });
+  };
+
+  const confirmExperienceTranslate = async () => {
+    const intent = experienceTranslateIntent;
+    const targetLocale = experienceTranslateTargetLocale;
+    if (!intent || !targetLocale || experienceTranslateConfirmingRef.current) return;
+    const liveCvAtConfirm = cvRef.current;
+    const entry = liveCvAtConfirm.experience.find((candidate) => candidate.id === intent.experienceEntryId);
+    const sourceText = entry?.description || '';
+    const source = entry
+      ? resolveExperienceSourceLocale(entry, liveCvAtConfirm.canonicalSnapshot)
+      : { locale: null, resolution: 'ambiguous' as const };
+    const sourceIsCurrent = Boolean(entry)
+      && sourceText === intent.sourceText
+      && hashExperienceSourceLocaleText(sourceText) === intent.sourceTextHash
+      && source.locale === intent.sourceLocale
+      && entry?.descriptionSourceLocale === intent.boundSourceLocale
+      && entry?.descriptionSourceLocaleTextHash === intent.boundSourceTextHash;
+    if (!sourceIsCurrent || !entry || !source.locale || targetLocale === source.locale) {
+      closeExperienceTranslateDialog();
+      return;
+    }
+    const proToken = getCurrentProTokenOrToast(() => setSummaryAiModal(true));
+    if (!proToken) return;
+    const reqCtx = beginAiClientRequest('experience_translate', targetLocale);
+    const operation = createContentLocalizeM6Operation({
+      operationId: reqCtx.requestId,
+      requestId: reqCtx.requestId,
+      kind: 'experience_description',
+      experienceEntryId: intent.experienceEntryId,
+      targetLocale,
+      confirmed: true,
+      cv: liveCvAtConfirm,
+    });
+    if (operation.status !== 'request_ready' || operation.snapshot.kind !== 'experience_description') {
+      closeExperienceTranslateDialog();
+      return;
+    }
+
+    experienceTranslateConfirmingRef.current = true;
+    // Use the request context as the single per-entry race owner. The frozen
+    // M6 operation carries its own identity, while this map is shared with the
+    // existing Generate/Enhance owner for same-entry supersession.
+    latestBulletsRequestIdRef.current = {
+      ...latestBulletsRequestIdRef.current,
+      [intent.experienceEntryId]: operation.snapshot.operationId,
+    };
+    closeExperienceTranslateDialog();
+    const countBefore = getProAiUsageCount();
+    const controller = new AbortController();
+    const timer = scheduleClientAbort(controller, resolveClientAbortTimeoutMs(EXPERIENCE_LOCALIZATION_CLIENT_TIMEOUT_MS));
+    try {
+      const outcome = await runContentLocalizeV3ExperienceClientOperation({
+        snapshot: operation.snapshot,
+        cv: liveCvAtConfirm,
+        proToken,
+        usageCountBefore: countBefore,
+      }, {
+        request: async (body) => {
+          const { data, response } = await apiFetch<unknown>('/api/generate', {
+            body,
+            signal: controller.signal,
+          });
+          return { data, status: response.status };
+        },
+        getLiveCv: () => cvRef.current,
+        getActiveOperationId: () => latestBulletsRequestIdRef.current[intent.experienceEntryId] || '',
+        commitCandidate: commitExperienceTranslationCandidate,
+      });
+      finishAiClientRequest({
+        ctx: reqCtx,
+        isProVerified: true,
+        countBefore,
+        countAfter: outcome.kind === 'committed' ? getProAiUsageCount() : countBefore,
+        httpStatus: outcome.status,
+        error: outcome.kind === 'committed' || outcome.reason === 'operation_superseded'
+          ? null
+          : { code: 'generation_validation_failed', httpStatus: outcome.status },
+        responseSource: outcome.kind === 'committed' ? 'provider' : 'blocked',
+      });
+      if (outcome.kind === 'committed') toast.success(t.cv.genSuccess);
+      else if (outcome.reason !== 'operation_superseded') toast.error(aiErrorMessage('generation_validation_failed', locale));
+    } finally {
+      clearTimeout(timer);
+      experienceTranslateConfirmingRef.current = false;
+    }
+  };
+
   const handleRewrite = async (style: 'shorter' | 'stronger' | 'professional') => {
     if (rewritingStyle) return;
     if (isAiCoreV3Enabled({ AI_CORE_V3_ENABLED: process.env.NEXT_PUBLIC_AI_CORE_V3_ENABLED })) {
@@ -5241,15 +5587,26 @@ export default function CVBuilderPage() {
                               </select>
                             </div>
                           </div>
-                          <PremiumAIButton
-                            onClick={() => handleGenBullets(exp.id)}
-                            disabled={Boolean(generatingBulletsId)}
-                            className="w-full"
-                            icon={Wand2}
-                            label={generatingBulletsId === exp.id ? t.common.loading : t.cv.aiBullets}
-                            subtitle={generatingBulletsId === exp.id ? undefined : t.cv.aiBulletsSubtext}
-                            showArrow
-                          />
+                          <div className="grid gap-2 sm:grid-cols-2">
+                            <PremiumAIButton
+                              onClick={() => handleGenBullets(exp.id)}
+                              disabled={Boolean(generatingBulletsId)}
+                              className="w-full"
+                              icon={Wand2}
+                              label={generatingBulletsId === exp.id ? t.common.loading : t.cv.aiBullets}
+                              subtitle={generatingBulletsId === exp.id ? undefined : t.cv.aiBulletsSubtext}
+                              showArrow
+                            />
+                            <PremiumAIButton
+                              data-testid={`experience-translate-${exp.id}`}
+                              onClick={() => openExperienceTranslateDialog(exp.id)}
+                              className="w-full"
+                              icon={Wand2}
+                              label={t.cv.translate}
+                              subtitle={t.cv.translate}
+                              showArrow
+                            />
+                          </div>
                           {INTERNAL_AI_RESET_ENABLED ? <ExperienceAiCopyDiagnosticsButton /> : null}
                         </div>
                       </div>
@@ -5834,6 +6191,14 @@ export default function CVBuilderPage() {
         onTargetLocaleChange={setSummaryTranslateTargetLocale}
         onConfirm={confirmSummaryTranslate}
         onCancel={closeSummaryTranslateDialog}
+      />
+      <TargetContentLocaleDialog
+        open={experienceTranslateIntent !== null}
+        sourceLocale={experienceTranslateIntent?.sourceLocale || null}
+        targetLocale={experienceTranslateTargetLocale}
+        onTargetLocaleChange={setExperienceTranslateTargetLocale}
+        onConfirm={confirmExperienceTranslate}
+        onCancel={closeExperienceTranslateDialog}
       />
       <TemplatePreviewFullscreenModal
         open={fullscreenTemplateId !== null}
