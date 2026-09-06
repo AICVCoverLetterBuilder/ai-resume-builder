@@ -114,6 +114,13 @@ import {
   normalizeSummaryV3StyleRouteRequest,
   type SummaryV3StyleProviderInvocation,
 } from '@/lib/ai-core-v3/summary-style-m5-provider';
+import {
+  CONTENT_LOCALIZE_V3_OPERATION,
+  createContentLocalizeV3ProviderDependencies,
+  type ContentLocalizeV3ProviderInvocation,
+} from '@/lib/ai-core-v3/content-localize-v3-provider';
+import { executeContentLocalizeM6Server } from '@/lib/ai-core-v3/content-localize-m6-server';
+import type { ContentLocalizeM6Snapshot } from '@/lib/ai-core-v3/content-localize-m6';
 
 /**
  * Explicit Vercel serverless function execution budget (seconds).
@@ -2056,6 +2063,44 @@ Rules:
         serverFallbackUsed: false,
         clientFallbackUsed: false,
       });
+    }
+
+    if (action === CONTENT_LOCALIZE_V3_OPERATION) {
+      const v3Enabled = isAiCoreV3Enabled({
+        AI_CORE_V3_ENABLED: process.env.AI_CORE_V3_ENABLED ?? process.env.NEXT_PUBLIC_AI_CORE_V3_ENABLED,
+      });
+      if (!v3Enabled) {
+        return jsonResponse({
+          ok: false,
+          action: CONTENT_LOCALIZE_V3_OPERATION,
+          typedReason: 'v3_feature_disabled',
+        }, { status: 409 });
+      }
+      const result = await executeContentLocalizeM6Server(
+        params.snapshot as ContentLocalizeM6Snapshot,
+        createContentLocalizeV3ProviderDependencies({
+          invoke: async (invocation: ContentLocalizeV3ProviderInvocation) => {
+            const response = await callWithRetry({
+              model: MODEL,
+              max_tokens: invocation.role === 'writer' ? 1800 : 1400,
+              temperature: 0,
+              system: invocation.system,
+              tools: [invocation.tool as NonNullable<Parameters<Anthropic['messages']['create']>[0]['tools']>[number]],
+              tool_choice: invocation.toolChoice,
+              messages: [{ role: 'user', content: invocation.prompt }],
+            }, deadlineAt, undefined, invocation.timeoutMs, invocation.role === 'writer' ? 'provider' : 'verifier', req.signal, false);
+            return response;
+          },
+        }),
+      );
+      const status = result.status === 'candidate_ready'
+        ? 200
+        : result.reason === 'deadline_exceeded'
+          ? 504
+          : result.reason === 'invalid_authorization_snapshot' || result.reason === 'candidate_rejected'
+            ? 422
+            : 502;
+      return jsonResponse(result, { status });
     }
 
     if (isSummaryV3StyleRouteAction(action)) {
