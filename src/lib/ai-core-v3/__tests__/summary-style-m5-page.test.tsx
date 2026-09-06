@@ -342,6 +342,7 @@ interface RunOptions {
   readonly commitResult?: SummaryV3CommitReceipt;
   readonly currentRoleExperienceId?: string | null;
   readonly responseStatus?: number;
+  readonly initialCv?: CVData;
 }
 
 function candidateResponse(snapshot: ReturnType<typeof createSummaryV3StyleOperationSnapshot>, style: SummaryV3Style, locale: string, text: string): Record<string, unknown> {
@@ -365,12 +366,13 @@ function safeNoOpResponse(snapshot: ReturnType<typeof createSummaryV3StyleOperat
 async function run(options: RunOptions = {}) {
   const locale = options.locale || 'en';
   const style = options.style || 'shorter';
-  const cv = options.liveCv || cvFor(locale, options.summary || '');
+  const initialCv = options.initialCv || options.liveCv || cvFor(locale, options.summary || '');
+  const liveCv = options.liveCv || initialCv;
   let capturedRequest: Record<string, unknown> | null = null;
   let commitRequest: SummaryV3CommitRequest | null = null;
   let requestCount = 0;
   const outcome = await runSummaryV3StyleClientOperation({
-    enabled: options.enabled !== false, style, operationId: 'op', requestId: 'op', cv,
+    enabled: options.enabled !== false, style, operationId: 'op', requestId: 'op', cv: initialCv,
     currentRoleExperienceId: options.currentRoleExperienceId === undefined ? 'experience-current' : options.currentRoleExperienceId,
     requestedLocale: options.requestedLocale || locale, sourceLocale: options.sourceLocale || locale, jobContextKey: 'job-context', referenceDateIso: '2026-09-01', usageCountBefore: 0, proToken: 'test-token', createdAt: 1000,
   }, {
@@ -385,7 +387,7 @@ async function run(options: RunOptions = {}) {
       const data = options.responseFactory ? options.responseFactory(snapshot) : candidateResponse(snapshot, style, locale, options.summary ? `${options.summary} improved` : `${locale} candidate`);
       return { status: options.status ?? options.responseStatus ?? 200, data };
     },
-    getLiveCv: () => cv,
+    getLiveCv: () => liveCv,
     getActiveOperationId: () => options.activeOperationId || 'op',
     commitCandidate: (request) => { commitRequest = request; return options.commitResult || committedReceipt(); },
   });
@@ -792,6 +794,49 @@ describe('M5.3 Summary style client/page boundary', () => {
       }, getLiveCv: () => edited, getActiveOperationId: () => 'op', commitCandidate: () => { throw new Error('must not commit'); },
     });
     expect(result).toMatchObject({ kind: 'terminal', reason: 'stale_snapshot' });
+  });
+
+  it.each(['shorter', 'stronger', 'professional'] as const)(
+    'keeps non-empty %s M5 current after an Experience-only display/provenance commit',
+    async (style) => {
+      const initial = cvFor('en', 'Ava Patel builds APIs.');
+      const live = {
+        ...initial,
+        experience: initial.experience.map((entry) => ({
+          ...entry,
+          description: 'Ingenieur entwickelt zuverlässige APIs.',
+          descriptionOrigin: 'ai_generated' as const,
+          generatedDescription: 'Ingenieur entwickelt zuverlässige APIs.',
+          generatedLocale: 'de',
+          descriptionSourceLocale: 'de',
+          descriptionSourceLocaleTextHash: hashSummaryV3StyleValue('Ingenieur entwickelt zuverlässige APIs.'),
+      })),
+      };
+      const result = await run({ initialCv: initial, liveCv: live, style, summary: initial.summary });
+      expect(result.outcome).toMatchObject({ kind: 'committed' });
+      expect((result.commitRequest as SummaryV3CommitRequest | null)?.previousCv).toBe(live);
+      expect(result.requestCount).toBe(1);
+    },
+  );
+
+  it('fails closed for empty Summary M5 when an Experience translation changes manifest grounding', async () => {
+    const initial = cvFor('en', '');
+    const live = {
+      ...initial,
+      experience: initial.experience.map((entry) => ({
+        ...entry,
+        description: 'Engineer delivers a materially different current duty.',
+        descriptionOrigin: 'ai_generated' as const,
+        generatedDescription: 'Engineer delivers a materially different current duty.',
+        generatedLocale: 'en',
+      })),
+    };
+    const result = await run({ initialCv: initial, liveCv: live, style: 'professional' });
+    expect(result.outcome).toMatchObject({ kind: 'terminal', status: 409, reason: 'stale_snapshot' });
+    expect(result.commitRequest).toBeNull();
+    // The M5 manifest is built from the live Experience description, so this
+    // M6.6-style display translation is source-relevant in empty mode.
+    expect(result.requestCount).toBe(1);
   });
 
   it('reports commit failure, abort, unsupported/cross locale, and disabled gate as terminal', async () => {

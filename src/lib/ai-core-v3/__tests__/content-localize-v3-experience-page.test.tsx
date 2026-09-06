@@ -28,6 +28,25 @@ import {
   runExperienceV3EnhanceAdapter,
   type ExperienceV3EnhanceAdapterInput,
 } from '../experience-enhance';
+import {
+  hashSummaryV3Value,
+  type SummaryV3CommitReceipt,
+  type SummaryV3GenerateAdapterDependencies,
+  type SummaryV3GenerateAdapterInput,
+  type SummaryV3GenerateRoutingResult,
+} from '../summary-generate';
+import {
+  createSummaryV3StyleCandidate,
+  createSummaryV3StyleOperationSnapshot,
+  hashSummaryV3StyleValue,
+  type SummaryV3Style,
+  type SummaryV3StyleCandidateUnit,
+} from '../summary-style-m5';
+import {
+  normalizeSummaryV3StyleRouteRequest,
+  type SummaryV3StyleRouteAction,
+  type SummaryV3StyleRouteParams,
+} from '../summary-style-m5-provider';
 
 function cvForExperience(): CVData {
   const cv = createEmptyCv('sr');
@@ -209,19 +228,21 @@ const page = vi.hoisted(() => ({
   cv: null as CVData | null,
   incomingCvOverride: null as CVData | null,
   apiFetch: vi.fn(),
+  m4Adapter: vi.fn(),
   m2Adapter: vi.fn(),
   m3Adapter: vi.fn(),
   outcomes: [] as unknown[],
   usage: 0,
   writes: 0,
   persistCalls: 0,
+  failNextPersist: false,
   persistMode: 'success' as 'success' | 'candidate_fail' | 'rollback_fail',
   usageMode: 'success' as 'success' | 'fail',
   adapterOutcomes: [] as unknown[],
   persistedSnapshots: [] as CVData[],
   postWriteDrift: null as ((next: CVData) => CVData) | null,
   postWriteDriftCount: 0,
-  incomingCurrentCvSyncCalls: [] as Array<{ incomingCv: CVData }>,
+  incomingCurrentCvSyncCalls: [] as Array<{ incomingCv: CVData; pendingLocalCv: CVData | null }>,
   rerenderPage: null as (() => void) | null,
 }));
 
@@ -237,6 +258,10 @@ vi.mock('@/lib/store', () => ({
     setCurrentCv: (next: CVData) => { page.cv = next; },
     persistCurrentCvTransactionally: (next: CVData) => {
       page.persistCalls += 1;
+      if (page.failNextPersist) {
+        page.failNextPersist = false;
+        return false;
+      }
       if (page.persistMode === 'candidate_fail' && page.persistCalls === 1) return false;
       if (page.persistMode === 'rollback_fail' && page.persistCalls >= 2) return false;
       page.writes += 1;
@@ -262,12 +287,14 @@ vi.mock('sonner', () => ({ toast: toastSpy }));
 describe('M6.6 rendered Experience Translate integration', () => {
   beforeEach(() => {
     page.apiFetch.mockReset();
+    page.m4Adapter.mockReset().mockResolvedValue({ kind: 'not_applicable' });
     page.m2Adapter.mockReset().mockResolvedValue({ kind: 'not_applicable' });
     page.m3Adapter.mockReset().mockResolvedValue({ kind: 'not_applicable' });
     page.outcomes = [];
     page.usage = 0;
     page.writes = 0;
     page.persistCalls = 0;
+    page.failNextPersist = false;
     page.persistMode = 'success';
     page.usageMode = 'success';
     page.adapterOutcomes = [];
@@ -296,7 +323,12 @@ describe('M6.6 rendered Experience Translate integration', () => {
     Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
     vi.doMock('@/lib/ai-core-v3', async () => {
       const actual = await vi.importActual<typeof import('@/lib/ai-core-v3')>('@/lib/ai-core-v3');
-      return { ...actual, runExperienceV3GenerateAdapter: page.m2Adapter, runExperienceV3EnhanceAdapter: page.m3Adapter };
+      return {
+        ...actual,
+        runSummaryV3GenerateAdapter: page.m4Adapter,
+        runExperienceV3GenerateAdapter: page.m2Adapter,
+        runExperienceV3EnhanceAdapter: page.m3Adapter,
+      };
     });
     vi.doMock('@/lib/ai-core-v3/content-localize-v3-client', async () => {
       const actual = await vi.importActual<typeof import('../content-localize-v3-client')>('@/lib/ai-core-v3/content-localize-v3-client');
@@ -334,7 +366,10 @@ describe('M6.6 rendered Experience Translate integration', () => {
       return {
         ...actual,
         shouldAcceptIncomingCurrentCv: (options: Parameters<typeof actual.shouldAcceptIncomingCurrentCv>[0]) => {
-          page.incomingCurrentCvSyncCalls.push({ incomingCv: options.incomingCv });
+          page.incomingCurrentCvSyncCalls.push({
+            incomingCv: options.incomingCv,
+            pendingLocalCv: options.pendingLocalCv,
+          });
           return actual.shouldAcceptIncomingCurrentCv(options);
         },
       };
@@ -441,7 +476,7 @@ describe('M6.6 rendered Experience Translate integration', () => {
     };
   }
 
-  function useRealV3AdapterGates(options: {
+  function configureRealV3AdapterGates(options: {
     generate?: { started: () => void; release: Promise<void> };
     enhance?: { started: () => void; release: Promise<void> };
   } = {}): void {
@@ -465,6 +500,224 @@ describe('M6.6 rendered Experience Translate integration', () => {
       page.adapterOutcomes.push(outcome);
       return outcome;
     });
+  }
+
+  function commitSummaryM4Candidate(
+    input: SummaryV3GenerateAdapterInput,
+    dependencies: SummaryV3GenerateAdapterDependencies,
+    text = 'M4 cross-domain Summary result.',
+  ): SummaryV3GenerateRoutingResult {
+    if (dependencies.getActiveOperationId() !== input.operationId) {
+      return { kind: 'handled_failure', typedReason: 'operation_superseded' };
+    }
+    const before = dependencies.getLiveState().cv;
+    const next: CVData = {
+      ...before,
+      summary: text,
+      summaryOrigin: 'ai_generated',
+      summaryGeneratedLocale: input.requestedLocale as CVData['contentLocale'],
+      summarySourceLocale: input.requestedLocale,
+      summarySourceLocaleTextHash: hashSummarySourceLocaleText(text),
+      summaryGenerationContextKey: input.jobContextHash,
+      contentLocale: input.requestedLocale as CVData['contentLocale'],
+    };
+    const receipt: SummaryV3CommitReceipt = dependencies.commitCandidate({
+      operationId: input.operationId,
+      requestId: input.requestId,
+      previousCvHash: hashSummaryV3Value(before),
+      candidateHash: hashSummaryV3Value(text),
+      requestedLocale: input.requestedLocale,
+      usageCountBefore: input.usageCountBefore,
+      previousCv: before,
+      nextCv: next,
+    });
+    return receipt.kind === 'committed'
+      ? { kind: 'handled_success' }
+      : { kind: 'handled_failure', typedReason: receipt.reason };
+  }
+
+  function summaryStyleCandidate(body: Record<string, unknown>, text: string): Record<string, unknown> {
+    const action = String(body.action || '') as SummaryV3StyleRouteAction;
+    const normalized = normalizeSummaryV3StyleRouteRequest(
+      action,
+      body as unknown as SummaryV3StyleRouteParams,
+      2000,
+    );
+    const snapshot = createSummaryV3StyleOperationSnapshot(normalized);
+    const style: SummaryV3Style = action === 'summary_shorter'
+      ? 'shorter'
+      : action === 'summary_professional' ? 'professional' : 'stronger';
+    const units: readonly SummaryV3StyleCandidateUnit[] = [{
+      unitId: `unit-${hashSummaryV3StyleValue(text)}`,
+      text,
+      factIds: [`fact-${hashSummaryV3StyleValue(text)}`],
+    }];
+    const candidate = createSummaryV3StyleCandidate(snapshot, units);
+    return {
+      kind: 'candidate_ready',
+      style,
+      mode: snapshot.mode,
+      candidate: { ...candidate, style, locale: snapshot.requestedLocale },
+      evidence: {
+        snapshotHash: snapshot.snapshotHash,
+        manifestHash: snapshot.manifestHash,
+        candidateHash: candidate.hash,
+        retries: 0,
+        fallbacks: 0,
+        v2Fallthrough: 0,
+      },
+    };
+  }
+
+  type SummaryCrossDomainKind = 'm4' | 'm5' | 'm65';
+  type ExperienceCrossDomainKind = 'm2' | 'm3' | 'm66';
+
+  async function runCrossDomainRenderedCase(options: {
+    readonly summary: SummaryCrossDomainKind;
+    readonly experience: ExperienceCrossDomainKind;
+    readonly summaryFirst: boolean;
+  }): Promise<void> {
+    const summaryText = options.summary === 'm4'
+      ? 'M4 cross-domain Summary result.'
+      : options.summary === 'm5'
+        ? 'M5 cross-domain style result.'
+        : 'M6.5 cross-domain Summary translation.';
+    const experienceText = 'M6.6 cross-domain Experience translation.';
+    page.cv = options.experience === 'm2' ? cvForGenerateExperience() : cvForExperience();
+    page.cv.summary = options.summary === 'm4' ? '' : 'Stable summary before cross-domain operation.';
+    page.cv.summaryOrigin = 'ai_generated';
+    page.cv.summaryGeneratedLocale = 'de';
+    page.cv.summarySourceLocale = 'de';
+    page.cv.summarySourceLocaleTextHash = hashSummarySourceLocaleText(page.cv.summary);
+    page.usage = 0;
+    page.writes = 0;
+    page.apiFetch.mockReset();
+    enableRenderedV3();
+
+    let releaseSummary!: () => void;
+    let releaseExperience!: () => void;
+    let markSummaryStarted!: () => void;
+    let markExperienceStarted!: () => void;
+    const summaryGate = new Promise<void>((resolve) => { releaseSummary = resolve; });
+    const experienceGate = new Promise<void>((resolve) => { releaseExperience = resolve; });
+    const summaryStarted = new Promise<void>((resolve) => { markSummaryStarted = resolve; });
+    const experienceStarted = new Promise<void>((resolve) => { markExperienceStarted = resolve; });
+
+    page.apiFetch.mockImplementation(async (_url: string, options: { body: Record<string, unknown> }) => {
+      const body = options.body;
+      const action = String(body.action || '');
+      if (action.startsWith('summary_')) {
+        markSummaryStarted();
+        await summaryGate;
+        return {
+          data: summaryStyleCandidate(body, summaryText),
+          response: { status: 200, ok: true, headers: { get: () => null } },
+        };
+      }
+      if (action === 'content-localize-v3') {
+        const snapshot = body.snapshot as ContentLocalizeM6SummarySnapshot | ContentLocalizeM6ExperienceSnapshot;
+        if (snapshot.kind === 'summary') {
+          markSummaryStarted();
+          await summaryGate;
+          return {
+            data: summaryCandidateReady(snapshot, summaryText),
+            response: { status: 200, ok: true, headers: { get: () => null } },
+          };
+        }
+        markExperienceStarted();
+        await experienceGate;
+        return {
+          data: candidateReady(snapshot, experienceText),
+          response: { status: 200, ok: true, headers: { get: () => null } },
+        };
+      }
+      throw new Error(`unexpected cross-domain action: ${action}`);
+    });
+
+    page.m4Adapter.mockImplementation(async (
+      input: SummaryV3GenerateAdapterInput,
+      dependencies: SummaryV3GenerateAdapterDependencies,
+    ) => {
+      markSummaryStarted();
+      await summaryGate;
+      return commitSummaryM4Candidate(input, dependencies, summaryText);
+    });
+
+    const experienceGateOptions = options.experience === 'm2'
+      ? { generate: { started: markExperienceStarted, release: experienceGate } }
+      : options.experience === 'm3'
+        ? { enhance: { started: markExperienceStarted, release: experienceGate } }
+        : {};
+    configureRealV3AdapterGates(experienceGateOptions);
+    await renderExperiencePage();
+
+    const startSummary = async (): Promise<void> => {
+      fireEvent.click(screen.getByRole('button', { name: translations.sr.cv.summary }));
+      if (options.summary === 'm4') {
+        const editor = document.querySelector('[data-summary-v3-editor]') as HTMLTextAreaElement | null;
+        if (!editor) throw new Error('Summary editor not found');
+        if (editor.value !== '') fireEvent.change(editor, { target: { value: '' } });
+        const button = screen.getAllByRole('button').find((candidate) => (
+          candidate.textContent || '').includes(translations.sr.cv.generateSubtext));
+        if (!button) throw new Error('Summary Generate button not found');
+        fireEvent.click(button);
+      } else if (options.summary === 'm5') {
+        const button = screen.getAllByRole('button').find((candidate) => (
+          candidate.textContent || '').includes(translations.sr.cv.strongerSubtext));
+        if (!button) throw new Error('Summary style button not found');
+        fireEvent.click(button);
+      } else {
+        fireEvent.click(screen.getByRole('button', { name: translations.sr.cv.translate }));
+        fireEvent.change(screen.getByLabelText(translations.sr.common.targetLanguage), { target: { value: 'fr' } });
+        fireEvent.click(document.querySelector('[data-content-localize-confirm]')!);
+      }
+    };
+
+    const startExperience = async (): Promise<void> => {
+      fireEvent.click(screen.getByRole('button', { name: translations.sr.cv.experience }));
+      if (options.experience === 'm66') {
+        await startExperienceTranslate('experience-one', 'fr');
+        return;
+      }
+      if (options.experience === 'm2') {
+        const source = screen.queryByDisplayValue('Deutsche APIs koordinieren und Produktionsänderungen prüfen.') as HTMLTextAreaElement | null;
+        if (source) fireEvent.change(source, { target: { value: '' } });
+      }
+      fireEvent.click(experienceAiButton());
+    };
+
+    if (options.summaryFirst) {
+      await startSummary();
+      await summaryStarted;
+      await startExperience();
+      await experienceStarted;
+      releaseSummary();
+      await waitFor(() => expect(page.cv?.summary).toBe(summaryText));
+      releaseExperience();
+    } else {
+      await startExperience();
+      await experienceStarted;
+      await startSummary();
+      await summaryStarted;
+      releaseExperience();
+      const expectedExperience = options.experience === 'm2'
+        ? '• Razvija pouzdane API-je.\n• Koordinira dnevni rad sa timom.\n• Održava jasne tehničke evidencije.'
+        : options.experience === 'm3'
+          ? '• Napredna stavka 1.'
+          : experienceText;
+      await waitFor(() => expect(page.cv?.experience[0]?.description).toBe(expectedExperience));
+      releaseSummary();
+    }
+    await waitFor(() => expect(page.cv?.summary).toBe(summaryText));
+    const expectedExperience = options.experience === 'm2'
+      ? '• Razvija pouzdane API-je.\n• Koordinira dnevni rad sa timom.\n• Održava jasne tehničke evidencije.'
+      : options.experience === 'm3'
+        ? '• Napredna stavka 1.'
+        : experienceText;
+    await waitFor(() => expect(page.cv?.experience[0]?.description).toBe(expectedExperience));
+    expect(page.cv?.experience[1]?.description).toBe('Second entry remains unchanged.');
+    expect(page.usage).toBe(2);
+    expect(page.writes).toBe(2);
   }
 
   it('opens the stable entry dialog with read-only source and source-disabled target', async () => {
@@ -658,7 +911,7 @@ describe('M6.6 rendered Experience Translate integration', () => {
       return { data: candidateReady(snapshot, 'Kasni prevod ne sme pobediti.'), response: { status: 200, ok: true, headers: { get: () => null } } };
     });
     enableRenderedV3();
-    useRealV3AdapterGates({ generate: { started: () => generateStarted(), release: generateGate } });
+    configureRealV3AdapterGates({ generate: { started: () => generateStarted(), release: generateGate } });
     await renderExperiencePage();
     await startExperienceTranslate('experience-one', 'fr');
     await waitFor(() => expect(page.apiFetch).toHaveBeenCalledTimes(1));
@@ -686,7 +939,7 @@ describe('M6.6 rendered Experience Translate integration', () => {
       return { data: candidateReady(snapshot), response: { status: 200, ok: true, headers: { get: () => null } } };
     });
     enableRenderedV3();
-    useRealV3AdapterGates({ generate: { started: () => generateStarted(), release: generateGate } });
+    configureRealV3AdapterGates({ generate: { started: () => generateStarted(), release: generateGate } });
     await renderExperiencePage();
     fireEvent.click(experienceAiButton());
     await generateHasStarted;
@@ -715,7 +968,7 @@ describe('M6.6 rendered Experience Translate integration', () => {
       return { data: candidateReady(snapshot, 'Kasni prevod ne sme pobediti.'), response: { status: 200, ok: true, headers: { get: () => null } } };
     });
     enableRenderedV3();
-    useRealV3AdapterGates({ enhance: { started: () => enhanceStarted(), release: enhanceGate } });
+    configureRealV3AdapterGates({ enhance: { started: () => enhanceStarted(), release: enhanceGate } });
     await renderExperiencePage();
     await startExperienceTranslate('experience-one', 'fr');
     await waitFor(() => expect(page.apiFetch).toHaveBeenCalledTimes(1));
@@ -741,7 +994,7 @@ describe('M6.6 rendered Experience Translate integration', () => {
       return { data: candidateReady(snapshot, 'Prevod pobjeđuje kasni Enhance.'), response: { status: 200, ok: true, headers: { get: () => null } } };
     });
     enableRenderedV3();
-    useRealV3AdapterGates({ enhance: { started: () => enhanceStarted(), release: enhanceGate } });
+    configureRealV3AdapterGates({ enhance: { started: () => enhanceStarted(), release: enhanceGate } });
     await renderExperiencePage();
     fireEvent.click(experienceAiButton());
     await enhanceHasStarted;
@@ -985,5 +1238,159 @@ describe('M6.6 rendered Experience Translate integration', () => {
     const localHashAfter = hashExperienceSourceLocaleText(visibleAfter);
     expect(localHashAfter).toBe(localHashBefore);
     expect(localHashAfter).not.toBe(staleHash);
+  });
+
+  it('M6.7 currentCv sync accepts the exact local acknowledgement, clears pending state, and later accepts a legitimate store update', async () => {
+    page.cv = cvForExperience();
+    await renderExperiencePage();
+    const localText = 'Lokalno potvrđena činjenica za potvrdu stanja.';
+    fireEvent.change(
+      screen.getByDisplayValue('Deutsche APIs koordinieren und Produktionsänderungen prüfen.'),
+      { target: { value: localText } },
+    );
+    await waitFor(() => expect(screen.getByDisplayValue(localText)).toBeTruthy());
+    const staleIncoming = cvForExperience();
+    page.incomingCvOverride = staleIncoming;
+    page.rerenderPage?.();
+    await waitFor(() => expect(
+      page.incomingCurrentCvSyncCalls.some((call) => call.incomingCv === staleIncoming),
+    ).toBe(true));
+    expect((screen.getByDisplayValue(localText) as HTMLTextAreaElement).value).toBe(localText);
+
+    const pendingLocalSnapshot = page.incomingCurrentCvSyncCalls.find(
+      (call) => call.incomingCv === staleIncoming,
+    )?.pendingLocalCv;
+    if (!pendingLocalSnapshot) throw new Error('Expected a pending local CV snapshot.');
+
+    page.incomingCvOverride = pendingLocalSnapshot;
+    page.rerenderPage?.();
+    await waitFor(() => expect(
+      page.incomingCurrentCvSyncCalls.some((call) => call.incomingCv === pendingLocalSnapshot),
+    ).toBe(true));
+    expect((screen.getByDisplayValue(localText) as HTMLTextAreaElement).value).toBe(localText);
+
+    const laterStoreSnapshot: CVData = {
+      ...pendingLocalSnapshot!,
+      experience: pendingLocalSnapshot!.experience.map((entry) => entry.id === 'experience-one'
+        ? { ...entry, description: 'Kasnija legitimna objava iz store-a.' }
+        : entry),
+    };
+    page.incomingCvOverride = laterStoreSnapshot;
+    page.rerenderPage?.();
+    await waitFor(() => expect(
+      (screen.getByDisplayValue('Kasnija legitimna objava iz store-a.') as HTMLTextAreaElement).value,
+    ).toBe('Kasnija legitimna objava iz store-a.'));
+  });
+
+  it.each([
+    ['A M4 Summary Generate ↔ M6.6 Experience Translate', 'm4', 'm66'],
+    ['B M5 Summary style ↔ M6.6 Experience Translate', 'm5', 'm66'],
+    ['C M6.5 Summary Translate ↔ M2 Generate', 'm65', 'm2'],
+    ['D M6.5 Summary Translate ↔ M3 Enhance', 'm65', 'm3'],
+    ['E M6.5 Summary Translate ↔ M6.6 Experience Translate', 'm65', 'm66'],
+  ] as const)('%s preserves both domains when Summary completes first', async (_label, summary, experience) => {
+    await runCrossDomainRenderedCase({ summary, experience, summaryFirst: true });
+  });
+
+  it.each([
+    ['A M4 Summary Generate ↔ M6.6 Experience Translate', 'm4', 'm66'],
+    ['B M5 Summary style ↔ M6.6 Experience Translate', 'm5', 'm66'],
+    ['C M6.5 Summary Translate ↔ M2 Generate', 'm65', 'm2'],
+    ['D M6.5 Summary Translate ↔ M3 Enhance', 'm65', 'm3'],
+    ['E M6.5 Summary Translate ↔ M6.6 Experience Translate', 'm65', 'm66'],
+  ] as const)('%s preserves both domains when Experience completes first', async (_label, summary, experience) => {
+    await runCrossDomainRenderedCase({ summary, experience, summaryFirst: false });
+  });
+
+  it('M6.7 failure isolation: a rejected Experience Translate cannot roll back a committed Summary Translate', async () => {
+    page.cv = cvForExperience();
+    page.apiFetch.mockImplementation(async (_url: string, options: { body: Record<string, unknown> }) => {
+      const snapshot = options.body.snapshot as ContentLocalizeM6SummarySnapshot | ContentLocalizeM6ExperienceSnapshot;
+      if (snapshot.kind === 'summary') {
+        return { data: summaryCandidateReady(snapshot, 'Summary survives Experience failure.'), response: { status: 200, ok: true, headers: { get: () => null } } };
+      }
+      return { data: { status: 'handled_failure', reason: 'writer_failed' }, response: { status: 502, ok: false, headers: { get: () => null } } };
+    });
+    await renderExperiencePage();
+    fireEvent.click(screen.getByRole('button', { name: translations.sr.cv.summary }));
+    fireEvent.click(screen.getByRole('button', { name: translations.sr.cv.translate }));
+    fireEvent.change(screen.getByLabelText(translations.sr.common.targetLanguage), { target: { value: 'fr' } });
+    fireEvent.click(document.querySelector('[data-content-localize-confirm]')!);
+    await waitFor(() => expect(page.cv?.summary).toBe('Summary survives Experience failure.'));
+    fireEvent.click(screen.getByRole('button', { name: translations.sr.cv.experience }));
+    await startExperienceTranslate('experience-one', 'fr');
+    await waitFor(() => expect(page.outcomes.at(-1)).toMatchObject({ kind: 'terminal' }));
+    expect(page.cv?.summary).toBe('Summary survives Experience failure.');
+    expect(page.cv?.experience[0]?.description).toBe('Deutsche APIs koordinieren und Produktionsänderungen prüfen.');
+    expect(page.usage).toBe(1);
+  });
+
+  it('M6.7 failure isolation: a rejected Summary Translate cannot roll back a committed Experience Translate', async () => {
+    page.cv = cvForExperience();
+    page.apiFetch.mockImplementation(async (_url: string, options: { body: Record<string, unknown> }) => {
+      const snapshot = options.body.snapshot as ContentLocalizeM6SummarySnapshot | ContentLocalizeM6ExperienceSnapshot;
+      if (snapshot.kind === 'summary') {
+        return { data: { status: 'handled_failure', reason: 'provider_failed' }, response: { status: 502, ok: false, headers: { get: () => null } } };
+      }
+      return { data: candidateReady(snapshot, 'Experience survives Summary failure.'), response: { status: 200, ok: true, headers: { get: () => null } } };
+    });
+    await renderExperiencePage();
+    await startExperienceTranslate('experience-one', 'fr');
+    await waitFor(() => expect(page.cv?.experience[0]?.description).toBe('Experience survives Summary failure.'));
+    fireEvent.click(screen.getByRole('button', { name: translations.sr.cv.summary }));
+    fireEvent.click(screen.getByRole('button', { name: translations.sr.cv.translate }));
+    fireEvent.change(screen.getByLabelText(translations.sr.common.targetLanguage), { target: { value: 'fr' } });
+    fireEvent.click(document.querySelector('[data-content-localize-confirm]')!);
+    expect(page.outcomes.at(-1)).toMatchObject({ kind: 'committed' });
+    expect(page.cv?.experience[0]?.description).toBe('Experience survives Summary failure.');
+    expect(page.cv?.summary).toBe('Stable summary.');
+    expect(page.usage).toBe(1);
+  });
+
+  it('M6.7 usage and rollback isolation: usage failure restores only the Summary candidate', async () => {
+    page.cv = cvForExperience();
+    page.apiFetch.mockImplementation(async (_url: string, options: { body: Record<string, unknown> }) => {
+      const snapshot = options.body.snapshot as ContentLocalizeM6SummarySnapshot | ContentLocalizeM6ExperienceSnapshot;
+      return snapshot.kind === 'summary'
+        ? { data: summaryCandidateReady(snapshot, 'Rejected Summary candidate.'), response: { status: 200, ok: true, headers: { get: () => null } } }
+        : { data: candidateReady(snapshot, 'Durable Experience candidate.'), response: { status: 200, ok: true, headers: { get: () => null } } };
+    });
+    await renderExperiencePage();
+    await startExperienceTranslate('experience-one', 'fr');
+    await waitFor(() => expect(page.cv?.experience[0]?.description).toBe('Durable Experience candidate.'));
+    page.usageMode = 'fail';
+    fireEvent.click(screen.getByRole('button', { name: translations.sr.cv.summary }));
+    fireEvent.click(screen.getByRole('button', { name: translations.sr.cv.translate }));
+    fireEvent.change(screen.getByLabelText(translations.sr.common.targetLanguage), { target: { value: 'fr' } });
+    fireEvent.click(document.querySelector('[data-content-localize-confirm]')!);
+    expect(page.outcomes.at(-1)).toMatchObject({ kind: 'committed' });
+    expect(page.cv?.summary).toBe('Stable summary.');
+    expect(page.cv?.experience[0]?.description).toBe('Durable Experience candidate.');
+    expect(page.usage).toBe(1);
+  });
+
+  it('M6.7 privacy and diagnostics: terminal outcomes expose typed reason without source or candidate prose', async () => {
+    const privateSummary = 'PRIVATE-SUMMARY-DO-NOT-LOG';
+    const privateExperience = 'PRIVATE-EXPERIENCE-DO-NOT-LOG';
+    page.cv = cvForExperience();
+    page.cv.summary = privateSummary;
+    page.cv.experience[0] = {
+      ...page.cv.experience[0],
+      description: privateExperience,
+      originalUserDescription: privateExperience,
+      canonicalDescription: privateExperience,
+      descriptionSourceLocaleTextHash: hashExperienceSourceLocaleText(privateExperience),
+    };
+    page.apiFetch.mockResolvedValue({
+      data: { status: 'handled_failure', reason: 'provider_failed' },
+      response: { status: 502, ok: false, headers: { get: () => null } },
+    });
+    await renderExperiencePage();
+    await startExperienceTranslate('experience-one', 'fr');
+    await waitFor(() => expect(page.outcomes.at(-1)).toMatchObject({ kind: 'terminal', reason: 'provider_failed' }));
+    const serialized = JSON.stringify(page.outcomes.at(-1));
+    expect(serialized).not.toContain(privateSummary);
+    expect(serialized).not.toContain(privateExperience);
+    expect(serialized).toContain('provider_failed');
   });
 });

@@ -132,20 +132,13 @@ function visibleFacts(input: SummaryV3StyleClientInput, manifest: SummaryV3Style
   return [{ id: `duty-${hashSummaryV3StyleValue(unique[0]!)}`, text: unique[0]!, semanticKind: 'duty', transformableDuty: { sourcePredicate: predicateAnchor, predicateAnchor } }];
 }
 
-function resultRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
-}
-
-export async function runSummaryV3StyleClientOperation(
+function buildSummaryV3StyleRequest(
   input: SummaryV3StyleClientInput,
-  dependencies: SummaryV3StyleClientDependencies,
-): Promise<SummaryV3StyleClientOutcome> {
-  if (!input.enabled) return { kind: 'terminal', status: 404, reason: 'feature_disabled' };
-  const requestedLocale = canonicalSummaryV3StyleLocale(input.requestedLocale);
-  const sourceLocale = canonicalSummaryV3StyleLocale(input.sourceLocale);
-  if (!requestedLocale || requestedLocale !== sourceLocale) return { kind: 'terminal', status: 422, reason: 'unsupported_or_cross_locale' };
+  requestedLocale: SummaryV3StyleSupportedLocale,
+  sourceLocale: SummaryV3StyleSupportedLocale,
+): SummaryV3StyleRequest {
   const manifest = buildManifest(input, requestedLocale);
-  const request: SummaryV3StyleRequest = {
+  return {
     enabled: input.enabled,
     operation: SUMMARY_V3_STYLE_M5_ACTION[input.style],
     operationId: input.operationId,
@@ -159,6 +152,50 @@ export async function runSummaryV3StyleClientOperation(
     requestIdentity: input.requestId,
     createdAt: input.createdAt,
   };
+}
+
+/**
+ * M5 owns a Summary transformation, not the complete mutable CV object.
+ * Non-empty M5 requests are bound to their exact visible Summary source.
+ * Empty M5 requests instead retain the canonical M5 manifest, which contains
+ * the selected role, employment state, duration, and grounding facts.
+ */
+export function summaryV3StyleSourceStillCurrent(options: Readonly<{
+  input: SummaryV3StyleClientInput;
+  snapshot: ReturnType<typeof createSummaryV3StyleOperationSnapshot>;
+  liveCv: CVData;
+}>): boolean {
+  const { input, snapshot, liveCv } = options;
+  if (snapshot.mode === 'enhance_existing_content') {
+    return liveCv.summary === snapshot.sourceSummary;
+  }
+  try {
+    const current = createSummaryV3StyleOperationSnapshot(buildSummaryV3StyleRequest(
+      { ...input, cv: liveCv },
+      snapshot.requestedLocale,
+      snapshot.sourceLocale,
+    ));
+    return current.mode === 'generate_from_context'
+      && current.manifestHash === snapshot.manifestHash
+      && current.contextHash === snapshot.contextHash;
+  } catch {
+    return false;
+  }
+}
+
+function resultRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+export async function runSummaryV3StyleClientOperation(
+  input: SummaryV3StyleClientInput,
+  dependencies: SummaryV3StyleClientDependencies,
+): Promise<SummaryV3StyleClientOutcome> {
+  if (!input.enabled) return { kind: 'terminal', status: 404, reason: 'feature_disabled' };
+  const requestedLocale = canonicalSummaryV3StyleLocale(input.requestedLocale);
+  const sourceLocale = canonicalSummaryV3StyleLocale(input.sourceLocale);
+  if (!requestedLocale || requestedLocale !== sourceLocale) return { kind: 'terminal', status: 422, reason: 'unsupported_or_cross_locale' };
+  const request = buildSummaryV3StyleRequest(input, requestedLocale, sourceLocale);
   let snapshot;
   try {
     snapshot = createSummaryV3StyleOperationSnapshot(request);
@@ -208,7 +245,9 @@ export async function runSummaryV3StyleClientOperation(
     && evidence.retries === 0 && evidence.fallbacks === 0 && evidence.v2Fallthrough === 0;
   if (!valid) return { kind: 'terminal', status: transport.status || 422, reason: 'candidate_identity_mismatch' };
   const before = dependencies.getLiveCv();
-  if (hashSummaryV3Value(before) !== hashSummaryV3Value(input.cv)) return { kind: 'terminal', status: 409, reason: 'stale_snapshot' };
+  if (!summaryV3StyleSourceStillCurrent({ input, snapshot, liveCv: before })) {
+    return { kind: 'terminal', status: 409, reason: 'stale_snapshot' };
+  }
   const next = {
     ...before,
     summary: candidate.text as string,
