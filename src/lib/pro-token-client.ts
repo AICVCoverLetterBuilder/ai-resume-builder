@@ -6,6 +6,11 @@
  * whether a persisted token is usable for the click-time gate.
  */
 
+import { AI_CLIENT_TIMEOUT_MS, AI_RESPONSE_GUARD_MS } from './ai-request-timing';
+
+/** One admitted token must outlive the complete bounded AI operation. */
+export const AI_PRO_TOKEN_OPERATION_LEASE_MS = AI_CLIENT_TIMEOUT_MS + AI_RESPONSE_GUARD_MS;
+
 function base64UrlDecode(value: string): string {
   let base64 = value.replace(/-/g, '+').replace(/_/g, '/');
   while (base64.length % 4 !== 0) base64 += '=';
@@ -14,10 +19,16 @@ function base64UrlDecode(value: string): string {
 
 /**
  * A token is client-usable only when it decodes to an explicit Pro payload
- * with a finite expiration strictly in the future.
+ * with a finite expiration and the caller-required remaining lifetime.
+ * Signature authority remains exclusively server-side.
  */
-export function isUsableProToken(token: string | null | undefined, now = Date.now()): boolean {
+export function isUsableProToken(
+  token: string | null | undefined,
+  now = Date.now(),
+  minimumRemainingMs = 0,
+): boolean {
   if (!token) return false;
+  if (!Number.isFinite(now) || !Number.isFinite(minimumRemainingMs) || minimumRemainingMs < 0) return false;
   try {
     const parts = token.split('.');
     if (parts.length !== 2 || !parts[0] || !parts[1]) return false;
@@ -25,10 +36,12 @@ export function isUsableProToken(token: string | null | undefined, now = Date.no
     const decoded: unknown = JSON.parse(base64UrlDecode(payloadPart));
     if (!decoded || typeof decoded !== 'object') return false;
     const payload = decoded as { isPro?: unknown; exp?: unknown };
+    const remainingMs = typeof payload.exp === 'number' ? payload.exp - now : Number.NaN;
     return payload.isPro === true
       && typeof payload.exp === 'number'
       && Number.isFinite(payload.exp)
-      && now < payload.exp;
+      && remainingMs > 0
+      && remainingMs >= minimumRemainingMs;
   } catch {
     return false;
   }

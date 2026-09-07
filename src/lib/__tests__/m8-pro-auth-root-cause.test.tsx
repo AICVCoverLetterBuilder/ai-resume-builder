@@ -5,7 +5,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { restorePro, syncProEntitlement } from '../iap';
 import { createProToken, verifyProToken } from '../pro-token';
-import { isUsableProToken } from '../pro-token-client';
+import { AI_PRO_TOKEN_OPERATION_LEASE_MS, isUsableProToken } from '../pro-token-client';
 
 const TEST_KEY = 'm8-deterministic-test-signing-key';
 
@@ -57,11 +57,12 @@ describe('M8 Pro auth expiry contract', () => {
     expect(isUsableProToken(signedToken({ isPro: true }))).toBe(false);
     expect(isUsableProToken(signedToken({ isPro: false, exp: now + 1 }), now)).toBe(false);
     expect(isUsableProToken('not-a-token', now)).toBe(false);
+    expect(isUsableProToken(signedToken({ isPro: true, exp: now + 1 }), now, AI_PRO_TOKEN_OPERATION_LEASE_MS)).toBe(false);
   });
 
   test('freshly issued Pro token is usable and server-verifiable', async () => {
     const token = await createProToken(true);
-    expect(isUsableProToken(token)).toBe(true);
+    expect(isUsableProToken(token, Date.now(), AI_PRO_TOKEN_OPERATION_LEASE_MS)).toBe(true);
     expect(await verifyProToken(token)).toMatchObject({ isPro: true, exp: expect.any(Number) });
   });
 
@@ -95,8 +96,9 @@ describe('M8 Pro auth expiry contract', () => {
     const source = fs.readFileSync(path.resolve('src/lib/store.tsx'), 'utf8');
     const cvBuilder = fs.readFileSync(path.resolve('src/app/cv-builder/page.tsx'), 'utf8');
     expect(source).toContain("localStorage.getItem('cvpro-plan') === 'pro' && isUsableProToken(localStorage.getItem(PRO_TOKEN_KEY))");
-    expect(source).toContain('if (currentToken && isUsableProToken(currentToken)) {');
-    expect(source).toContain("return { status: 'syncing', reason }");
+    expect(source).toContain("if (tokenSyncLastResultRef.current !== 'success') {");
+    expect(source).toContain('isUsableProToken(currentToken, Date.now(), AI_PRO_TOKEN_OPERATION_LEASE_MS)');
+    expect(source).toContain("return { status: 'syncing', reason: 'missing-token' }");
     expect(cvBuilder).toContain("if (aiGate.status === 'syncing') {");
     expect(cvBuilder).toContain("return aiGate.status === 'ready' ? aiGate.token : null;");
   });

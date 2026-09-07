@@ -142,7 +142,7 @@ describe('canonical Pro entitlement state', () => {
     expect(staleGetAiGate?.()).toEqual({ status: 'ready', token: VALID_TOKEN });
   });
 
-  test('stale sync failure state cannot block a current valid token', async () => {
+  test('failed current-session sync clears a structurally valid stale token', async () => {
     renderProvider();
 
     await act(async () => {
@@ -152,8 +152,11 @@ describe('canonical Pro entitlement state', () => {
       });
     });
 
-    await waitFor(() => expect(latestApp?.isPro).toBe(true));
-    expect(latestApp?.getAiGate()).toEqual({ status: 'ready', token: VALID_TOKEN });
+    await waitFor(() => expect(latestApp?.isPro).toBe(false));
+    expect(latestApp?.getAiGate()).toEqual({ status: 'free' });
+    expect(latestApp?.getProToken()).toBeNull();
+    expect(localStorage.getItem('cvpro-plan')).toBeNull();
+    expect(localStorage.getItem('cvpro-pro-token')).toBeNull();
   });
 
   test('startup active entitlement refreshes a missing token into canonical state', async () => {
@@ -190,15 +193,15 @@ describe('canonical Pro entitlement state', () => {
     expect(localStorage.getItem('cvpro-pro-token')).toBeNull();
   });
 
-  test('app restart reloads a persisted token into memory immediately', () => {
+  test('app restart keeps a persisted token provisional until startup sync succeeds', () => {
     localStorage.setItem('cvpro-plan', 'pro');
     localStorage.setItem('cvpro-pro-token', VALID_TOKEN);
 
     renderProvider();
 
     expect(latestApp?.isPro).toBe(true);
-    expect(latestApp?.getProToken()).toBe(VALID_TOKEN);
-    expect(latestApp?.getAiGate()).toEqual({ status: 'ready', token: VALID_TOKEN });
+    expect(latestApp?.getProToken()).toBeNull();
+    expect(latestApp?.getAiGate()).toEqual({ status: 'syncing', reason: 'missing-token' });
   });
 
   test('expired persisted token is never AI-ready while startup sync is pending', async () => {

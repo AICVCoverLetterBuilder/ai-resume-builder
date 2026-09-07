@@ -8,7 +8,7 @@ import {
   type EntitlementSyncResult,
   type TokenSyncResult,
 } from './iap';
-import { isUsableProToken } from './pro-token-client';
+import { AI_PRO_TOKEN_OPERATION_LEASE_MS, isUsableProToken } from './pro-token-client';
 import {
   saveCvDraft,
   loadCvDraft,
@@ -245,6 +245,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
 
     if (val) {
+      // A failed/not-run authoritative sync must never preserve a stale token.
+      // The provisional persisted state is allowed only while startup sync is pending.
+      if (options?.tokenSyncLastResult && options.tokenSyncLastResult !== 'success') {
+        isProRef.current = false;
+        proTokenRef.current = null;
+        setInternalIsPro(false);
+        persistIsPro(false);
+        persistProToken(null);
+        setProToken(null);
+        return;
+      }
       const nextToken = token || loadProToken();
       if (!isUsableProToken(nextToken)) {
         isProRef.current = false;
@@ -352,14 +363,21 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       return { status: 'free' };
     }
 
-    if (currentToken && isUsableProToken(currentToken)) {
+    // Persisted token payloads are provisional. Only the existing canonical
+    // startup/purchase/restore sync owner can make a token authoritative for
+    // this app session; the server still owns signature verification.
+    if (tokenSyncLastResultRef.current !== 'success') {
+      return {
+        status: 'syncing',
+        reason: tokenSyncLastResultRef.current === 'failed' ? 'token-sync-failed' : 'missing-token',
+      };
+    }
+
+    if (currentToken && isUsableProToken(currentToken, Date.now(), AI_PRO_TOKEN_OPERATION_LEASE_MS)) {
       return { status: 'ready', token: currentToken };
     }
 
-    const reason: 'missing-token' | 'token-sync-failed' =
-      tokenSyncLastResultRef.current === 'failed' ? 'token-sync-failed' : 'missing-token';
-
-    return { status: 'syncing', reason };
+    return { status: 'syncing', reason: 'missing-token' };
   }, []);
 
   const getAiGate = useCallback((): AiGateResult => readAiGateState(), [readAiGateState]);
