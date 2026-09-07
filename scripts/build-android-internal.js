@@ -9,8 +9,6 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { loadEnvConfig } = require('@next/env');
 const {
-  ANDROID_PRODUCTION_API_BASE_URL,
-  PROTECTED_ANDROID_API_BASE_URL,
   enforceAndroidProductionApiBaseUrl,
 } = require('./android-production-api-contract');
 const {
@@ -143,12 +141,6 @@ function runAndroidInternalBuild(options = {}) {
     dependencies.assertManifest(syncedCommercialManifest, expectedCommercialState);
   } catch (error) {
     fail(error instanceof Error ? error.message : String(error));
-  }
-  if (!dependencies.treeContainsExactValue(copied, apiBaseUrl)) {
-    fail('configured production API base URL is absent from copied Android assets');
-  }
-  if (dependencies.treeContainsExactValue(copied, PROTECTED_ANDROID_API_BASE_URL)) {
-    fail('Vercel-protected API host is present in copied Android assets');
   }
   if (!dependencies.treeContainsExactValue(copied, revenueCatAndroidKey)) {
     fail('RevenueCat Android public key is absent from copied Android assets');

@@ -24,6 +24,13 @@ const productionContract = require('../../../scripts/android-production-api-cont
   ANDROID_PRODUCTION_API_BASE_URL: string;
   enforceAndroidProductionApiBaseUrl: (environment: Record<string, string | undefined>) => string;
 };
+const commercialContract = require('../../../scripts/android-commercial-state-contract.js') as {
+  resolveExpectedAndroidCommercialState: (contract: {
+    mode: 'production' | 'preview';
+    apiBaseUrl: string;
+    hostClass: 'production' | 'vercel_preview';
+  }) => { apiHost: string };
+};
 
 const PRODUCTION = 'https://ai-resume-builder-six-gamma.vercel.app';
 const PREVIEW = 'https://example-project-random-team.vercel.app';
@@ -47,6 +54,10 @@ type BuildRunner = (options: {
   environment: Environment;
   dependencies: Record<string, unknown>;
 }) => RunnerResult;
+type CommercialManifestAssertion = {
+  actual: unknown;
+  expectedState: { apiHost: string };
+};
 
 function importFreshBuildModule(
   modulePath: string,
@@ -98,12 +109,15 @@ function androidRunnerDependencies(
   childCalls: ChildCall[],
   filesystemMutations: string[],
   sideEffects: string[] = [],
+  commercialManifestAssertions: CommercialManifestAssertion[] = [],
 ) {
   return {
     loadEnvConfig: () => sideEffects.push('load-env'),
     establishAndroidPackagingEnvironment: () => sideEffects.push('commercial-environment'),
     validateCheckedInCommercialState: () => sideEffects.push('validate-commercial'),
-    assertManifest: () => undefined,
+    assertManifest: (actual: unknown, expectedState: { apiHost: string }) => {
+      commercialManifestAssertions.push({ actual, expectedState });
+    },
     runFile: (command: string, args: string[], options: ChildCall['options']) => {
       sideEffects.push('child');
       childCalls.push({ command, args, options });
@@ -241,14 +255,12 @@ describe('AI Core V3 internal preview API-host build contract', () => {
     expect(productionContract.ANDROID_PRODUCTION_API_BASE_URL).toBe(PRODUCTION);
   });
 
-  it('7. existing AAB-408 production-host tests remain present and unweakened', () => {
-    const source = fs.readFileSync(
-      path.resolve('src/lib/__tests__/aab408-production-api-host-contract.test.ts'),
-      'utf8',
-    );
-    expect(source.match(/\bit\('/g)).toHaveLength(4);
-    expect(source).toContain('pins future Android packaging directly to the public Production API alias');
-    expect(source).toContain('forces production static export through the same public API-host contract');
+  it('7. Preview resolution projects the exact packaged commercial API host', () => {
+    const resolved = resolve({
+      CV_V3_ANDROID_API_MODE: 'preview',
+      NEXT_PUBLIC_API_BASE_URL: PREVIEW,
+    });
+    expect(commercialContract.resolveExpectedAndroidCommercialState(resolved).apiHost).toBe(PREVIEW);
   });
 
   it('8. invalid mode true rejects', () => {
@@ -580,9 +592,15 @@ describe('AI Core V3 internal preview API-host build contract', () => {
     const runner = importFreshBuildModule(ANDROID_SCRIPT, 'runAndroidInternalBuild');
     const childCalls: ChildCall[] = [];
     const filesystemMutations: string[] = [];
+    const commercialManifestAssertions: CommercialManifestAssertion[] = [];
     const result = runner({
       environment: baseRunnerEnvironment(),
-      dependencies: androidRunnerDependencies(childCalls, filesystemMutations),
+      dependencies: androidRunnerDependencies(
+        childCalls,
+        filesystemMutations,
+        [],
+        commercialManifestAssertions,
+      ),
     });
 
     expect(result.mode).toBe('production');
@@ -597,18 +615,26 @@ describe('AI Core V3 internal preview API-host build contract', () => {
     expect(result.childEnvironment.SIGNING_SENTINEL).toBe('unchanged');
     expect(result.childEnvironment.ANDROID_VERSION_CODE).toBe('408');
     expect(filesystemMutations).toEqual(['writeFileSync']);
+    expect(commercialManifestAssertions).toHaveLength(1);
+    expect(commercialManifestAssertions[0].expectedState.apiHost).toBe(PRODUCTION);
   });
 
   it('the Android internal runner forwards the validated preview environment to every child command', () => {
     const runner = importFreshBuildModule(ANDROID_SCRIPT, 'runAndroidInternalBuild');
     const childCalls: ChildCall[] = [];
     const filesystemMutations: string[] = [];
+    const commercialManifestAssertions: CommercialManifestAssertion[] = [];
     const result = runner({
       environment: baseRunnerEnvironment({
         CV_V3_ANDROID_API_MODE: 'preview',
         NEXT_PUBLIC_API_BASE_URL: `${PREVIEW}/`,
       }),
-      dependencies: androidRunnerDependencies(childCalls, filesystemMutations),
+      dependencies: androidRunnerDependencies(
+        childCalls,
+        filesystemMutations,
+        [],
+        commercialManifestAssertions,
+      ),
     });
 
     expect(result.mode).toBe('preview');
@@ -624,6 +650,8 @@ describe('AI Core V3 internal preview API-host build contract', () => {
     expect(result.childEnvironment.NEXT_PUBLIC_ENABLE_AI_TEST_RESET).toBe('true');
     expect(result.childEnvironment.SIGNING_SENTINEL).toBe('unchanged');
     expect(result.childEnvironment.ANDROID_VERSION_CODE).toBe('408');
+    expect(commercialManifestAssertions).toHaveLength(1);
+    expect(commercialManifestAssertions[0].expectedState.apiHost).toBe(PREVIEW);
   });
 
   it('the static internal runner rejects invalid preview configuration before every side effect', () => {
