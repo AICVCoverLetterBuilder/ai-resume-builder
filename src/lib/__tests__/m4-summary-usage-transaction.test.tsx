@@ -29,6 +29,8 @@ vi.mock('../iap', () => ({
 type AppState = ReturnType<typeof useApp>;
 let app: AppState | null = null;
 
+const VALID_TOKEN = 'eyJpc1BybyI6dHJ1ZSwiZXhwIjo5OTk5OTk5OTk5OTk5fQ.test';
+
 function Probe() {
   app = useApp();
   return <output data-testid="usage-count">{app.getProAiUsageCount()}</output>;
@@ -70,7 +72,7 @@ describe('M4 authoritative usage transaction', () => {
   it('commits the canonical ledger 0 → 1 once and synchronizes the React store from that receipt', async () => {
     seedUsage(0);
     renderStore();
-    await act(async () => { app?.setIsPro(true, 'usage-test-token'); });
+    await act(async () => { app?.setIsPro(true, VALID_TOKEN); });
     await waitFor(() => expect(app?.getAiGate().status).toBe('ready'));
 
     const priorGetter = app?.getProAiUsageCount;
@@ -117,7 +119,7 @@ describe('M4 authoritative usage transaction', () => {
   it('keeps the legacy recordProAiSuccess API void-facing while using the same policy owner', async () => {
     seedUsage(0);
     renderStore();
-    await act(async () => { app?.setIsPro(true, 'usage-test-token'); });
+    await act(async () => { app?.setIsPro(true, VALID_TOKEN); });
     await waitFor(() => expect(app?.getAiGate().status).toBe('ready'));
 
     let legacyResult: ReturnType<AppState['recordProAiSuccess']> = undefined;

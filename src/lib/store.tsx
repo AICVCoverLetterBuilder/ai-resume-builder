@@ -8,6 +8,7 @@ import {
   type EntitlementSyncResult,
   type TokenSyncResult,
 } from './iap';
+import { isUsableProToken } from './pro-token-client';
 import {
   saveCvDraft,
   loadCvDraft,
@@ -114,7 +115,7 @@ const AppContext = createContext<AppContextType | undefined>(undefined);
 
 function loadIsPro(): boolean {
   if (typeof window === 'undefined') return false;
-  return localStorage.getItem('cvpro-plan') === 'pro' && Boolean(localStorage.getItem(PRO_TOKEN_KEY));
+  return localStorage.getItem('cvpro-plan') === 'pro' && isUsableProToken(localStorage.getItem(PRO_TOKEN_KEY));
 }
 
 function persistIsPro(val: boolean) {
@@ -245,7 +246,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
     if (val) {
       const nextToken = token || loadProToken();
-      if (!nextToken) {
+      if (!isUsableProToken(nextToken)) {
         isProRef.current = false;
         proTokenRef.current = null;
         tokenSyncLastResultRef.current = 'failed';
@@ -351,7 +352,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       return { status: 'free' };
     }
 
-    if (currentToken) {
+    if (currentToken && isUsableProToken(currentToken)) {
       return { status: 'ready', token: currentToken };
     }
 

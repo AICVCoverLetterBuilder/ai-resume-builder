@@ -19,6 +19,22 @@ vi.mock('../iap', () => ({
 type AppState = ReturnType<typeof useApp>;
 let latestApp: AppState | null = null;
 
+const VALID_TOKEN = 'eyJpc1BybyI6dHJ1ZSwiZXhwIjo5OTk5OTk5OTk5OTk5fQ.test';
+
+function tokenWithExpiration(exp: number): string {
+  return `${Buffer.from(JSON.stringify({ isPro: true, exp })).toString('base64url')}.test`;
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 function Probe() {
   latestApp = useApp();
   return <div data-testid="pro-state">{String(latestApp.isPro)}</div>;
@@ -52,14 +68,14 @@ describe('canonical Pro entitlement state', () => {
     renderProvider();
 
     await act(async () => {
-      latestApp?.setIsPro(true, 'purchase-token');
+      latestApp?.setIsPro(true, VALID_TOKEN);
     });
 
     await waitFor(() => expect(latestApp?.isPro).toBe(true));
     expect(localStorage.getItem('cvpro-plan')).toBe('pro');
-    expect(localStorage.getItem('cvpro-pro-token')).toBe('purchase-token');
-    expect(latestApp?.getProToken()).toBe('purchase-token');
-    expect(latestApp?.getAiGate()).toEqual({ status: 'ready', token: 'purchase-token' });
+    expect(localStorage.getItem('cvpro-pro-token')).toBe(VALID_TOKEN);
+    expect(latestApp?.getProToken()).toBe(VALID_TOKEN);
+    expect(latestApp?.getAiGate()).toEqual({ status: 'ready', token: VALID_TOKEN });
   });
 
   test('fresh install starts without a token or Pro state', () => {
@@ -90,7 +106,7 @@ describe('canonical Pro entitlement state', () => {
     renderProvider();
 
     await act(async () => {
-      latestApp?.setIsPro(true, 'synced-token', {
+      latestApp?.setIsPro(true, VALID_TOKEN, {
         source: 'restore',
         entitlementResult: 'active',
         tokenSyncLastResult: 'success',
@@ -100,9 +116,9 @@ describe('canonical Pro entitlement state', () => {
 
     await waitFor(() => expect(latestApp?.isPro).toBe(true));
     expect(localStorage.getItem('cvpro-plan')).toBe('pro');
-    expect(localStorage.getItem('cvpro-pro-token')).toBe('synced-token');
-    expect(latestApp?.getProToken()).toBe('synced-token');
-    expect(latestApp?.getAiGate()).toEqual({ status: 'ready', token: 'synced-token' });
+    expect(localStorage.getItem('cvpro-pro-token')).toBe(VALID_TOKEN);
+    expect(latestApp?.getProToken()).toBe(VALID_TOKEN);
+    expect(latestApp?.getAiGate()).toEqual({ status: 'ready', token: VALID_TOKEN });
   });
 
   test('old null-token closures read a token added after initial render', async () => {
@@ -115,29 +131,29 @@ describe('canonical Pro entitlement state', () => {
     expect(staleGetAiGate?.()).toEqual({ status: 'free' });
 
     await act(async () => {
-      latestApp?.setIsPro(true, 'late-token', {
+      latestApp?.setIsPro(true, VALID_TOKEN, {
         tokenSyncLastResult: 'success',
         tokenSyncLastError: '',
       });
     });
 
     await waitFor(() => expect(latestApp?.isPro).toBe(true));
-    expect(staleGetProToken?.()).toBe('late-token');
-    expect(staleGetAiGate?.()).toEqual({ status: 'ready', token: 'late-token' });
+    expect(staleGetProToken?.()).toBe(VALID_TOKEN);
+    expect(staleGetAiGate?.()).toEqual({ status: 'ready', token: VALID_TOKEN });
   });
 
   test('stale sync failure state cannot block a current valid token', async () => {
     renderProvider();
 
     await act(async () => {
-      latestApp?.setIsPro(true, 'valid-token', {
+      latestApp?.setIsPro(true, VALID_TOKEN, {
         tokenSyncLastResult: 'failed',
         tokenSyncLastError: 'Previous token sync failure.',
       });
     });
 
     await waitFor(() => expect(latestApp?.isPro).toBe(true));
-    expect(latestApp?.getAiGate()).toEqual({ status: 'ready', token: 'valid-token' });
+    expect(latestApp?.getAiGate()).toEqual({ status: 'ready', token: VALID_TOKEN });
   });
 
   test('startup active entitlement refreshes a missing token into canonical state', async () => {
@@ -145,15 +161,15 @@ describe('canonical Pro entitlement state', () => {
       entitlementResult: 'active',
       tokenSyncLastResult: 'success',
       isPro: true,
-      token: 'startup-token',
+      token: VALID_TOKEN,
     });
 
     renderProvider();
 
     await waitFor(() => expect(latestApp?.isPro).toBe(true));
     expect(localStorage.getItem('cvpro-plan')).toBe('pro');
-    expect(latestApp?.getProToken()).toBe('startup-token');
-    expect(latestApp?.getAiGate()).toEqual({ status: 'ready', token: 'startup-token' });
+    expect(latestApp?.getProToken()).toBe(VALID_TOKEN);
+    expect(latestApp?.getAiGate()).toEqual({ status: 'ready', token: VALID_TOKEN });
   });
 
   test('startup inactive entitlement clears Pro state and token', async () => {
@@ -176,20 +192,89 @@ describe('canonical Pro entitlement state', () => {
 
   test('app restart reloads a persisted token into memory immediately', () => {
     localStorage.setItem('cvpro-plan', 'pro');
-    localStorage.setItem('cvpro-pro-token', 'persisted-token');
+    localStorage.setItem('cvpro-pro-token', VALID_TOKEN);
 
     renderProvider();
 
     expect(latestApp?.isPro).toBe(true);
-    expect(latestApp?.getProToken()).toBe('persisted-token');
-    expect(latestApp?.getAiGate()).toEqual({ status: 'ready', token: 'persisted-token' });
+    expect(latestApp?.getProToken()).toBe(VALID_TOKEN);
+    expect(latestApp?.getAiGate()).toEqual({ status: 'ready', token: VALID_TOKEN });
+  });
+
+  test('expired persisted token is never AI-ready while startup sync is pending', async () => {
+    const expiredToken = tokenWithExpiration(Date.now() - 1);
+    localStorage.setItem('cvpro-plan', 'pro');
+    localStorage.setItem('cvpro-pro-token', expiredToken);
+    const pending = deferred<unknown>();
+    mocks.syncProEntitlement.mockReturnValue(pending.promise);
+
+    renderProvider();
+
+    expect(latestApp?.isPro).toBe(false);
+    expect(latestApp?.getProToken()).toBeNull();
+    expect(latestApp?.getAiGate().status).toBe('free');
+    expect(latestApp?.getAiGate().status).not.toBe('ready');
+
+    await act(async () => {
+      pending.resolve({ entitlementResult: 'inactive', tokenSyncLastResult: 'not-run', isPro: false });
+    });
+    await waitFor(() => expect(localStorage.getItem('cvpro-pro-token')).toBeNull());
+  });
+
+  test('startup sync replaces an expired persisted token with a fresh usable token', async () => {
+    const expiredToken = tokenWithExpiration(Date.now() - 1);
+    const freshToken = tokenWithExpiration(Date.now() + 60_000);
+    localStorage.setItem('cvpro-plan', 'pro');
+    localStorage.setItem('cvpro-pro-token', expiredToken);
+    const pending = deferred<unknown>();
+    mocks.syncProEntitlement.mockReturnValue(pending.promise);
+
+    renderProvider();
+    expect(latestApp?.getAiGate().status).not.toBe('ready');
+    expect(latestApp?.getProToken()).toBeNull();
+
+    await act(async () => {
+      pending.resolve({
+        entitlementResult: 'active',
+        tokenSyncLastResult: 'success',
+        isPro: true,
+        token: freshToken,
+      });
+    });
+
+    await waitFor(() => expect(latestApp?.isPro).toBe(true));
+    expect(latestApp?.getProToken()).toBe(freshToken);
+    expect(latestApp?.getAiGate()).toEqual({ status: 'ready', token: freshToken });
+    expect(localStorage.getItem('cvpro-pro-token')).toBe(freshToken);
+    expect(localStorage.getItem('cvpro-pro-token')).not.toBe(expiredToken);
+  });
+
+  test('startup sync failure clears an expired persisted token and keeps the gate closed', async () => {
+    const expiredToken = tokenWithExpiration(Date.now() - 1);
+    localStorage.setItem('cvpro-plan', 'pro');
+    localStorage.setItem('cvpro-pro-token', expiredToken);
+    const pending = deferred<unknown>();
+    mocks.syncProEntitlement.mockReturnValue(pending.promise);
+
+    renderProvider();
+    expect(latestApp?.getAiGate().status).not.toBe('ready');
+
+    await act(async () => {
+      pending.reject(new Error('deterministic startup sync failure'));
+    });
+
+    await waitFor(() => expect(latestApp?.isPro).toBe(false));
+    expect(latestApp?.getProToken()).toBeNull();
+    expect(latestApp?.getAiGate()).toEqual({ status: 'free' });
+    expect(localStorage.getItem('cvpro-plan')).toBeNull();
+    expect(localStorage.getItem('cvpro-pro-token')).toBeNull();
   });
 
   test('confirmed Pro users bypass Free counters without incrementing or resetting them', async () => {
     renderProvider();
 
     await act(async () => {
-      latestApp?.setIsPro(true, 'purchase-token');
+      latestApp?.setIsPro(true, VALID_TOKEN);
     });
     await waitFor(() => expect(latestApp?.isPro).toBe(true));
 
@@ -220,7 +305,7 @@ describe('canonical Pro entitlement state', () => {
     const staleResetClRegen = latestApp?.resetClRegen;
 
     await act(async () => {
-      latestApp?.setIsPro(true, 'purchase-token');
+      latestApp?.setIsPro(true, VALID_TOKEN);
     });
     await waitFor(() => expect(latestApp?.isPro).toBe(true));
 

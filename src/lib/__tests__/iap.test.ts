@@ -235,7 +235,7 @@ describe('in-app purchase flow', () => {
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
-      json: () => Promise.resolve({ token: 'eyJpc1BybyI6dHJ1ZSwiZXhwIjo5OTk5OTk5OTk5fQ' }),
+      json: () => Promise.resolve({ token: 'eyJpc1BybyI6dHJ1ZSwiZXhwIjo5OTk5OTk5OTk5OTk5fQ.test' }),
     });
   });
 
@@ -339,8 +339,8 @@ describe('in-app purchase flow', () => {
 
       expect(result.success).toBe(true);
       expect(result.success && result.isPro).toBe(true);
-      expect(result.success && result.token).toBe('eyJpc1BybyI6dHJ1ZSwiZXhwIjo5OTk5OTk5OTk5fQ');
-      expect(localStorage.getItem('cvpro-pro-token')).toBe('eyJpc1BybyI6dHJ1ZSwiZXhwIjo5OTk5OTk5OTk5fQ');
+      expect(result.success && result.token).toBe('eyJpc1BybyI6dHJ1ZSwiZXhwIjo5OTk5OTk5OTk5OTk5fQ.test');
+      expect(localStorage.getItem('cvpro-pro-token')).toBe('eyJpc1BybyI6dHJ1ZSwiZXhwIjo5OTk5OTk5OTk5OTk5fQ.test');
       expect(global.fetch).toHaveBeenCalledWith(
         expect.stringContaining('/api/verify-pro'),
         expect.objectContaining({
@@ -768,7 +768,7 @@ describe('purchasing state reset', () => {
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
-      json: () => Promise.resolve({ token: 'eyJpc1BybyI6dHJ1ZSwiZXhwIjo5OTk5OTk5OTk5fQ' }),
+      json: () => Promise.resolve({ token: 'eyJpc1BybyI6dHJ1ZSwiZXhwIjo5OTk5OTk5OTk5OTk5fQ.test' }),
     });
   });
 
@@ -960,7 +960,7 @@ describe('caller-level purchase behavior', () => {
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
-      json: () => Promise.resolve({ token: 'eyJpc1BybyI6dHJ1ZSwiZXhwIjo5OTk5OTk5OTk5fQ' }),
+      json: () => Promise.resolve({ token: 'eyJpc1BybyI6dHJ1ZSwiZXhwIjo5OTk5OTk5OTk5OTk5fQ.test' }),
     });
   });
 

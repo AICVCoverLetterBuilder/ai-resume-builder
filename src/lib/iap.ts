@@ -28,6 +28,7 @@ import { Capacitor, type PluginListenerHandle } from '@capacitor/core';
 import { App } from '@capacitor/app';
 import { LOG_LEVEL, Purchases as RevenueCatPurchases } from '@revenuecat/purchases-capacitor';
 import { apiFetch } from './api';
+import { isUsableProToken } from './pro-token-client';
 
 // --- Constants ------------------------------------------------------------------
 
@@ -282,14 +283,6 @@ async function _initIAPImpl(platform: 'ios' | 'android' | 'web'): Promise<void> 
   }
 }
 
-// --- Browser-safe base64url decoder ------------------------------------------------
-
-function base64UrlDecode(str: string): string {
-  let base64 = str.replace(/-/g, '+').replace(/_/g, '/');
-  while (base64.length % 4 !== 0) base64 += '=';
-  return atob(base64);
-}
-
 // --- Helpers -----------------------------------------------------------------------
 
 const PURCHASE_TIMEOUT_MS = 30_000;
@@ -516,18 +509,6 @@ function persistStoredProToken(token: string) {
   } catch {}
 }
 
-function decodeTokenIsPro(token: string | undefined | null): boolean {
-  if (!token) return false;
-  try {
-    const payloadPart = token.split('.')[0];
-    if (!payloadPart) return false;
-    const decoded = JSON.parse(base64UrlDecode(payloadPart));
-    return decoded.isPro === true;
-  } catch {
-    return false;
-  }
-}
-
 async function verifyProWithServer(): Promise<IAPResult> {
   const appUserId = getAppUserId();
   diagLog('verifyProWithServer: calling /api/verify-pro');
@@ -543,7 +524,7 @@ async function verifyProWithServer(): Promise<IAPResult> {
     }
 
     diagLog('verifyProWithServer: token received');
-    const isPro = decodeTokenIsPro(data.token);
+    const isPro = isUsableProToken(data.token);
 
     if (isPro) {
       persistStoredProToken(data.token);
@@ -594,7 +575,7 @@ async function syncTokenForEntitlement(hasEntitlement: boolean): Promise<ProEnti
 export async function syncProEntitlement(): Promise<ProEntitlementSyncResult> {
   if (!isNative()) {
     const token = typeof window !== 'undefined' ? localStorage.getItem(PRO_TOKEN_KEY) : null;
-    if (decodeTokenIsPro(token)) {
+    if (isUsableProToken(token)) {
       return {
         entitlementResult: 'active',
         tokenSyncLastResult: 'success',
@@ -821,7 +802,9 @@ export async function restorePro(): Promise<IAPResult> {
   diagLog('restorePro: started');
   if (!isNative()) {
     const token = typeof window !== 'undefined' ? localStorage.getItem(PRO_TOKEN_KEY) : null;
-    return { success: true, isPro: decodeTokenIsPro(token), token: decodeTokenIsPro(token) ? token ?? undefined : undefined };
+    const usable = isUsableProToken(token);
+    if (!usable) clearStoredProToken();
+    return { success: true, isPro: usable, token: usable ? token ?? undefined : undefined };
   }
   try {
     // Restore is a public entry point and may be called before the React hook's
