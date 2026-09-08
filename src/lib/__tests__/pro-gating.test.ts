@@ -247,7 +247,7 @@ describe('isPro-aware caller audit', () => {
     const translations = fs.readFileSync(path.resolve('src/lib/i18n/translations.ts'), 'utf8');
 
     expect(generateRoute).toContain("import { verifyProToken } from '@/lib/pro-token';");
-    expect(generateRoute).toContain('await verifyProToken(proToken)');
+    expect(generateRoute).toContain('await verifyProToken(proToken,');
     expect(generateRoute).toContain('verifiedPro !== null');
     expect(generateRoute).not.toContain('function verifyProToken(');
     expect(generateRoute).toContain('Pro access required for AI features.');

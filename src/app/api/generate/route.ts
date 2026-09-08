@@ -5,6 +5,8 @@ import { DEFAULT_LOCALE, type Locale, resolveLocaleCandidate } from '@/lib/i18n/
 import { sanitizeField, sanitizeText } from '@/lib/input-sanitizer';
 import { resolveCorsOrigin, buildCorsHeaders, handleOptions } from '@/lib/cors';
 import { verifyProToken } from '@/lib/pro-token';
+import type { ProTokenVerificationReason } from '@/lib/pro-token';
+import { fingerprintProToken, isInternalProAuthDiagnosticsEnabled, safeProTokenFingerprint } from '@/lib/pro-auth-diagnostics';
 import {
   assembleCoverLetterContent,
   CoverLetterGenerationIncompleteError,
@@ -740,7 +742,8 @@ export async function POST(req: NextRequest) {
     }
 
     // ── Pro token verification (before limiter identity) ────────────────────
-    const verifiedPro = await verifyProToken(proToken);
+    const authObservation: { reason: ProTokenVerificationReason | null } = { reason: null };
+    const verifiedPro = await verifyProToken(proToken, (reason) => { authObservation.reason = reason; });
     const isPro = verifiedPro !== null;
 
     // Verified Pro → token-hash key (not free anonymous / install counter).
@@ -790,10 +793,27 @@ export async function POST(req: NextRequest) {
         const code: AiErrorCode = FREE_ALLOWED_ACTIONS.has(resolvedAction)
           ? 'free_ai_limit_reached'
           : 'invalid_pro_token';
+        // Deployment-owned fence, never request-controlled. No second verification,
+        // retry, or authorization based on diagnostic/fingerprint fields.
+        let internalProAuth;
+        if (code === 'invalid_pro_token' && isInternalProAuthDiagnosticsEnabled()
+          && process.env.VERCEL_ENV !== 'production' && authObservation.reason) {
+          const serverReceivedTokenFingerprint = await fingerprintProToken(proToken);
+          const clientFingerprint = safeProTokenFingerprint(body.authTokenFingerprintAtClick);
+          const marker = process.env.NEXT_PUBLIC_SOURCE_COMMIT_SHORT;
+          internalProAuth = {
+            serverReceivedTokenFingerprint,
+            serverTokenFingerprintMatchesClient: serverReceivedTokenFingerprint && clientFingerprint
+              ? serverReceivedTokenFingerprint === clientFingerprint : null,
+            serverProTokenVerificationReason: authObservation.reason,
+            serverDeploymentSourceMarker: marker && /^[a-f0-9]{7,40}$/.test(marker) ? marker : null,
+          };
+        }
         return jsonResponse(
           {
             error: 'Pro access required for AI features.',
             code,
+            ...(internalProAuth ? { internalProAuth } : {}),
           },
           { status: 403 },
         );

@@ -224,6 +224,7 @@ import {
   type ExperienceLocalizationDiagnostics,
 } from '@/lib/cv-experience-localized-surfaces';
 import { apiFetch } from '@/lib/api';
+import { isInternalProAuthDiagnosticsEnabled, readProAuthServerObservation } from '@/lib/pro-auth-diagnostics';
 import {
   EXPERIENCE_V3_ENHANCE_ACTION,
   EXPERIENCE_V3_GENERATE_ACTION,
@@ -508,6 +509,7 @@ export default function CVBuilderPage() {
     getProAiUsageCount,
     lastCvSavedAt,
     getAiGate,
+    getProAuthObservation,
   } = useApp();
   const [cv, setCv] = useState<CVData>(currentCv || emptyCV());
   const cvRef = useRef<CVData>(cv);
@@ -1649,6 +1651,9 @@ export default function CVBuilderPage() {
     const proToken = getCurrentProTokenOrToast(() => setSummaryAiModal(true));
     if (!proToken) return;
     if (isSummaryGenerating) return;
+    // Captured from the canonical owner in this same synchronous click turn.
+    const authObservationPromise = isInternalProAuthDiagnosticsEnabled()
+      ? getProAuthObservation?.(proToken)?.catch(() => undefined) : undefined;
     const liveCvAtPress = cvRef.current;
     const summaryEditorAtPress = typeof document === 'undefined'
       ? null
@@ -1741,6 +1746,8 @@ export default function CVBuilderPage() {
       jobContextHash: summaryJobContext.key,
     });
     summaryDiag.recordCvSnapshot(liveCvAtPress, liveSummaryAtPress);
+    const authObservation = authObservationPromise ? await authObservationPromise : undefined;
+    if (authObservation) summaryDiag.patch({ authBoundary: authObservation });
     let summaryV3RouteHttpStatus: number | null = null;
     let summaryV3TerminalEvent: import('@/lib/ai-core-v3/summary-generate').SummaryV3GenerateTerminalEvent | null = null;
     const summaryV3Result = summaryV3Enabled
@@ -1750,12 +1757,16 @@ export default function CVBuilderPage() {
             body: {
               action: SUMMARY_V3_GENERATE_ACTION,
               proToken,
+              ...(authObservation ? { authTokenFingerprintAtClick: authObservation.authTokenFingerprintAtClick } : {}),
               requestId: reqCtx.requestId,
               manifest,
             },
             signal: controller.signal,
           });
           summaryV3RouteHttpStatus = response.status;
+          if (authObservation) summaryDiag.patch({
+            authBoundary: { ...authObservation, ...readProAuthServerObservation(data) },
+          });
           return data;
         },
         getLiveState: () => ({
@@ -1867,6 +1878,7 @@ export default function CVBuilderPage() {
         body: {
           action: 'summary',
           proToken,
+          ...(authObservation ? { authTokenFingerprintAtClick: authObservation.authTokenFingerprintAtClick } : {}),
           jobTitle: experienceEntries[0]?.position || liveCvAtPress.personal.jobTitle,
           experienceDuration,
           experienceDurationSnapshot: durationSnapshot,
@@ -1882,6 +1894,9 @@ export default function CVBuilderPage() {
           operationMode,
         },
         signal: controller.signal,
+      });
+      if (authObservation) summaryDiag.patch({
+        authBoundary: { ...authObservation, ...readProAuthServerObservation(summaryData) },
       });
       if (!res.ok || summaryData?.error) {
         if (res.status === 403) {

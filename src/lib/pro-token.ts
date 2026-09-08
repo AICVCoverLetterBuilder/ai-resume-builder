@@ -52,14 +52,28 @@ export async function createProToken(isPro: boolean): Promise<string> {
  * Verifies a signed Pro token and returns the payload.
  * Returns null if the token is invalid, expired, or tampered with.
  */
-export async function verifyProToken(token: string): Promise<ProTokenPayload | null> {
+export type ProTokenVerificationReason =
+  | 'valid' | 'missing_token' | 'malformed_format' | 'payload_decode_failed'
+  | 'signature_length_mismatch' | 'signature_mismatch' | 'expired'
+  | 'is_pro_false' | 'signing_key_unavailable';
+
+/** Server-only taxonomy. This is the sole verifier; no key/payload is logged. */
+export async function verifyProTokenDetailed(token: unknown): Promise<{
+  payload: ProTokenPayload | null;
+  reason: ProTokenVerificationReason;
+}> {
+  const reject = (reason: ProTokenVerificationReason) => ({ payload: null, reason });
+  if (token == null || token === '') return reject('missing_token');
+  if (typeof token !== 'string') return reject('malformed_format');
   try {
     const parts = token.split('.');
-    if (parts.length !== 2) return null;
+    if (parts.length !== 2) return reject('malformed_format');
 
     const [encodedPayload, signature] = parts;
     const payloadStr = Buffer.from(encodedPayload, 'base64url').toString('utf-8');
     const payload: ProTokenPayload = JSON.parse(payloadStr);
+
+    if (!process.env.PRO_SIGNING_KEY) return reject('signing_key_unavailable');
 
     // Verify signature
     const expectedSig = crypto
@@ -68,19 +82,32 @@ export async function verifyProToken(token: string): Promise<ProTokenPayload | n
       .digest('base64url');
 
     // Timing-safe comparison
-    if (!crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSig))) {
-      return null;
+    const actualBytes = Buffer.from(signature);
+    const expectedBytes = Buffer.from(expectedSig);
+    if (actualBytes.length !== expectedBytes.length) return reject('signature_length_mismatch');
+    if (!crypto.timingSafeEqual(actualBytes, expectedBytes)) {
+      return reject('signature_mismatch');
     }
 
     // Check expiration
-    if (payload.exp && Date.now() >= payload.exp) return null;
+    if (payload.exp && Date.now() >= payload.exp) return reject('expired');
 
     // Explicitly verify isPro is exactly true — do not grant access if
     // isPro is missing, false, or malformed
-    if (payload.isPro !== true) return null;
+    if (payload.isPro !== true) return reject('is_pro_false');
 
-    return payload;
+    return { payload, reason: 'valid' };
   } catch {
-    return null;
+    return reject('payload_decode_failed');
   }
+}
+
+/** Compatibility API: observation cannot influence the authorization result. */
+export async function verifyProToken(
+  token: string,
+  observe?: (reason: ProTokenVerificationReason) => void,
+): Promise<ProTokenPayload | null> {
+  const result = await verifyProTokenDetailed(token);
+  try { observe?.(result.reason); } catch { /* diagnostic failure is non-authoritative */ }
+  return result.payload;
 }

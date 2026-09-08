@@ -9,6 +9,8 @@ import {
   type TokenSyncResult,
 } from './iap';
 import { AI_PRO_TOKEN_OPERATION_LEASE_MS, isUsableProToken } from './pro-token-client';
+import { Capacitor } from '@capacitor/core';
+import { fingerprintProToken, isInternalProAuthDiagnosticsEnabled, tokenLifetimeBucket, type ProAuthObservation } from './pro-auth-diagnostics';
 import {
   saveCvDraft,
   loadCvDraft,
@@ -34,6 +36,17 @@ export { PRO_AI_SAFETY_CAP, PRO_AI_WINDOW_MS } from './ai-usage-policy';
 void PRO_AI_WINDOW_MS;
 
 const PRO_TOKEN_KEY = 'cvpro-pro-token';
+
+function observeAuthPlatform(): Pick<ProAuthObservation, 'authPlatformNative' | 'authPlatformName'> {
+  try {
+    if (isInternalProAuthDiagnosticsEnabled()) {
+      const platform = Capacitor.getPlatform();
+      return { authPlatformNative: Capacitor.isNativePlatform(),
+        authPlatformName: platform === 'android' || platform === 'ios' || platform === 'web' ? platform : 'unknown' };
+    }
+  } catch { /* Missing platform evidence cannot affect auth. */ }
+  return { authPlatformNative: null, authPlatformName: 'unknown' };
+}
 
 type PersonalPhotoFields = {
   originalPhoto?: string;
@@ -69,6 +82,8 @@ interface AppContextType {
   getProToken: () => string | null;
   /** Current AI authorization gate, read at click time from canonical Pro state. */
   getAiGate: () => AiGateResult;
+  /** Internal snapshot of the canonical owner; never authorizes or refreshes. */
+  getProAuthObservation: (capturedToken: string) => Promise<ProAuthObservation | undefined>;
   saveCv: (cv: CVData) => void;
   deleteCv: (id: string) => void;
   saveCoverLetter: (cl: CoverLetterData) => void;
@@ -233,12 +248,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const isProRef = useRef(isPro);
   const proTokenRef = useRef(proToken);
   const tokenSyncLastResultRef = useRef<TokenSyncResult | 'not-run'>(tokenSyncLastResult);
+  const tokenSyncSourceRef = useRef<ProAuthObservation['authSyncSource']>('unknown');
+  const authPlatformAtSyncRef = useRef<ReturnType<typeof observeAuthPlatform>>({ authPlatformNative: null, authPlatformName: 'unknown' });
 
   isProRef.current = isPro;
   proTokenRef.current = proToken;
   tokenSyncLastResultRef.current = tokenSyncLastResult;
 
   const setIsPro = useCallback((val: boolean, token?: string | null, options?: SetIsProOptions) => {
+    tokenSyncSourceRef.current = options?.source ?? 'unknown';
+    if (options?.source !== 'startup') authPlatformAtSyncRef.current = observeAuthPlatform();
     if (options?.tokenSyncLastResult) {
       tokenSyncLastResultRef.current = options.tokenSyncLastResult;
       setTokenSyncLastResult(options.tokenSyncLastResult);
@@ -293,6 +312,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     (async () => {
       try {
         await initIAP();
+        // Capture at sync entry, not at the later AI click: platform bootstrap
+        // drift must not disguise an earlier web-persistence branch as native.
+        authPlatformAtSyncRef.current = observeAuthPlatform();
         const syncResult = await syncProEntitlement();
         if (syncResult.isPro && syncResult.token) {
           setIsPro(true, syncResult.token, {
@@ -311,6 +333,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         }
       } catch {
         isProRef.current = false;
+        tokenSyncSourceRef.current = 'startup';
         proTokenRef.current = null;
         tokenSyncLastResultRef.current = 'failed';
         setInternalIsPro(false);
@@ -381,6 +404,24 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const getAiGate = useCallback((): AiGateResult => readAiGateState(), [readAiGateState]);
+
+  const getProAuthObservation = useCallback(async (capturedToken: string): Promise<ProAuthObservation | undefined> => {
+    if (!isInternalProAuthDiagnosticsEnabled()) return undefined;
+    try {
+      // Read refs before the first await; a later sync cannot rewrite this click's evidence.
+      const canonicalToken = proTokenRef.current;
+      const snapshot: Omit<ProAuthObservation, 'authTokenFingerprint' | 'authTokenFingerprintAtClick'> = {
+        ...authPlatformAtSyncRef.current,
+        authSyncLastResult: tokenSyncLastResultRef.current,
+        authSyncSource: tokenSyncSourceRef.current,
+        authTokenRemainingLifetimeBucket: tokenLifetimeBucket(capturedToken, Date.now()),
+      };
+      const [authTokenFingerprint, authTokenFingerprintAtClick] = await Promise.all([
+        fingerprintProToken(canonicalToken), fingerprintProToken(capturedToken),
+      ]);
+      return { ...snapshot, authTokenFingerprint, authTokenFingerprintAtClick };
+    } catch { return undefined; }
+  }, []);
 
   // Expose token synchronously from the same click-time gate used by AI callers.
   const getProToken = useCallback((): string | null => {
@@ -599,7 +640,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   void FREE_AI_RECOMMEND_LIMIT; // used via canUseAiRecommend logic above
   return (
     <AppContext.Provider value={{
-      isPro, setIsPro, getProToken, getAiGate,
+      isPro, setIsPro, getProToken, getAiGate, getProAuthObservation,
       saveCv, deleteCv, saveCoverLetter, deleteCoverLetter,
       currentCv, setCurrentCv, persistCurrentCvTransactionally,
       currentCoverLetter, setCurrentCoverLetter,

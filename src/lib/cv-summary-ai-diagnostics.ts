@@ -3,6 +3,7 @@
  * Mirrors Experience AI diagnostics pattern — observation only.
  */
 import { fingerprintText, resolveAppVersionInfo, resolveNextBuildId } from './cv-export-diagnostics';
+import { isInternalProAuthDiagnosticsEnabled, type ProAuthBoundaryObservation } from './pro-auth-diagnostics';
 import { detectTextLocale } from './cv-content-locale';
 import {
   detectDominantLocale,
@@ -329,6 +330,7 @@ const M4_V2_AUTHORITATIVE_FIELD_SET = new Set(M4_V2_AUTHORITATIVE_CONSTRUCTOR_FI
 
 /** Fields emitted only by the M4 terminal receipt or common commit envelope. */
 const M4_NON_CONSTRUCTOR_AUTHORITATIVE_FIELDS = Object.freeze(`
+authBoundary
 operationKind diagnosticContractRevision compiledDiagnosticMarker assetRevision cvAiDiagnosticsV2299Revision internalDiagnosticsEnabled internalResetEnabled internalBuildContractUsed serverUrlConfigured apiBaseUrlConfigured capacitorServerUrlConfigured apiHostClass apiHostClassificationContractRevision sourceCommitShort sourceCommitStatus diagnosticInvariantCheckPassed diagnosticInvariantFailureCount diagnosticInvariantFailures diagnosticCompletenessPassed missingRequiredDiagnosticFields nullRequiredDiagnosticFields notApplicableDiagnosticFieldViolations unexpectedDiagnosticFieldTypes diagnosticPayloadByteSize diagnosticPayloadTruncated diagnosticTruncatedSection diagnosticPrivacyViolations privacyCheckPassed m4Operation m4LegacyV2DiagnosticFieldsApplicable m4SourceWasEmpty m4StructuredDurationMonths m4AvailableFactCount m4RequiredFactCount m4CoveredFactCount m4OwnershipResult m4RouteHttpStatus m4Writer m4Evaluator m4ProviderFailure m4Phases m4CandidatePresent m4CandidateHash m4CandidateLength m4CandidateUnitCount m4CandidateUnitHashes m4CandidateUnitLengths m4SemanticViolationCount m4SemanticViolationCodes m4LanguageQualityViolationCount m4LanguageQualityViolationCodes m4ViolationFactIdHashesByCode m4ViolationEntryIdHashesByCode m4PrimaryValidationRejectionCode m4RepairAttempted m4ApplyAuthorized m4ApplyAttempted m4ApplyCommitted m4PersistenceAttempted m4PersistenceResult m4CanonicalApplyAttempted m4CanonicalApplyResult m4UsageAttempted m4UsageResult m4UsageForwardWriteResult m4UsageVerificationResult m4UsageRollbackAttempted m4UsageRollbackResult m4UsageCountAtRequest m4UsageFinalStateKnown m4ActualUsageBefore m4ActualUsageAfter m4ActualUsageDelta m4RollbackAttempted m4CommittedSummaryHash m4CommittedContentLocale m4CommitCandidateMatched m4RollbackResult m4V2FallthroughCount m4UsageDelta
 `.trim().split(/\s+/u));
 
@@ -350,6 +352,7 @@ export const M4_SUMMARY_FIELD_AUTHORITY = Object.freeze({
 });
 
 const M4_OPTIONAL_EXTERNAL_FIELDS = Object.freeze([
+  'authBoundary',
   'cvAiDiagnosticsV2299Revision',
   'diagnosticTruncatedSection',
 ] as const);
@@ -659,6 +662,7 @@ export function checkM4SummaryDiagnosticCompleteness(
 
 /** Full mutable session shape. Persisted consumers use the discriminated external union below. */
 export type SummaryAiDiagnosticDraft = {
+  authBoundary?: ProAuthBoundaryObservation;
   schemaVersion: typeof SUMMARY_AI_TRACE_SCHEMA_VERSION;
   marker: string;
   capturedAt: string;
@@ -1210,6 +1214,7 @@ export type SummaryAiDiagnosticDraft = {
 type SummaryM4OnlyField = Extract<keyof SummaryAiDiagnosticDraft, `m4${string}`>;
 
 type SummaryM4SharedExternalField =
+  | 'authBoundary'
   | 'schemaVersion'
   | 'marker'
   | 'capturedAt'
@@ -1664,6 +1669,7 @@ export class SummaryAiDiagnosticSession {
 
   patch(partial: Partial<SummaryAiDiagnosticDraft>): void {
     const { marker: _ignoredMarker, ...safe } = partial;
+    if (!isInternalProAuthDiagnosticsEnabled()) delete safe.authBoundary;
     Object.assign(this.draft, safe);
     const markerPatch = sanitizeCvAiDiagnosticMarkerPatch('summary', partial);
     if (markerPatch.marker) this.draft.marker = markerPatch.marker;

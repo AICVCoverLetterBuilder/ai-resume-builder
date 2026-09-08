@@ -138,8 +138,8 @@ describe('M8 AAB558 session-token lifecycle and lease closure', () => {
 
   test('one shared server verifier precedes every generate action dispatch', () => {
     const route = fs.readFileSync(path.resolve('src/app/api/generate/route.ts'), 'utf8');
-    const verifierCall = 'await verifyProToken(proToken)';
-    expect(route.match(/await verifyProToken\(proToken\)/g)).toHaveLength(1);
+    const verifierCall = 'await verifyProToken(proToken,';
+    expect(route.match(/await verifyProToken\(proToken,/g)).toHaveLength(1);
     const verifierIndex = route.indexOf(verifierCall);
     const actionDispatches = [
       "if (action === 'summary-localize' || action === 'summary-context-localize')",
