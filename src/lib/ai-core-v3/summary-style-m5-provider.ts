@@ -1,10 +1,10 @@
 import {
   SUMMARY_V3_STYLE_M5_EVALUATOR_TOOL_NAME,
-  SUMMARY_V3_STYLE_M5_EVALUATOR_TOOL,
-  SUMMARY_V3_STYLE_M5_EVALUATOR_PROVIDER_TOOL,
   SUMMARY_V3_STYLE_M5_WRITER_TOOL_NAME,
   SUMMARY_V3_STYLE_M5_WRITER_TOOL,
   SUMMARY_V3_STYLE_M5_WRITER_PROVIDER_TOOL,
+  projectSummaryV3StyleEvaluatorToolForProvider,
+  summaryV3StyleCandidateUnitHash,
   type SummaryV3StyleProviderTool,
   type SummaryV3Style,
   type SummaryV3StyleRequest,
@@ -175,7 +175,7 @@ function invocationFor(
     allowedTextBlocks: 0,
     tool: role === 'writer'
       ? SUMMARY_V3_STYLE_M5_WRITER_PROVIDER_TOOL
-      : SUMMARY_V3_STYLE_M5_EVALUATOR_PROVIDER_TOOL,
+      : projectSummaryV3StyleEvaluatorToolForProvider(input.style),
     timeoutMs,
   };
 }
@@ -209,6 +209,72 @@ export function normalizeSummaryV3StyleProviderResponse(value: unknown): unknown
   };
 }
 
+const EVALUATOR_PROVIDER_KEYS = [
+  'structuralStatus', 'structuralViolations',
+  'semantic_groundingStatus', 'semantic_groundingViolations',
+  'language_native_qualityStatus', 'language_native_qualityViolations',
+  'style_fulfillmentStatus', 'style_fulfillmentViolations',
+  'representedFactIdHashes', 'missingFactIdHashes', 'roleIdentityResolution', 'styleEvidence',
+] as const;
+
+const LEGACY_EVALUATOR_KEYS = [
+  'operationId', 'snapshotHash', 'manifestHash', 'style', 'locale', 'candidateHash', 'candidateUnitHashes',
+  'phases', 'representedFactIdHashes', 'missingFactIdHashes', 'roleIdentityResolution', 'styleEvidence',
+] as const;
+
+function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
+  const actual = Object.keys(value).sort();
+  const keys = [...expected].sort();
+  return actual.length === keys.length && actual.every((key, index) => key === keys[index]);
+}
+
+/**
+ * Rehydrates only immutable evaluator context omitted from the provider wire,
+ * and reconstructs phases for the existing authoritative local parser. Any
+ * extra/missing provider key is preserved as malformed so local validation
+ * fails closed instead of silently accepting an altered shape.
+ */
+export function normalizeSummaryV3StyleEvaluatorProviderResponse(
+  value: unknown,
+  input: SummaryV3StyleEvaluatorInput,
+): unknown {
+  const envelope = normalizeSummaryV3StyleProviderResponse(value);
+  if (!isRecord(envelope) || !isRecord(envelope.input)) return envelope;
+  const raw = envelope.input;
+  // Synthetic/offline callers from the pre-minimization contract may still
+  // provide the full local envelope. Keep that shape parser-compatible while
+  // all real evaluator requests use the strict shallow provider projection.
+  if (hasExactKeys(raw, LEGACY_EVALUATOR_KEYS)) return envelope;
+  if (!hasExactKeys(raw, EVALUATOR_PROVIDER_KEYS)) return envelope;
+  if (!isRecord(raw.styleEvidence)) return envelope;
+
+  const styleEvidence = { ...raw.styleEvidence, style: input.style };
+  const phases: Record<string, unknown> = {};
+  for (const phase of ['structural', 'semantic_grounding', 'language_native_quality', 'style_fulfillment'] as const) {
+    phases[phase] = {
+      status: raw[`${phase}Status`],
+      violations: raw[`${phase}Violations`],
+    };
+  }
+  return {
+    ...envelope,
+    input: {
+      operationId: input.operationId,
+      snapshotHash: input.snapshotHash,
+      manifestHash: input.manifestHash,
+      style: input.style,
+      locale: input.locale,
+      candidateHash: input.candidate.hash,
+      candidateUnitHashes: input.candidate.units.map(summaryV3StyleCandidateUnitHash),
+      phases,
+      representedFactIdHashes: raw.representedFactIdHashes,
+      missingFactIdHashes: raw.missingFactIdHashes,
+      roleIdentityResolution: raw.roleIdentityResolution,
+      styleEvidence,
+    },
+  };
+}
+
 function createDependencies(options: SummaryV3StyleProviderAdapterOptions): SummaryV3StyleServerDependencies {
   const sharedPhase = (phase: SummaryV3StyleProviderPhase): SummaryV3ProviderPhase => (
     phase === 'repair_evaluator' ? 'post_repair_evaluator' : phase
@@ -230,7 +296,9 @@ function createDependencies(options: SummaryV3StyleProviderAdapterOptions): Summ
       throw createSummaryV3ProviderTransportError(error, sharedPhase(phase), 'sdk_request');
     }
     try {
-      return normalizeSummaryV3StyleProviderResponse(response);
+      return isWriterInput(input)
+        ? normalizeSummaryV3StyleProviderResponse(response)
+        : normalizeSummaryV3StyleEvaluatorProviderResponse(response, input as SummaryV3StyleEvaluatorInput);
     } catch (error) {
       throw createSummaryV3ProviderTransportError(error, sharedPhase(phase), 'response_extraction');
     }

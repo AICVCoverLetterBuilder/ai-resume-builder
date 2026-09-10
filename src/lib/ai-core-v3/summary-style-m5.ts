@@ -708,10 +708,11 @@ function schemaRecord(value: unknown): Record<string, unknown> | null {
 }
 
 /**
- * oneOf is projected to anyOf only for the evaluator's styleEvidence union.
- * Each branch carries a non-empty, pairwise-disjoint style enum, making the
- * alternatives a true discriminator partition rather than an overlapping
- * union.  An unexpected overlapping/undiscriminated oneOf fails closed.
+ * The evaluator's styleEvidence oneOf is projected to anyOf only when no
+ * active style is supplied. Each branch carries a non-empty, pairwise-
+ * disjoint style enum, making the alternatives a true discriminator partition
+ * rather than an overlapping union. An unexpected overlapping/undiscriminated
+ * oneOf fails closed.
  */
 function hasDisjointStyleAlternatives(value: unknown): value is readonly unknown[] {
   if (!Array.isArray(value) || value.length === 0) return false;
@@ -730,8 +731,8 @@ function hasDisjointStyleAlternatives(value: unknown): value is readonly unknown
   return true;
 }
 
-function projectSummaryV3StyleProviderSchema(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(projectSummaryV3StyleProviderSchema);
+function projectSummaryV3StyleProviderSchema(value: unknown, activeStyle?: SummaryV3Style): unknown {
+  if (Array.isArray(value)) return value.map((entry) => projectSummaryV3StyleProviderSchema(entry, activeStyle));
   const record = schemaRecord(value);
   if (!record) return value;
   const projected: Record<string, unknown> = {};
@@ -741,7 +742,26 @@ function projectSummaryV3StyleProviderSchema(value: unknown): unknown {
       if (!hasDisjointStyleAlternatives(child)) {
         throw new Error('M5 provider schema oneOf lacks a disjoint style discriminator');
       }
-      projected.anyOf = child.map(projectSummaryV3StyleProviderSchema);
+      if (activeStyle) {
+        const matching = child.filter((variant) => {
+          const variantRecord = schemaRecord(variant);
+          const properties = schemaRecord(variantRecord?.properties);
+          const style = schemaRecord(properties?.style);
+          const enumValues = style?.enum;
+          return Array.isArray(enumValues) && enumValues.includes(activeStyle);
+        });
+        if (matching.length !== 1) {
+          throw new Error(`M5 provider schema active style ${activeStyle} must match exactly one oneOf branch`);
+        }
+        const narrowed = projectSummaryV3StyleProviderSchema(matching[0], activeStyle);
+        const narrowedRecord = schemaRecord(narrowed);
+        if (!narrowedRecord) {
+          throw new Error('M5 provider schema active style branch must be an object');
+        }
+        Object.assign(projected, narrowedRecord);
+      } else {
+        projected.anyOf = child.map((variant) => projectSummaryV3StyleProviderSchema(variant));
+      }
       continue;
     }
     if (key === 'minItems' && child !== 0 && child !== 1) {
@@ -752,7 +772,14 @@ function projectSummaryV3StyleProviderSchema(value: unknown): unknown {
       removed.push(`${key}=${JSON.stringify(child)}`);
       continue;
     }
-    projected[key] = projectSummaryV3StyleProviderSchema(child);
+    if (activeStyle && key === 'style') {
+      const style = schemaRecord(projectSummaryV3StyleProviderSchema(child, activeStyle));
+      if (style && Array.isArray(style.enum)) {
+        projected[key] = { ...style, enum: [activeStyle] };
+        continue;
+      }
+    }
+    projected[key] = projectSummaryV3StyleProviderSchema(child, activeStyle);
   }
   if (removed.length > 0) {
     const existing = typeof projected.description === 'string' ? projected.description : '';
@@ -764,16 +791,73 @@ function projectSummaryV3StyleProviderSchema(value: unknown): unknown {
 
 export function projectSummaryV3StyleToolForProvider(
   tool: typeof SUMMARY_V3_STYLE_M5_WRITER_TOOL | typeof SUMMARY_V3_STYLE_M5_EVALUATOR_TOOL,
+  activeStyle?: SummaryV3Style,
 ): SummaryV3StyleProviderTool {
   return immutableCopy({
     name: tool.name,
     description: tool.description,
     strict: true as const,
-    input_schema: projectSummaryV3StyleProviderSchema(tool.input_schema) as SummaryV3StyleProviderTool['input_schema'],
+    input_schema: projectSummaryV3StyleProviderSchema(tool.input_schema, activeStyle) as SummaryV3StyleProviderTool['input_schema'],
   });
 }
 
-/** Stable wire contracts used by every M5 writer/evaluator invocation. */
+/**
+ * The live Anthropic evaluator wire omits immutable server context and uses a
+ * shallow phase representation. The full evaluator tool above remains the
+ * authoritative local contract; this projection is the single provider-wire
+ * owner for evaluator calls and is losslessly rehydrated before local parsing.
+ */
+const SUMMARY_V3_STYLE_M5_EVALUATOR_SERVER_CONTEXT_FIELDS = [
+  'operationId', 'snapshotHash', 'manifestHash', 'style', 'locale', 'candidateHash', 'candidateUnitHashes',
+] as const;
+
+const SUMMARY_V3_STYLE_M5_EVALUATOR_PHASES = [
+  'structural', 'semantic_grounding', 'language_native_quality', 'style_fulfillment',
+] as const;
+
+export function projectSummaryV3StyleEvaluatorToolForProvider(
+  activeStyle: SummaryV3Style,
+): SummaryV3StyleProviderTool {
+  const projected = projectSummaryV3StyleToolForProvider(SUMMARY_V3_STYLE_M5_EVALUATOR_TOOL, activeStyle);
+  const schema = JSON.parse(JSON.stringify(projected.input_schema)) as Record<string, any>;
+  const properties = schema.properties as Record<string, any>;
+  for (const field of SUMMARY_V3_STYLE_M5_EVALUATOR_SERVER_CONTEXT_FIELDS) delete properties[field];
+  schema.required = (schema.required as string[]).filter(
+    (field) => !SUMMARY_V3_STYLE_M5_EVALUATOR_SERVER_CONTEXT_FIELDS.includes(field as typeof SUMMARY_V3_STYLE_M5_EVALUATOR_SERVER_CONTEXT_FIELDS[number]),
+  );
+
+  const styleEvidence = properties.styleEvidence as Record<string, any> | undefined;
+  if (styleEvidence?.properties && styleEvidence.required) {
+    delete styleEvidence.properties.style;
+    styleEvidence.required = styleEvidence.required.filter((field: string) => field !== 'style');
+  }
+
+  const phases = properties.phases as Record<string, any> | undefined;
+  delete properties.phases;
+  schema.required = schema.required.filter((field: string) => field !== 'phases');
+  if (phases?.properties) {
+    for (const phase of SUMMARY_V3_STYLE_M5_EVALUATOR_PHASES) {
+      const phaseSchema = phases.properties[phase];
+      if (!phaseSchema?.properties) throw new Error(`M5 evaluator provider phase ${phase} is malformed`);
+      const statusField = `${phase}Status`;
+      const violationsField = `${phase}Violations`;
+      properties[statusField] = phaseSchema.properties.status;
+      properties[violationsField] = phaseSchema.properties.violations;
+      schema.required.push(statusField, violationsField);
+    }
+  } else {
+    throw new Error('M5 evaluator provider phases are malformed');
+  }
+
+  return immutableCopy({
+    name: projected.name,
+    description: projected.description,
+    strict: true as const,
+    input_schema: schema as SummaryV3StyleProviderTool['input_schema'],
+  });
+}
+
+/** Stable writer wire contract and un-narrowed evaluator baseline. */
 export const SUMMARY_V3_STYLE_M5_WRITER_PROVIDER_TOOL = projectSummaryV3StyleToolForProvider(SUMMARY_V3_STYLE_M5_WRITER_TOOL);
 export const SUMMARY_V3_STYLE_M5_EVALUATOR_PROVIDER_TOOL = projectSummaryV3StyleToolForProvider(SUMMARY_V3_STYLE_M5_EVALUATOR_TOOL);
 
