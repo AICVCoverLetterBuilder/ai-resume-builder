@@ -30,6 +30,7 @@ import {
   resolveSummaryM4ClientAbortTimeoutMs,
   scheduleClientAbort,
 } from '@/lib/ai-request-timing';
+import { resolveSummaryV3StyleM5ClientAbortTimeoutMs } from '@/lib/ai-core-v3/summary-style-m5-timeout-policy';
 import { templateComponents } from '@/components/cv-templates';
 import { analyzeJobDescription } from '@/lib/ai';
 import { industryOptions, levelOptions, type BulletIndustry, type BulletLevel } from '@/lib/ai-bullets';
@@ -3620,7 +3621,7 @@ export default function CVBuilderPage() {
       rewriteStyle: style,
     });
     const controller = new AbortController();
-    const timer = scheduleClientAbort(controller, resolveClientAbortTimeoutMs(AI_CLIENT_TIMEOUT_MS));
+    const timer = scheduleClientAbort(controller, resolveSummaryV3StyleM5ClientAbortTimeoutMs());
     let publishLatestDiagnostic = true;
     setRewritingStyle(style);
     try {
@@ -3746,17 +3747,21 @@ export default function CVBuilderPage() {
           });
         }
       }
+      const terminalErrorCode = outcome.kind === 'terminal'
+        && outcome.evidence?.m5ProviderFailure?.providerErrorType === 'timeout'
+        ? 'request_timeout' as const
+        : 'generation_validation_failed' as const;
       finishAiClientRequest({
         ctx: reqCtx,
         isProVerified: true,
         countBefore,
         countAfter: outcome.kind === 'committed' ? getProAiUsageCount() : countBefore,
         httpStatus: outcome.status,
-        error: outcome.kind === 'committed' || outcome.kind === 'safe_no_op' || outcome.reason === 'operation_superseded' ? null : { code: 'generation_validation_failed', httpStatus: outcome.status },
+        error: outcome.kind === 'committed' || outcome.kind === 'safe_no_op' || outcome.reason === 'operation_superseded' ? null : { code: terminalErrorCode, httpStatus: outcome.status },
         responseSource: outcome.kind === 'committed' ? 'provider' : 'blocked',
       });
       if (outcome.kind === 'committed') toast.success(t.cv.genSuccess);
-      else if (outcome.kind === 'terminal' && outcome.reason !== 'operation_superseded') toast.error(aiErrorMessage('generation_validation_failed', requestedLocale));
+      else if (outcome.kind === 'terminal' && outcome.reason !== 'operation_superseded') toast.error(aiErrorMessage(terminalErrorCode, requestedLocale));
     } finally {
       await terminalizeAiDiagnosticSession(summaryDiag, { publishLatest: publishLatestDiagnostic });
       clearTimeout(timer);

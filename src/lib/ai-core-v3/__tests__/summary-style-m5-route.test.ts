@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { callProviderWithDeadline, type ProviderCallOptions } from '../../ai-request-timing';
 import {
   SUMMARY_V3_STYLE_M5_EVALUATOR_TOOL_NAME,
   SUMMARY_V3_STYLE_M5_WRITER_TOOL_NAME,
@@ -12,10 +13,21 @@ import {
   type SummaryV3StyleRequest,
 } from '../summary-style-m5';
 import {
+  executeSummaryV3StyleRoute,
   isSummaryV3StyleRouteAction,
   normalizeSummaryV3StyleRouteRequest,
   type SummaryV3StyleProviderInvocation,
 } from '../summary-style-m5-provider';
+import {
+  SUMMARY_V3_STYLE_M5_EXPECTED_OVERHEAD_MARGIN_MS,
+  SUMMARY_V3_STYLE_M5_INITIAL_EVALUATOR_TIMEOUT_MS,
+  SUMMARY_V3_STYLE_M5_INITIAL_WRITER_TIMEOUT_MS,
+  SUMMARY_V3_STYLE_M5_OVERALL_SERVER_BUDGET_MS,
+  SUMMARY_V3_STYLE_M5_PLATFORM_MARGIN_MS,
+  SUMMARY_V3_STYLE_M5_REPAIR_TIMEOUT_MS,
+  computeSummaryV3StyleM5ServerDeadline,
+  summaryV3StyleM5TimeoutForPhase,
+} from '../summary-style-m5-timeout-policy';
 
 const actions = ['summary_shorter', 'summary_stronger', 'summary_professional'] as const;
 const locales = ['en', 'de', 'sr', 'hi', 'ar', 'ja', 'fr', 'es', 'it', 'hr', 'pt-BR', 'ru'] as const;
@@ -457,5 +469,154 @@ describe('M5.2 actual production route boundary', () => {
       vi.restoreAllMocks(); vi.doUnmock('@anthropic-ai/sdk'); vi.doUnmock('@/lib/pro-token'); vi.resetModules();
       for (const key of keys) { if (saved[key] === undefined) delete process.env[key]; else process.env[key] = saved[key]; }
     }
+  });
+});
+
+describe('M8 AAB570 M5 strict-schema cold-cache timeout authority', () => {
+  const start = 1_789_000_000_000;
+  type Phase = SummaryV3StyleProviderInvocation['phase'];
+
+  function timedRun(
+    delays: Partial<Record<Phase, number>>,
+    overallBudgetMs = SUMMARY_V3_STYLE_M5_OVERALL_SERVER_BUDGET_MS,
+  ) {
+    const request = normalizeSummaryV3StyleRouteRequest('summary_stronger', routeParams(), start);
+    const calls: Phase[] = [];
+    const options: Array<{ phase: Phase; value: ProviderCallOptions }> = [];
+    const deadlineAt = start + overallBudgetMs;
+    const result = executeSummaryV3StyleRoute(request, {
+      timeoutForPhase: summaryV3StyleM5TimeoutForPhase,
+      invoke: async (invocation) => {
+        calls.push(invocation.phase);
+        return callProviderWithDeadline(
+          (value) => {
+            options.push({ phase: invocation.phase, value });
+            return new Promise((resolve) => {
+              setTimeout(() => resolve(providerMessage(invocation)), delays[invocation.phase] ?? 0);
+            });
+          },
+          deadlineAt,
+          invocation.timeoutMs,
+          invocation.role === 'writer' ? 'provider' : 'verifier',
+        );
+      },
+    });
+    return { result, calls, options, deadlineAt };
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(start);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('defines one finite M5 policy with realistic normal-path and platform margins', () => {
+    expect(SUMMARY_V3_STYLE_M5_INITIAL_WRITER_TIMEOUT_MS).toBe(30_000);
+    expect(SUMMARY_V3_STYLE_M5_INITIAL_EVALUATOR_TIMEOUT_MS).toBe(30_000);
+    expect(SUMMARY_V3_STYLE_M5_REPAIR_TIMEOUT_MS).toBe(8_000);
+    expect(SUMMARY_V3_STYLE_M5_OVERALL_SERVER_BUDGET_MS).toBe(75_000);
+    expect(SUMMARY_V3_STYLE_M5_EXPECTED_OVERHEAD_MARGIN_MS).toBe(15_000);
+    expect(SUMMARY_V3_STYLE_M5_PLATFORM_MARGIN_MS).toBe(15_000);
+    expect(computeSummaryV3StyleM5ServerDeadline(start)).toBe(start + 75_000);
+  });
+
+  it('A/D. lets a comfortable writer and evaluator complete through normal terminal processing', async () => {
+    const run = timedRun({ initial_writer: 5_000, initial_evaluator: 5_000 });
+    await vi.runAllTimersAsync();
+    const result = await run.result;
+    expect(result.kind).not.toBe('handled_failure');
+    expect(run.calls).toEqual(['initial_writer', 'initial_evaluator']);
+    expect(run.options.map(({ value }) => [value.timeout, value.maxRetries])).toEqual([
+      [30_000, 0], [30_000, 0],
+    ]);
+  });
+
+  it('B/G. treats a simulated cold writer beyond the old 11.5s boundary as still in budget', async () => {
+    const run = timedRun({ initial_writer: 12_500, initial_evaluator: 1_000 });
+    let settled = false;
+    void run.result.finally(() => { settled = true; });
+    await vi.advanceTimersByTimeAsync(11_500);
+    expect(settled).toBe(false);
+    expect(run.options[0].value.signal?.aborted).toBe(false);
+    await vi.runAllTimersAsync();
+    const result = await run.result;
+    expect(result.kind).not.toBe('handled_failure');
+    expect(run.calls).toEqual(['initial_writer', 'initial_evaluator']);
+  });
+
+  it('C/H. aborts one writer attempt at the new bound without evaluator or hidden retry', async () => {
+    const run = timedRun({ initial_writer: 30_001 });
+    await vi.runAllTimersAsync();
+    const result = await run.result;
+    expect(result).toMatchObject({
+      kind: 'handled_failure',
+      typedReason: 'writer_request_failed',
+      evidence: {
+        writerAttempts: 1,
+        evaluatorAttempts: 0,
+        m5ProviderFailure: {
+          phase: 'initial_writer',
+          failureStage: 'sdk_request',
+          providerErrorType: 'timeout',
+          providerDeadlineOwner: 'provider_transport',
+          providerConfiguredTimeoutMs: 30_000,
+          providerEffectiveTimeoutMs: 30_000,
+        },
+      },
+    });
+    expect(run.calls).toEqual(['initial_writer']);
+    expect(run.options).toHaveLength(1);
+    expect(run.options[0].value.maxRetries).toBe(0);
+  });
+
+  it('E/H. retains completed-writer evidence when one evaluator attempt exceeds its bound', async () => {
+    const run = timedRun({ initial_writer: 1_000, initial_evaluator: 30_001 });
+    await vi.runAllTimersAsync();
+    const result = await run.result;
+    expect(result).toMatchObject({
+      kind: 'handled_failure',
+      typedReason: 'evaluator_request_failed',
+      evidence: {
+        writerAttempts: 1,
+        evaluatorAttempts: 1,
+        writerCandidateReachedValidation: true,
+        m5ProviderFailure: {
+          phase: 'initial_evaluator',
+          failureStage: 'sdk_request',
+          providerErrorType: 'timeout',
+          providerDeadlineOwner: 'verifier_transport',
+          providerConfiguredTimeoutMs: 30_000,
+          providerEffectiveTimeoutMs: 30_000,
+        },
+      },
+    });
+    expect(run.calls).toEqual(['initial_writer', 'initial_evaluator']);
+    expect(run.options).toHaveLength(2);
+    expect(run.options.every(({ value }) => value.maxRetries === 0)).toBe(true);
+  });
+
+  it('F. makes the shared overall deadline the deterministic owner when it expires first', async () => {
+    const run = timedRun({ initial_writer: 1_000, initial_evaluator: 20_000 }, 7_000);
+    await vi.runAllTimersAsync();
+    const result = await run.result;
+    expect(result).toMatchObject({
+      kind: 'handled_failure',
+      typedReason: 'evaluator_request_failed',
+      evidence: {
+        m5ProviderFailure: {
+          phase: 'initial_evaluator',
+          providerErrorType: 'timeout',
+          providerDeadlineOwner: 'route_deadline',
+          providerConfiguredTimeoutMs: 30_000,
+          providerEffectiveTimeoutMs: 4_000,
+          providerOuterBudgetRemainingAtStartMs: 6_000,
+        },
+      },
+    });
+    expect(run.calls).toEqual(['initial_writer', 'initial_evaluator']);
+    expect(run.options).toHaveLength(2);
   });
 });

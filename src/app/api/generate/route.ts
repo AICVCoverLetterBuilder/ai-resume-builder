@@ -120,6 +120,10 @@ import {
   normalizeSummaryV3StyleRouteRequest,
   type SummaryV3StyleProviderInvocation,
 } from '@/lib/ai-core-v3/summary-style-m5-provider';
+import {
+  computeSummaryV3StyleM5ServerDeadline,
+  summaryV3StyleM5TimeoutForPhase,
+} from '@/lib/ai-core-v3/summary-style-m5-timeout-policy';
 import { createSummaryV3StyleM5RouteFailure } from '@/lib/ai-core-v3/summary-style-m5-transport';
 import {
   CONTENT_LOCALIZE_V3_OPERATION,
@@ -137,9 +141,11 @@ import type { ContentLocalizeM6Snapshot } from '@/lib/ai-core-v3/content-localiz
  * terminated Android build 231 after ~32s with a transport-level network toast).
  *
  * NOTE: Next.js requires this route-segment config to be a plain literal.
- * Kept in sync with `SUMMARY_V3_ROUTE_MAX_DURATION_S` (45) via unit tests.
+ * Kept in sync with the largest operation-specific route ceiling. M5 strict
+ * tool calls use a 75s application budget under this 90s platform limit;
+ * legacy and M4 application deadlines remain unchanged.
  */
-export const maxDuration = 45;
+export const maxDuration = 90;
 
 // ── Rate limiter (in-memory) ────────────────────────────────────────────────
 // Resets on server restart. For production with multiple instances, replace with
@@ -2176,16 +2182,12 @@ Rules:
           { status: 409 },
         );
       }
-      deadlineAt = computeSummaryV3ServerDeadline(serverReceivedAt);
+      deadlineAt = computeSummaryV3StyleM5ServerDeadline(serverReceivedAt);
       const m5Request = normalizeSummaryV3StyleRouteRequest(action, params, serverReceivedAt);
       let result;
       try {
         result = await executeSummaryV3StyleRoute(m5Request, {
-          timeoutForPhase: (phase) => phase === 'initial_writer'
-            ? SUMMARY_V3_INITIAL_WRITER_TIMEOUT_MS
-            : phase === 'initial_evaluator'
-              ? SUMMARY_V3_INITIAL_EVALUATOR_TIMEOUT_MS
-              : AI_PROVIDER_CALL_TIMEOUT_MS,
+          timeoutForPhase: summaryV3StyleM5TimeoutForPhase,
           invoke: async (invocation: SummaryV3StyleProviderInvocation) => {
             const response = await callWithRetry({
               model: MODEL,

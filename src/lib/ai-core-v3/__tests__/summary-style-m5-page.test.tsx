@@ -20,6 +20,7 @@ import {
 } from '@/lib/cv-ai-diagnostics-contract';
 import { CV_AI_DIAGNOSTICS_CHANGED_EVENT } from '@/lib/cv-ai-diagnostics-lifecycle';
 import { translations, type Locale } from '@/lib/i18n/translations';
+import { aiErrorMessage } from '@/lib/ai-error-codes';
 import type { CVData } from '@/lib/types';
 import {
   canonicalSummaryV3StyleLocale,
@@ -45,6 +46,10 @@ import type {
   SummaryV3StyleWriterInput,
 } from '../summary-style-m5-server';
 import { runSummaryV3StyleClientOperation, SUMMARY_V3_STYLE_M5_ACTION } from '../summary-style-m5-client';
+import {
+  SUMMARY_V3_STYLE_M5_CLIENT_ABORT_TIMEOUT_MS,
+  resolveSummaryV3StyleM5ClientAbortTimeoutMs,
+} from '../summary-style-m5-timeout-policy';
 import {
   hashSummaryV3Value,
   type SummaryV3CommitReceipt,
@@ -822,6 +827,9 @@ describe('M5.3 Summary style client/page boundary', () => {
     expect(m5Handler).not.toContain('document.querySelector');
     expect(m5Handler).toContain('canonicalizeSummarySourceLocale');
     expect(m5Handler).toContain('currentRoleExperienceId');
+    expect(m5Handler).toContain('resolveSummaryV3StyleM5ClientAbortTimeoutMs()');
+    expect(resolveSummaryV3StyleM5ClientAbortTimeoutMs()).toBe(85_000);
+    expect(SUMMARY_V3_STYLE_M5_CLIENT_ABORT_TIMEOUT_MS).toBe(85_000);
   });
 
   it('keeps terminal Summary diagnostic persistence idempotent', () => {
@@ -1332,6 +1340,66 @@ describe('M5.3 Summary style client/page boundary', () => {
       diagnosticInvariantCheckPassed: true,
     });
     expect(result.latestDiagnostic).not.toHaveProperty('m5ProviderFailure');
+    expect(result.finalCv.summary).toBe(physicalMixedLocaleSummary);
+    expect(result.commitCalls).toBe(0);
+    expect(result.usageCalls).toBe(0);
+  });
+
+  it('routes the typed AAB570 writer timeout to the existing localized timeout toast without usage', async () => {
+    const result = await actualPageStyleFlow({
+      style: 'stronger',
+      cv: physicalGermanPositionMixedLocaleCv(),
+      terminalResponse: {
+        status: 504,
+        data: {
+          kind: 'handled_failure',
+          typedReason: 'writer_request_failed',
+          evidence: {
+            unsupportedClaimCategory: null,
+            writerCandidateReachedValidation: false,
+            evaluatorReached: false,
+            safeNoOpConsidered: false,
+            safeNoOpSelected: false,
+            safeNoOpEligibilityReason: 'source_inconsistency',
+            roleIdentityResolution: 'unresolved',
+            m5ProviderFailure: {
+              phase: 'initial_writer',
+              failureStage: 'sdk_request',
+              errorClass: 'Error',
+              providerHttpStatus: null,
+              providerErrorType: 'timeout',
+              providerErrorCode: null,
+              providerRequestIdHash: null,
+              providerRetryable: false,
+              providerMessageFingerprint: null,
+              providerStructuralFieldPath: null,
+              providerHttpResponseReceived: null,
+              providerDeadlineOwner: 'provider_transport',
+              providerConfiguredTimeoutMs: 30_000,
+              providerEffectiveTimeoutMs: 30_000,
+              providerElapsedMs: 30_000,
+              providerOuterBudgetRemainingAtStartMs: 75_000,
+            },
+          },
+        },
+      },
+    });
+    expect(result.latestDiagnostic).toMatchObject({
+      m5Operation: 'summary_style',
+      rewriteStyle: 'stronger',
+      finalTypedFailureReason: 'writer_request_failed',
+      m5FailureStage: 'sdk_request',
+      m5CanonicalFailureCause: 'timeout',
+      providerHttpStatus: null,
+      countedAsSuccess: false,
+      visibleApplySucceeded: false,
+      usageCountBefore: 0,
+      usageCountAfter: 0,
+      diagnosticCompletenessPassed: true,
+      diagnosticInvariantCheckPassed: true,
+    });
+    expect(result.errorToasts).toBe(1);
+    expect(pageToastError).toHaveBeenLastCalledWith(aiErrorMessage('request_timeout', 'en'));
     expect(result.finalCv.summary).toBe(physicalMixedLocaleSummary);
     expect(result.commitCalls).toBe(0);
     expect(result.usageCalls).toBe(0);

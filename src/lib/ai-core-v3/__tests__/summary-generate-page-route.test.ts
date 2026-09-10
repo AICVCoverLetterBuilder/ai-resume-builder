@@ -32,6 +32,7 @@ import {
   type SummaryV3GenerateAdapterInput,
   type SummaryV3Manifest,
 } from '..';
+import { SUMMARY_V3_STYLE_M5_ROUTE_MAX_DURATION_S } from '../summary-style-m5-timeout-policy';
 
 const m4Adapter = vi.hoisted(() => vi.fn());
 const m2Adapter = vi.hoisted(() => vi.fn());
@@ -692,7 +693,8 @@ describe('M4 Summary timeout budget closure', () => {
           structural: { status: 'passed' }, semantic: { status: 'passed' }, language_quality: { status: 'passed' },
         } });
         expect(run.body.repairAttempted).toBe(false);
-        expect(run.maxDuration).toBe(45);
+        expect(run.maxDuration).toBe(SUMMARY_V3_STYLE_M5_ROUTE_MAX_DURATION_S);
+        expect(run.maxDuration).toBeGreaterThan(SUMMARY_V3_ROUTE_MAX_DURATION_S);
       }
     } finally {
       vi.useRealTimers();

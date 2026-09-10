@@ -65,6 +65,10 @@ import {
   SUMMARY_V3_ROUTE_MAX_DURATION_S,
   SUMMARY_V3_SERVER_BUDGET_MS,
 } from '@/lib/ai-core-v3/summary-generate-server';
+import {
+  SUMMARY_V3_STYLE_M5_OVERALL_SERVER_BUDGET_MS,
+  SUMMARY_V3_STYLE_M5_ROUTE_MAX_DURATION_S,
+} from '@/lib/ai-core-v3/summary-style-m5-timeout-policy';
 
 function forkliftCv(overrides?: Partial<CVData>): CVData {
   const bullets = [
@@ -117,15 +121,15 @@ function buildFactSet() {
 const SERBIAN_ECHO = 'Vozač viličara sa iskustvom u skladišnom poslovanju.';
 const VALID_HINDI = 'मैं लगभग छह वर्षों के अनुभव वाला वेयरहाउस चालक हूँ और गोदाम में माल का सुरक्षित परिवहन करता हूँ।';
 
-describe('/api/generate route maxDuration preserves the existing shared budget and admits the dedicated Summary M4 budget', () => {
-  it('the hardcoded Next.js route-segment `maxDuration` (45s) remains above both bounded authorities', async () => {
+describe('/api/generate route maxDuration preserves existing budgets and admits the M5 strict-tool budget', () => {
+  it('the hardcoded Next.js route-segment maxDuration remains above every bounded authority', async () => {
     // Next.js requires `export const maxDuration` in route.ts to be a plain
     // numeric literal (no expression), so it cannot import this constant
     // directly — this test is the drift guard for that manually-kept-in-sync value.
     const fs = await import('node:fs');
     const path = await import('node:path');
     const src = fs.readFileSync(path.resolve('src/app/api/generate/route.ts'), 'utf8');
-    expect(src).toMatch(/export const maxDuration = 45\b/);
+    expect(src).toMatch(/export const maxDuration = 90\b/);
     // Existing operations retain their former bounded authority.
     expect(AI_PLATFORM_MAX_DURATION_S * 1000 - AI_SERVER_BUDGET_MS).toBeGreaterThanOrEqual(6_000);
     expect(AI_SERVER_BUDGET_MS).toBe(22_000);
@@ -133,6 +137,10 @@ describe('/api/generate route maxDuration preserves the existing shared budget a
     expect(SUMMARY_V3_ROUTE_MAX_DURATION_S).toBe(45);
     expect(SUMMARY_V3_SERVER_BUDGET_MS).toBe(38_000);
     expect(SUMMARY_V3_ROUTE_MAX_DURATION_S * 1_000 - SUMMARY_V3_SERVER_BUDGET_MS).toBeGreaterThanOrEqual(5_000);
+    expect(SUMMARY_V3_STYLE_M5_ROUTE_MAX_DURATION_S).toBe(90);
+    expect(SUMMARY_V3_STYLE_M5_OVERALL_SERVER_BUDGET_MS).toBe(75_000);
+    expect(SUMMARY_V3_STYLE_M5_ROUTE_MAX_DURATION_S * 1_000
+      - SUMMARY_V3_STYLE_M5_OVERALL_SERVER_BUDGET_MS).toBeGreaterThanOrEqual(10_000);
   });
 });
 
