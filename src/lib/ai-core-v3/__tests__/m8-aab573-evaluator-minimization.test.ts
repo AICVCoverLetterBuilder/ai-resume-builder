@@ -54,7 +54,7 @@ function physicalMixedLocaleRequest(): SummaryV3StyleRequest {
 
 function c2ProviderMessage(
   invocation: SummaryV3StyleProviderInvocation,
-  mutate?: (input: Record<string, unknown>, providerInput: any) => void,
+  mutate?: (input: Record<string, unknown>) => void,
 ): unknown {
   if (invocation.role === 'writer') {
     const input = invocation.input;
@@ -97,7 +97,7 @@ function c2ProviderMessage(
       noOpDetected: true,
     },
   };
-  mutate?.(providerInput, invocation.input);
+  mutate?.(providerInput);
   return {
     stop_reason: 'tool_use',
     content: [{ type: 'tool_use', name: SUMMARY_V3_STYLE_M5_EVALUATOR_TOOL_NAME, input: providerInput }],
@@ -105,7 +105,7 @@ function c2ProviderMessage(
 }
 
 async function runPhysical(
-  mutate?: (input: Record<string, unknown>, providerInput: any) => void,
+  mutate?: (input: Record<string, unknown>) => void,
 ) {
   return executeSummaryV3StyleRoute(physicalMixedLocaleRequest(), {
     timeoutForPhase: () => 30_000,
@@ -147,7 +147,7 @@ describe('M8 AAB573 evaluator strict-schema minimization', () => {
       },
     });
     expect(seen).not.toBeNull();
-    const evaluator = seen!.input as any;
+    const evaluator = seen!.input as import('../summary-style-m5-server').SummaryV3StyleEvaluatorInput;
     expect(evaluator.candidate.units.map(summaryV3StyleCandidateUnitHash)).toEqual(
       evaluator.candidate.units.map(summaryV3StyleCandidateUnitHash),
     );

@@ -707,6 +707,12 @@ function schemaRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+function stringArray(value: unknown): string[] | null {
+  return Array.isArray(value) && value.every((entry): entry is string => typeof entry === 'string')
+    ? value
+    : null;
+}
+
 /**
  * The evaluator's styleEvidence oneOf is projected to anyOf only when no
  * active style is supplied. Each branch carries a non-empty, pairwise-
@@ -819,34 +825,39 @@ export function projectSummaryV3StyleEvaluatorToolForProvider(
   activeStyle: SummaryV3Style,
 ): SummaryV3StyleProviderTool {
   const projected = projectSummaryV3StyleToolForProvider(SUMMARY_V3_STYLE_M5_EVALUATOR_TOOL, activeStyle);
-  const schema = JSON.parse(JSON.stringify(projected.input_schema)) as Record<string, any>;
-  const properties = schema.properties as Record<string, any>;
+  const schema = JSON.parse(JSON.stringify(projected.input_schema)) as Record<string, unknown>;
+  const properties = schemaRecord(schema.properties);
+  const required = stringArray(schema.required);
+  if (!properties || !required) throw new Error('M5 evaluator provider schema root is malformed');
   for (const field of SUMMARY_V3_STYLE_M5_EVALUATOR_SERVER_CONTEXT_FIELDS) delete properties[field];
-  schema.required = (schema.required as string[]).filter(
+  const projectedRequired = required.filter(
     (field) => !SUMMARY_V3_STYLE_M5_EVALUATOR_SERVER_CONTEXT_FIELDS.includes(field as typeof SUMMARY_V3_STYLE_M5_EVALUATOR_SERVER_CONTEXT_FIELDS[number]),
   );
+  schema.required = projectedRequired;
 
-  const styleEvidence = properties.styleEvidence as Record<string, any> | undefined;
-  if (styleEvidence?.properties && styleEvidence.required) {
-    delete styleEvidence.properties.style;
-    styleEvidence.required = styleEvidence.required.filter((field: string) => field !== 'style');
+  const styleEvidence = schemaRecord(properties.styleEvidence);
+  const styleEvidenceProperties = schemaRecord(styleEvidence?.properties);
+  const styleEvidenceRequired = stringArray(styleEvidence?.required);
+  if (styleEvidence && styleEvidenceProperties && styleEvidenceRequired) {
+    delete styleEvidenceProperties.style;
+    styleEvidence.required = styleEvidenceRequired.filter((field) => field !== 'style');
   }
 
-  const phases = properties.phases as Record<string, any> | undefined;
+  const phases = schemaRecord(properties.phases);
   delete properties.phases;
-  schema.required = schema.required.filter((field: string) => field !== 'phases');
-  if (phases?.properties) {
-    for (const phase of SUMMARY_V3_STYLE_M5_EVALUATOR_PHASES) {
-      const phaseSchema = phases.properties[phase];
-      if (!phaseSchema?.properties) throw new Error(`M5 evaluator provider phase ${phase} is malformed`);
-      const statusField = `${phase}Status`;
-      const violationsField = `${phase}Violations`;
-      properties[statusField] = phaseSchema.properties.status;
-      properties[violationsField] = phaseSchema.properties.violations;
-      schema.required.push(statusField, violationsField);
-    }
-  } else {
-    throw new Error('M5 evaluator provider phases are malformed');
+  const evaluatorRequired = projectedRequired.filter((field) => field !== 'phases');
+  schema.required = evaluatorRequired;
+  const phaseProperties = schemaRecord(phases?.properties);
+  if (!phaseProperties) throw new Error('M5 evaluator provider phases are malformed');
+  for (const phase of SUMMARY_V3_STYLE_M5_EVALUATOR_PHASES) {
+    const phaseSchema = schemaRecord(phaseProperties[phase]);
+    const phaseSchemaProperties = schemaRecord(phaseSchema?.properties);
+    if (!phaseSchemaProperties) throw new Error(`M5 evaluator provider phase ${phase} is malformed`);
+    const statusField = `${phase}Status`;
+    const violationsField = `${phase}Violations`;
+    properties[statusField] = phaseSchemaProperties.status;
+    properties[violationsField] = phaseSchemaProperties.violations;
+    evaluatorRequired.push(statusField, violationsField);
   }
 
   return immutableCopy({

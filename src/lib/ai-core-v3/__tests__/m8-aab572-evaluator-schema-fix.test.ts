@@ -21,6 +21,7 @@ import {
   normalizeSummaryV3StyleEvaluatorProviderResponse,
   type SummaryV3StyleProviderInvocation,
 } from '../summary-style-m5-provider';
+import type { SummaryV3StyleEvaluatorInput } from '../summary-style-m5-server';
 
 type AnthropicTool = NonNullable<Parameters<Anthropic['messages']['create']>[0]['tools']>[number];
 
@@ -331,14 +332,15 @@ describe('M8 AAB572 evaluator strict-schema fix', () => {
     expect(result.kind).toBe('safe_no_op');
     expect(evaluatorInvocation).not.toBeNull();
     const invocation = evaluatorInvocation!;
-    const normalized = normalizeSummaryV3StyleEvaluatorProviderResponse(providerMessage(invocation), invocation.input as any) as any;
-    expect(normalized.input.operationId).toBe((invocation.input as any).operationId);
-    expect(normalized.input.snapshotHash).toBe((invocation.input as any).snapshotHash);
-    expect(normalized.input.manifestHash).toBe((invocation.input as any).manifestHash);
+    const evaluatorInput = invocation.input as SummaryV3StyleEvaluatorInput;
+    const normalized = normalizeSummaryV3StyleEvaluatorProviderResponse(providerMessage(invocation), evaluatorInput) as { input: SummaryV3StyleEvaluatorInput };
+    expect(normalized.input.operationId).toBe(evaluatorInput.operationId);
+    expect(normalized.input.snapshotHash).toBe(evaluatorInput.snapshotHash);
+    expect(normalized.input.manifestHash).toBe(evaluatorInput.manifestHash);
     expect(normalized.input.style).toBe('stronger');
-    expect(normalized.input.locale).toBe((invocation.input as any).locale);
-    expect(normalized.input.candidateHash).toBe((invocation.input as any).candidate.hash);
-    expect(normalized.input.candidateUnitHashes).toEqual((invocation.input as any).candidate.units.map(summaryV3StyleCandidateUnitHash));
+    expect(normalized.input.locale).toBe(evaluatorInput.locale);
+    expect(normalized.input.candidateHash).toBe(evaluatorInput.candidate.hash);
+    expect(normalized.input.candidateUnitHashes).toEqual(evaluatorInput.candidate.units.map(summaryV3StyleCandidateUnitHash));
     expect(normalized.input.phases.structural.status).toBe('passed');
     expect(normalized.input.styleEvidence.style).toBe('stronger');
 
@@ -346,7 +348,7 @@ describe('M8 AAB572 evaluator strict-schema fix', () => {
       const spoofResult = await executeSummaryV3StyleRoute(requestFor('stronger'), {
         timeoutForPhase: () => 30_000,
         invoke: async (spoofInvocation) => {
-          const message = providerMessage(spoofInvocation) as any;
+          const message = providerMessage(spoofInvocation) as { content: Array<{ input: Record<string, unknown> }> };
           if (spoofInvocation.role === 'evaluator') message.content[0].input[spoofField] = 'spoofed';
           return message;
         },
