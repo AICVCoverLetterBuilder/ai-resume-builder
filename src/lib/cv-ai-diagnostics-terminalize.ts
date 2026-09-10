@@ -3,7 +3,7 @@ export const AI_DIAGNOSTICS_TERMINALIZER_REVISION =
 
 export type TerminalizableAiDiagnosticSession<TTrace> = {
   resolveVersions(): Promise<unknown>;
-  commit(): TTrace;
+  commit(options?: { publishLatest?: boolean }): TTrace;
 };
 
 /**
@@ -18,6 +18,7 @@ export type TerminalizableAiDiagnosticSession<TTrace> = {
  */
 export async function terminalizeAiDiagnosticSession<TTrace>(
   session: TerminalizableAiDiagnosticSession<TTrace>,
+  options?: { publishLatest?: boolean },
 ): Promise<TTrace | null> {
   try {
     await session.resolveVersions();
@@ -26,7 +27,7 @@ export async function terminalizeAiDiagnosticSession<TTrace>(
   }
 
   try {
-    return session.commit();
+    return session.commit(options);
   } catch {
     /* Diagnostics must never break the user-facing AI operation. */
     return null;

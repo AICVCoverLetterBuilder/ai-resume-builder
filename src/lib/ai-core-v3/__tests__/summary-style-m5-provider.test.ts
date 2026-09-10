@@ -18,6 +18,19 @@ import {
 
 const source = 'Ava Patel is a Product Engineer at Atlas. She builds reliable APIs, mentors peers, and improved delivery by 20% over 24 months.';
 
+class RateLimitError extends Error {
+  readonly status = 429;
+  readonly error = { code: 'rate_limit_error' };
+  readonly requestID = 'req_test_known_rate_limit';
+}
+
+class APIConnectionTimeoutError extends Error {}
+
+class AuthenticationError extends Error {
+  readonly status = 401;
+  readonly error = { code: 'authentication_error' };
+}
+
 function requestFor(style: SummaryV3Style = 'shorter'): SummaryV3StyleRequest {
   return {
     enabled: true,
@@ -57,6 +70,21 @@ function requestFor(style: SummaryV3Style = 'shorter'): SummaryV3StyleRequest {
       }],
     },
     createdAt: 1_700_000_000_000,
+  };
+}
+
+function unresolvedRoleRequest(): SummaryV3StyleRequest {
+  const base = requestFor('stronger');
+  return {
+    ...base,
+    manifest: {
+      ...base.manifest,
+      entries: [{
+        ...base.manifest.entries[0]!,
+        role: 'Produktingenieur',
+        roleSourceLocale: 'de',
+      }],
+    },
   };
 }
 
@@ -143,6 +171,7 @@ function providerMessage(invocation: SummaryV3StyleProviderInvocation): unknown 
         },
         representedFactIdHashes: input.requiredFacts.map((fact) => fact.hash),
         missingFactIdHashes: [],
+        roleIdentityResolution: input.roleIdentity.status === 'unresolved' ? 'equivalent' : 'not_required',
         styleEvidence: styleEvidence(input.style),
       },
     }],
@@ -219,6 +248,72 @@ describe('M5.2 Summary style provider adapter', () => {
     expect(invocations[1]?.toolName).toBe(SUMMARY_V3_STYLE_M5_EVALUATOR_TOOL_NAME);
   });
 
+  it('gives Stronger a duty-first source-authority prompt with an explicit safe-no-op instruction', async () => {
+    const invocations: SummaryV3StyleProviderInvocation[] = [];
+    const result = await executeSummaryV3StyleRoute(requestFor('stronger'), {
+      timeoutForPhase: () => 1_000,
+      invoke: async (invocation) => {
+        invocations.push(invocation);
+        return providerMessage(invocation);
+      },
+    });
+    expect(result.kind).toBe('safe_no_op');
+    const writer = invocations[0];
+    expect(writer?.role).toBe('writer');
+    if (!writer || writer.role !== 'writer') throw new Error('expected Stronger writer invocation');
+    if (!('styleContract' in writer.input)) throw new Error('expected Stronger writer input');
+    expect(writer?.prompt).toContain('sourceText is the sole fact authority');
+    expect(writer?.prompt).toContain('Preserve duties as duties');
+    expect(writer?.prompt).toContain('Do not turn duties into achievements');
+    expect(writer?.prompt).toContain('submit sourceText unchanged as the single safe-no-op candidate');
+    expect(writer?.input.styleContract).toEqual(expect.arrayContaining([
+      expect.stringContaining('never convert a duty into an achievement'),
+      expect.stringContaining('return sourceText unchanged'),
+    ]));
+  });
+
+  it('makes unresolved current-entry role equivalence an explicit single-evaluator obligation', async () => {
+    const invocations: SummaryV3StyleProviderInvocation[] = [];
+    const result = await executeSummaryV3StyleRoute(unresolvedRoleRequest(), {
+      timeoutForPhase: () => 1_000,
+      invoke: async (invocation) => {
+        invocations.push(invocation);
+        return providerMessage(invocation);
+      },
+    });
+    expect(result).toMatchObject({ kind: 'handled_failure', typedReason: 'unsupported_claim' });
+    expect(invocations.map((invocation) => invocation.role)).toEqual(['writer', 'evaluator']);
+    const evaluator = invocations[1];
+    expect(evaluator?.role).toBe('evaluator');
+    if (!evaluator || evaluator.role !== 'evaluator') throw new Error('expected unresolved-role evaluator invocation');
+    expect(evaluator.toolName).toBe(SUMMARY_V3_STYLE_M5_EVALUATOR_TOOL_NAME);
+    expect(evaluator).toMatchObject({
+      strict: true,
+      expectedToolBlocks: 1,
+      allowedTextBlocks: 0,
+      toolChoice: { type: 'tool', name: SUMMARY_V3_STYLE_M5_EVALUATOR_TOOL_NAME },
+      input: {
+        locale: 'en',
+        sourceText: source,
+        roleIdentity: {
+          status: 'unresolved',
+          selectedEntryId: 'entry-current',
+          structuredRole: 'Produktingenieur',
+          roleSourceLocale: 'de',
+          employer: 'Atlas',
+          rolePresentation: null,
+        },
+      },
+    });
+    if (!('candidate' in evaluator.input)) throw new Error('expected evaluator candidate input');
+    expect(evaluator.input.candidate.text).toBe(source);
+    expect(evaluator.prompt).toContain('UNRESOLVED ROLE IDENTITY OBLIGATION');
+    expect(evaluator.prompt).toContain('semantically compare the selected Experience structuredRole');
+    expect(evaluator.prompt).toContain('Do not infer from another entry, personal/header job title, or external knowledge');
+    expect(evaluator.prompt).toContain('roleIdentityResolution=equivalent');
+    expect(invocations).toHaveLength(2);
+  });
+
   it('fails closed on malformed transport, provider exceptions, and never retries', async () => {
     let calls = 0;
     const malformed = await executeSummaryV3StyleRoute(requestFor(), {
@@ -240,6 +335,114 @@ describe('M5.2 Summary style provider adapter', () => {
       },
     });
     expect(providerFailure).toMatchObject({ kind: 'handled_failure', typedReason: 'writer_request_failed' });
+    expect(providerFailure).toMatchObject({
+      evidence: {
+        writerAttempts: 1,
+        writerCandidateReachedValidation: false,
+        evaluatorReached: false,
+        m5ProviderFailure: {
+          phase: 'initial_writer',
+          failureStage: 'sdk_request',
+          providerHttpStatus: null,
+          providerErrorType: null,
+          providerHttpResponseReceived: null,
+        },
+      },
+    });
     expect(calls).toBe(1);
+  });
+
+  it('preserves a known provider cause across the server catch without raw error data', async () => {
+    let calls = 0;
+    const result = await executeSummaryV3StyleRoute(unresolvedRoleRequest(), {
+      timeoutForPhase: () => 1_000,
+      invoke: async () => {
+        calls += 1;
+        throw new RateLimitError('provider message must be fingerprinted, not serialized');
+      },
+    });
+    expect(result).toMatchObject({
+      kind: 'handled_failure',
+      typedReason: 'writer_request_failed',
+      evidence: {
+        writerAttempts: 1,
+        writerCandidateReachedValidation: false,
+        evaluatorReached: false,
+        roleIdentityResolution: 'unresolved',
+        safeNoOpEligibilityReason: 'source_inconsistency',
+        m5ProviderFailure: {
+          phase: 'initial_writer',
+          failureStage: 'sdk_request',
+          errorClass: 'RateLimitError',
+          providerHttpStatus: 429,
+          providerErrorType: 'rate_limit',
+          providerErrorCode: 'rate_limit_error',
+          providerHttpResponseReceived: true,
+        },
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain('provider message must be fingerprinted');
+    expect(JSON.stringify(result)).not.toContain('req_test_known_rate_limit');
+    expect(calls).toBe(1);
+  });
+
+  it('separates construction failure, timeout, access rejection, and unknown SDK exceptions', async () => {
+    let outboundCalls = 0;
+    const construction = await executeSummaryV3StyleRoute(requestFor(), {
+      timeoutForPhase: () => { throw new TypeError('local timeout contract failure'); },
+      invoke: async () => { outboundCalls += 1; return {}; },
+    });
+    expect(construction).toMatchObject({
+      kind: 'handled_failure', typedReason: 'writer_request_failed',
+      evidence: { m5ProviderFailure: {
+        phase: 'initial_writer', failureStage: 'request_construction',
+        providerHttpStatus: null, providerErrorType: null, providerHttpResponseReceived: null,
+      } },
+    });
+    expect(outboundCalls).toBe(0);
+
+    for (const [error, expected] of [
+      [new APIConnectionTimeoutError('deadline'), { providerErrorType: 'timeout', providerHttpStatus: null }],
+      [new AuthenticationError('denied'), { providerErrorType: 'authentication', providerHttpStatus: 401 }],
+      [new TypeError('local bug'), { providerErrorType: null, providerHttpStatus: null }],
+    ] as const) {
+      const result = await executeSummaryV3StyleRoute(requestFor(), {
+        timeoutForPhase: () => 1_000,
+        invoke: async () => { throw error; },
+      });
+      expect(result).toMatchObject({
+        kind: 'handled_failure', typedReason: 'writer_request_failed',
+        evidence: { m5ProviderFailure: { failureStage: 'sdk_request', ...expected } },
+      });
+    }
+  });
+
+  it('retains completed writer evidence when the evaluator SDK seam throws', async () => {
+    let calls = 0;
+    const result = await executeSummaryV3StyleRoute(requestFor(), {
+      timeoutForPhase: () => 1_000,
+      invoke: async (invocation) => {
+        calls += 1;
+        if (invocation.role === 'evaluator') throw new APIConnectionTimeoutError('evaluator deadline');
+        return providerMessage(invocation);
+      },
+    });
+    expect(result).toMatchObject({
+      kind: 'handled_failure',
+      typedReason: 'evaluator_request_failed',
+      evidence: {
+        writerAttempts: 1,
+        evaluatorAttempts: 1,
+        writerCandidateReachedValidation: true,
+        evaluatorReached: true,
+        m5ProviderFailure: {
+          phase: 'initial_evaluator',
+          failureStage: 'sdk_request',
+          providerErrorType: 'timeout',
+          providerHttpStatus: null,
+        },
+      },
+    });
+    expect(calls).toBe(2);
   });
 });

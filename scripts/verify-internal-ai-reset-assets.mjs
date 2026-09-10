@@ -9,6 +9,12 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
+const {
+  assertAndroidInternalM5Assets,
+} = require('./android-internal-v3-routing-contract.js');
 
 const MARKER = 'CVPRO_INTERNAL_AI_RESET_ENABLED_V1';
 const RESET_BUTTON = 'Reset AI test usage';
@@ -356,6 +362,12 @@ for (const marker of [
 log('OK Summary runtime revision markers present');
 
 if (expect === 'enabled') {
+  try {
+    assertAndroidInternalM5Assets(blob);
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+  }
+  log('OK AI Core V3 is compiled enabled with one M5 Summary style asset contract');
   if (!blob.includes(INTERNAL_AI_DIAGNOSTICS_298)) {
     fail(`missing internal diagnostics revision "${INTERNAL_AI_DIAGNOSTICS_298}"`);
   }

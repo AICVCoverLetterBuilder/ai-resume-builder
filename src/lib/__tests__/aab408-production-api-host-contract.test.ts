@@ -77,7 +77,6 @@ function captureAndroidRunner(environment: Record<string, string | undefined>) {
   const result = runAndroidInternalBuild({
     environment: {
       NEXT_PUBLIC_REVENUECAT_ANDROID_API_KEY: 'rc_test_public_key',
-      NEXT_PUBLIC_AI_CORE_V3_ENABLED: 'false',
       NEXT_PUBLIC_BUILD_CHANNEL: 'internal',
       NEXT_PUBLIC_ENABLE_AI_TEST_RESET: 'true',
       ANDROID_VERSION_CODE: '408',

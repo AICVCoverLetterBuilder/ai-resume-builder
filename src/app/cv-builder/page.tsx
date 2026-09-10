@@ -3590,8 +3590,38 @@ export default function CVBuilderPage() {
     const currentRole = resolveSummaryCurrentRole(liveCvAtPress.experience);
     latestSummaryRequestIdRef.current = reqCtx.requestId;
     const countBefore = getProAiUsageCount();
+    const operationMode = resolveAiButtonOperationMode(
+      summaryRewriteButtonId(style),
+      String(liveCvAtPress.summary || '').trim(),
+    );
+    const styleJobContext = buildExperienceJobContext({
+      position: currentRole?.position || liveCvAtPress.personal.jobTitle,
+      locale: requestedLocale,
+    });
+    // M5 owns the style execution, while this existing Summary session owns
+    // the one persisted terminal record for this button press. In particular,
+    // an M5 server rejection must replace an older Generate trace.
+    const summaryDiag = new SummaryAiDiagnosticSession({
+      uiLocale: locale,
+      requestedLocale: requestedLocale as Locale,
+      contentLocale: liveCvAtPress.contentLocale || null,
+      templateId: String(liveCvAtPress.templateId || ''),
+      gender: liveCvAtPress.personal.gender || '',
+      requestId: reqCtx.requestId,
+      usageCountBefore: countBefore,
+      operationMode,
+      rewriteStyle: style,
+      jobContextHash: styleJobContext.key,
+      m5Operation: 'summary_style',
+    });
+    summaryDiag.recordCvSnapshot(liveCvAtPress, String(liveCvAtPress.summary || '').trim());
+    summaryDiag.patch({
+      previousSummaryUsedAsFactSource: false,
+      rewriteStyle: style,
+    });
     const controller = new AbortController();
     const timer = scheduleClientAbort(controller, resolveClientAbortTimeoutMs(AI_CLIENT_TIMEOUT_MS));
+    let publishLatestDiagnostic = true;
     setRewritingStyle(style);
     try {
       const outcome = await runSummaryV3StyleClientOperation({
@@ -3603,7 +3633,7 @@ export default function CVBuilderPage() {
         currentRoleExperienceId: currentRole?.id || null,
         requestedLocale,
         sourceLocale: contentLocale,
-        jobContextKey: buildExperienceJobContext({ position: currentRole?.position || liveCvAtPress.personal.jobTitle, locale: requestedLocale }).key,
+        jobContextKey: styleJobContext.key,
         referenceDateIso: new Date().toISOString().slice(0, 10),
         usageCountBefore: countBefore,
         proToken,
@@ -3617,6 +3647,105 @@ export default function CVBuilderPage() {
         getActiveOperationId: () => latestSummaryRequestIdRef.current || '',
         commitCandidate: commitSummaryV3Candidate,
       });
+      if (outcome.kind === 'committed') {
+        const usageAfter = getProAiUsageCount();
+        summaryDiag.stage('api_response', 'ok');
+        summaryDiag.patch({
+          finalCandidateSource: 'v3_style',
+          providerCandidatePresent: true,
+          // M5 owns a provider candidate but does not run the V2 grammar,
+          // grounding, or duration validators. Keep those fields explicitly
+          // not-evaluated until the typed M5 applicability contract exists.
+          grammarValidationPassed: null,
+          groundingValidationPassed: null,
+          durationValidationPassed: null,
+          providerResponseKind: 'provider',
+          providerHttpStatus: outcome.evidence.m5ProviderFailure?.providerHttpStatus ?? null,
+          apiResponseKind: 'provider',
+          serverFallbackUsed: false,
+          clientFallbackUsed: false,
+          meaningfulChangeDetected: true,
+          noOpDetected: false,
+          raceGuardResult: 'ok',
+          finalPostconditionsPassed: true,
+          visibleApplySucceeded: true,
+          countedAsSuccess: true,
+          usageCountAfter: usageAfter,
+          finalTypedFailureReason: null,
+          rejectionStage: null,
+          unsupportedClaimCategory: outcome.evidence.unsupportedClaimCategory,
+          writerCandidateReachedValidation: outcome.evidence.writerCandidateReachedValidation,
+          evaluatorReached: outcome.evidence.evaluatorReached,
+          safeNoOpConsidered: outcome.evidence.safeNoOpConsidered,
+          safeNoOpSelected: outcome.evidence.safeNoOpSelected,
+          safeNoOpEligibilityReason: outcome.evidence.safeNoOpEligibilityReason,
+          roleIdentityResolution: outcome.evidence.roleIdentityResolution,
+          m5FailureStage: null,
+          m5CanonicalFailureCause: null,
+        });
+        summaryDiag.stage('visible_apply', 'ok');
+        summaryDiag.stage('post_write_validation', 'ok');
+        summaryDiag.stage('usage_accounting', 'ok');
+      } else if (outcome.kind === 'safe_no_op') {
+        summaryDiag.stage('api_response', 'ok');
+        summaryDiag.patch({
+          finalCandidateSource: 'none',
+          providerCandidatePresent: outcome.evidence.writerCandidateReachedValidation,
+          deterministicCandidatePresent: false,
+          grammarValidationPassed: null,
+          groundingValidationPassed: null,
+          durationValidationPassed: null,
+          meaningfulChangeDetected: false,
+          noOpDetected: true,
+          providerResponseKind: outcome.evidence.writerCandidateReachedValidation ? 'provider' : 'empty',
+          providerHttpStatus: outcome.evidence.m5ProviderFailure?.providerHttpStatus ?? null,
+          apiResponseKind: outcome.evidence.writerCandidateReachedValidation ? 'provider' : 'empty',
+          serverFallbackUsed: false,
+          clientFallbackUsed: false,
+          finalPostconditionsPassed: true,
+          unsupportedClaimCategory: outcome.evidence.unsupportedClaimCategory,
+          writerCandidateReachedValidation: outcome.evidence.writerCandidateReachedValidation,
+          evaluatorReached: outcome.evidence.evaluatorReached,
+          safeNoOpConsidered: outcome.evidence.safeNoOpConsidered,
+          safeNoOpSelected: outcome.evidence.safeNoOpSelected,
+          safeNoOpEligibilityReason: outcome.evidence.safeNoOpEligibilityReason,
+          roleIdentityResolution: outcome.evidence.roleIdentityResolution,
+          m5FailureStage: null,
+          m5CanonicalFailureCause: null,
+        });
+        summaryDiag.recordVisibleApplyNotApplicable(countBefore);
+      } else {
+        const rejectionStage = outcome.reason === 'operation_superseded'
+          || outcome.reason === 'stale_snapshot'
+          ? 'race_guard'
+          : 'api_response';
+        // Only a newer operation may own latest. A same-operation stale
+        // snapshot is still the active operation and must publish its
+        // diagnostic as the latest terminal record.
+        publishLatestDiagnostic = outcome.reason !== 'operation_superseded';
+        summaryDiag.stage(rejectionStage, 'fail', outcome.reason);
+        summaryDiag.recordPreCandidateTerminalFailure({
+          stage: rejectionStage,
+          reason: outcome.reason,
+          usageAfter: countBefore,
+          httpStatus: outcome.evidence?.m5ProviderFailure?.providerHttpStatus ?? null,
+          apiResponseKind: rejectionStage === 'api_response' ? 'error' : 'not_attempted',
+        });
+        if (outcome.evidence) {
+          summaryDiag.patch({
+            providerCandidatePresent: outcome.evidence.writerCandidateReachedValidation,
+            unsupportedClaimCategory: outcome.evidence.unsupportedClaimCategory,
+            writerCandidateReachedValidation: outcome.evidence.writerCandidateReachedValidation,
+            evaluatorReached: outcome.evidence.evaluatorReached,
+            safeNoOpConsidered: outcome.evidence.safeNoOpConsidered,
+            safeNoOpSelected: outcome.evidence.safeNoOpSelected,
+            safeNoOpEligibilityReason: outcome.evidence.safeNoOpEligibilityReason,
+            roleIdentityResolution: outcome.evidence.roleIdentityResolution,
+            m5FailureStage: outcome.evidence.m5ProviderFailure?.failureStage ?? null,
+            m5CanonicalFailureCause: outcome.evidence.m5ProviderFailure?.providerErrorType ?? null,
+          });
+        }
+      }
       finishAiClientRequest({
         ctx: reqCtx,
         isProVerified: true,
@@ -3629,6 +3758,7 @@ export default function CVBuilderPage() {
       if (outcome.kind === 'committed') toast.success(t.cv.genSuccess);
       else if (outcome.kind === 'terminal' && outcome.reason !== 'operation_superseded') toast.error(aiErrorMessage('generation_validation_failed', requestedLocale));
     } finally {
+      await terminalizeAiDiagnosticSession(summaryDiag, { publishLatest: publishLatestDiagnostic });
       clearTimeout(timer);
       setRewritingStyle(null);
     }

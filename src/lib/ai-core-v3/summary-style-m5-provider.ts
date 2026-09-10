@@ -1,8 +1,11 @@
 import {
   SUMMARY_V3_STYLE_M5_EVALUATOR_TOOL_NAME,
   SUMMARY_V3_STYLE_M5_EVALUATOR_TOOL,
+  SUMMARY_V3_STYLE_M5_EVALUATOR_PROVIDER_TOOL,
   SUMMARY_V3_STYLE_M5_WRITER_TOOL_NAME,
   SUMMARY_V3_STYLE_M5_WRITER_TOOL,
+  SUMMARY_V3_STYLE_M5_WRITER_PROVIDER_TOOL,
+  type SummaryV3StyleProviderTool,
   type SummaryV3Style,
   type SummaryV3StyleRequest,
   type SummaryV3StyleResult,
@@ -14,6 +17,8 @@ import {
   type SummaryV3StyleServerDependencies,
   type SummaryV3StyleWriterInput,
 } from './summary-style-m5-server';
+import { createSummaryV3ProviderTransportError } from './summary-generate-server';
+import type { SummaryV3ProviderPhase } from './summary-generate';
 
 /** The only route actions owned by M5.2. */
 export const SUMMARY_V3_STYLE_M5_ROUTE_ACTIONS = {
@@ -99,7 +104,8 @@ export interface SummaryV3StyleProviderInvocation {
   readonly strict: true;
   readonly expectedToolBlocks: 1;
   readonly allowedTextBlocks: 0;
-  readonly tool: typeof SUMMARY_V3_STYLE_M5_WRITER_TOOL | typeof SUMMARY_V3_STYLE_M5_EVALUATOR_TOOL;
+  /** Provider-safe projection; input.forcedTool.schema remains authoritative for local validation. */
+  readonly tool: SummaryV3StyleProviderTool;
   readonly timeoutMs: number;
 }
 
@@ -124,11 +130,30 @@ function isWriterInput(
 }
 
 function providerPrompt(input: SummaryV3StyleProviderInput): string {
+  const strongerWriterInstruction = isWriterInput(input) && input.style === 'stronger'
+    ? [
+      'STRONGER SOURCE AUTHORITY: sourceText is the sole fact authority for enhance_existing_content.',
+      'Strengthen grounded predicates and wording first. Preserve duties as duties.',
+      'Do not turn duties into achievements, accomplishments, results, impact, metrics, savings, revenue, efficiency gains, performance gains, leadership, or broader authority.',
+      'Those claims are allowed only when sourceText explicitly contains them.',
+      'If no meaningful grounded strengthening is possible, submit sourceText unchanged as the single safe-no-op candidate.',
+    ].join('\n')
+    : null;
+  const unresolvedRoleIdentityInstruction = !isWriterInput(input) && input.roleIdentity.status === 'unresolved'
+    ? [
+      'UNRESOLVED ROLE IDENTITY OBLIGATION: semantically compare the selected Experience structuredRole with the role expressed in sourceText and candidate for the same employer and selectedEntryId.',
+      'Use requested locale, roleSourceLocale, and the current-entry rolePresentation only as bounded evidence. Do not infer from another entry, personal/header job title, or external knowledge.',
+      'Return roleIdentityResolution=equivalent only when the candidate role is semantically the same current Experience role; return contradiction for a different role and unresolved when the bounded evidence cannot establish either result.',
+      'A generic semantic_grounding pass is not a substitute for this required role identity resolution.',
+    ].join('\n')
+    : null;
   return [
     'M5 SUMMARY STYLE OPERATION. Return only the required forced tool call.',
     'The tool input is the sole candidate/evidence transport. Do not return prose.',
+    strongerWriterInstruction,
+    unresolvedRoleIdentityInstruction,
     JSON.stringify(input),
-  ].join('\n\n');
+  ].filter((value): value is string => value !== null).join('\n\n');
 }
 
 function invocationFor(
@@ -148,7 +173,9 @@ function invocationFor(
     strict: true,
     expectedToolBlocks: 1,
     allowedTextBlocks: 0,
-    tool: forcedTool.schema,
+    tool: role === 'writer'
+      ? SUMMARY_V3_STYLE_M5_WRITER_PROVIDER_TOOL
+      : SUMMARY_V3_STYLE_M5_EVALUATOR_PROVIDER_TOOL,
     timeoutMs,
   };
 }
@@ -183,19 +210,37 @@ export function normalizeSummaryV3StyleProviderResponse(value: unknown): unknown
 }
 
 function createDependencies(options: SummaryV3StyleProviderAdapterOptions): SummaryV3StyleServerDependencies {
+  const sharedPhase = (phase: SummaryV3StyleProviderPhase): SummaryV3ProviderPhase => (
+    phase === 'repair_evaluator' ? 'post_repair_evaluator' : phase
+  );
   const invoke = async (
     input: SummaryV3StyleProviderInput,
     phase: SummaryV3StyleProviderPhase,
-    timeoutMs: number,
-  ): Promise<unknown> => normalizeSummaryV3StyleProviderResponse(
-    await options.invoke(invocationFor(input, phase, timeoutMs)),
-  );
+  ): Promise<unknown> => {
+    let invocation: SummaryV3StyleProviderInvocation;
+    try {
+      invocation = invocationFor(input, phase, options.timeoutForPhase(phase));
+    } catch (error) {
+      throw createSummaryV3ProviderTransportError(error, sharedPhase(phase), 'request_construction');
+    }
+    let response: unknown;
+    try {
+      response = await options.invoke(invocation);
+    } catch (error) {
+      throw createSummaryV3ProviderTransportError(error, sharedPhase(phase), 'sdk_request');
+    }
+    try {
+      return normalizeSummaryV3StyleProviderResponse(response);
+    } catch (error) {
+      throw createSummaryV3ProviderTransportError(error, sharedPhase(phase), 'response_extraction');
+    }
+  };
 
   return {
-    write: (input) => invoke(input, 'initial_writer', options.timeoutForPhase('initial_writer')),
-    evaluate: (input) => invoke(input, 'initial_evaluator', options.timeoutForPhase('initial_evaluator')),
-    repairWrite: (input) => invoke(input, 'repair_writer', options.timeoutForPhase('repair_writer')),
-    repairEvaluate: (input) => invoke(input, 'repair_evaluator', options.timeoutForPhase('repair_evaluator')),
+    write: (input) => invoke(input, 'initial_writer'),
+    evaluate: (input) => invoke(input, 'initial_evaluator'),
+    repairWrite: (input) => invoke(input, 'repair_writer'),
+    repairEvaluate: (input) => invoke(input, 'repair_evaluator'),
     now: options.now,
   };
 }

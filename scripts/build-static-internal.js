@@ -17,6 +17,9 @@ const {
   applyAndroidInternalApiContract,
 } = require('./android-internal-api-contract');
 const {
+  enforceAndroidInternalV3RoutingContract,
+} = require('./android-internal-v3-routing-contract');
+const {
   establishAndroidPackagingEnvironment,
   validateCheckedInCommercialState,
   buildManifest,
@@ -72,6 +75,7 @@ function runStaticInternalBuild(options = {}) {
     ? process.env
     : { ...options.environment };
   const requiredEnv = (name) => readRequiredEnv(childEnvironment, name);
+  const v3RoutingContract = enforceAndroidInternalV3RoutingContract(childEnvironment);
 
   const apiContract = usesProcessEnvironment
     ? applyAndroidInternalApiContract(process.env)
@@ -103,7 +107,7 @@ function runStaticInternalBuild(options = {}) {
   childEnvironment.NEXT_PUBLIC_ENABLE_SUMMARY_V2 = 'true';
 
   console.log(
-    '[build:static:internal] channel=internal enableAiTestReset=true staticExport=true enableSummaryV2=true',
+    `[build:static:internal] channel=internal enableAiTestReset=true staticExport=true enableSummaryV2=true aiCoreV3=true summaryStyleOwner=${v3RoutingContract.summaryStyleOwner}`,
   );
   dependencies.execFileSync(process.execPath, [nextBin, 'build'], {
     cwd: repoRoot,
@@ -125,11 +129,12 @@ function runStaticInternalBuild(options = {}) {
     console.error('[build:static:internal] FAIL: RevenueCat Android public key is absent from built assets');
     process.exit(1);
   }
-  console.log('[build:static:internal] OK — internal diagnostics and RevenueCat configuration are present in out/');
+  console.log('[build:static:internal] OK — M5 routing, internal diagnostics, and RevenueCat configuration are present in out/');
 
   return Object.freeze({
     ...apiContract,
     childEnvironment,
+    v3RoutingContract,
     expectedCommercialState,
     commercialManifest,
   });

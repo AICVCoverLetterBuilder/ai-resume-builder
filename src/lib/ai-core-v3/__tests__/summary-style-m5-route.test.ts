@@ -126,6 +126,7 @@ function providerMessage(invocation: SummaryV3StyleProviderInvocation, mode: 'pa
       operationId: input.operationId, snapshotHash: input.snapshotHash, manifestHash: input.manifestHash,
       style: input.style, locale: input.locale, candidateHash: input.candidate.hash, candidateUnitHashes,
       phases, representedFactIdHashes: input.requiredFacts.map((fact) => fact.hash), missingFactIdHashes: [],
+      roleIdentityResolution: input.roleIdentity.status === 'unresolved' ? 'equivalent' : 'not_required',
       styleEvidence: styleEvidence(input.style, input, !rejected, !rejected && invocation.phase !== 'repair_evaluator'),
     } }],
   };
@@ -133,13 +134,15 @@ function providerMessage(invocation: SummaryV3StyleProviderInvocation, mode: 'pa
 
 async function invokeActualRoute(options: {
   action?: string; requestedLocale?: string; sourceLocale?: string;
-  auth?: 'valid' | 'invalid'; providerMode?: 'pass' | 'reject' | 'repair-fail' | 'malformed' | 'throw';
+  auth?: 'valid' | 'invalid'; providerMode?: 'pass' | 'reject' | 'repair-fail' | 'malformed' | 'throw' | 'rate-limit' | 'timeout';
   serverEnabled?: boolean; clientEnabled?: unknown; omitEnabled?: boolean;
-  calls?: { count: number; retries: number; tools: string[]; choices: unknown[]; maxRetries: Array<number | undefined> };
+  executorMode?: 'throw';
+  routeOverrides?: Record<string, unknown>;
+  calls?: { count: number; retries: number; tools: string[]; choices: unknown[]; maxRetries: Array<number | undefined>; requests: unknown[]; clientOptions: unknown[] };
 }) {
   const keys = ['AI_CORE_V3_ENABLED', 'NEXT_PUBLIC_AI_CORE_V3_ENABLED', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'PRO_SIGNING_KEY'] as const;
   const saved = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
-    const calls = options.calls ?? { count: 0, retries: 0, tools: [], choices: [], maxRetries: [] };
+    const calls = options.calls ?? { count: 0, retries: 0, tools: [], choices: [], maxRetries: [], requests: [], clientOptions: [] };
   const mode = options.providerMode ?? 'pass';
   try {
     const serverEnabled = options.serverEnabled ?? true;
@@ -148,24 +151,49 @@ async function invokeActualRoute(options: {
     process.env.ANTHROPIC_API_KEY = 'm52-route-test-key'; process.env.PRO_SIGNING_KEY = 'm52-signing-key';
     delete process.env.ANTHROPIC_AUTH_TOKEN;
     vi.resetModules();
+    if (options.executorMode === 'throw') {
+      vi.doMock('@/lib/ai-core-v3/summary-style-m5-provider', async () => {
+        const actual = await vi.importActual<typeof import('../summary-style-m5-provider')>('@/lib/ai-core-v3/summary-style-m5-provider');
+        return {
+          ...actual,
+          executeSummaryV3StyleRoute: vi.fn(async () => {
+            throw new Error('synthetic M5 executor exception');
+          }),
+        };
+      });
+    }
     const create = vi.fn(async (params: { tools?: Array<{ name?: string }>; tool_choice?: unknown; messages?: Array<{ content?: unknown }> }, requestOptions?: { maxRetries?: number }) => {
       calls.count += 1; calls.retries += requestOptions?.maxRetries ?? 0; calls.maxRetries.push(requestOptions?.maxRetries);
+      calls.requests.push(params);
       calls.tools.push(params.tools?.[0]?.name ?? 'none'); calls.choices.push(params.tool_choice);
       const role = params.tools?.[0]?.name === SUMMARY_V3_STYLE_M5_WRITER_TOOL_NAME ? 'writer' : 'evaluator';
       const phase = calls.count === 3 ? 'repair_writer' : calls.count === 4 ? 'repair_evaluator' : role === 'writer' ? 'initial_writer' : 'initial_evaluator';
       const prompt = String(params.messages?.[0]?.content ?? '');
       const input = JSON.parse(prompt.slice(prompt.lastIndexOf('\n\n') + 2)) as SummaryV3StyleProviderInvocation['input'];
       const invocation = { role, phase, input } as SummaryV3StyleProviderInvocation;
+      if (mode === 'rate-limit') {
+        class RateLimitError extends Error {
+          readonly status = 429;
+          readonly error = { code: 'rate_limit_error' };
+        }
+        throw new RateLimitError('synthetic known rate limit');
+      }
+      if (mode === 'timeout') {
+        class APIConnectionTimeoutError extends Error {}
+        throw new APIConnectionTimeoutError('synthetic timeout');
+      }
       if (mode === 'throw' || (mode === 'repair-fail' && calls.count === 4)) return providerMessage(invocation, 'throw');
       if (mode === 'malformed') return providerMessage(invocation, 'malformed');
       return providerMessage(invocation, mode === 'reject' || mode === 'repair-fail' ? 'reject' : 'pass');
     });
-    vi.doMock('@anthropic-ai/sdk', () => { class MockAnthropic { readonly messages = { create }; } return { default: MockAnthropic }; });
+    vi.doMock('@anthropic-ai/sdk', () => { class MockAnthropic { readonly messages = { create }; constructor(options: unknown) { calls.clientOptions.push(options); } } return { default: MockAnthropic }; });
     vi.doMock('@/lib/pro-token', () => ({ verifyProToken: vi.fn(async () => options.auth === 'invalid' ? null : { subject: 'm52-test' }) }));
     const { POST } = await import('@/app/api/generate/route');
     const body = {
       action: options.action ?? 'summary_professional', proToken: options.auth === 'invalid' ? 'invalid' : 'valid',
-      ...routeParams(options.requestedLocale ?? 'en'), sourceLocale: options.sourceLocale ?? options.requestedLocale ?? 'en',
+      ...routeParams(options.requestedLocale ?? 'en'),
+      ...options.routeOverrides,
+      sourceLocale: options.sourceLocale ?? options.requestedLocale ?? 'en',
     };
     if (options.omitEnabled) delete (body as Record<string, unknown>).enabled;
     else if ('clientEnabled' in options) (body as Record<string, unknown>).enabled = options.clientEnabled;
@@ -173,7 +201,8 @@ async function invokeActualRoute(options: {
     const response = await POST(request as Parameters<typeof POST>[0]);
     return { response, body: await response.json(), calls };
   } finally {
-    vi.restoreAllMocks(); vi.doUnmock('@anthropic-ai/sdk'); vi.doUnmock('@/lib/pro-token'); vi.resetModules();
+    vi.restoreAllMocks(); vi.doUnmock('@anthropic-ai/sdk'); vi.doUnmock('@/lib/pro-token');
+    vi.doUnmock('@/lib/ai-core-v3/summary-style-m5-provider'); vi.resetModules();
     for (const key of keys) { if (saved[key] === undefined) delete process.env[key]; else process.env[key] = saved[key]; }
   }
 }
@@ -206,7 +235,8 @@ describe('M5.2 Summary style route ownership', () => {
 describe('M5.2 actual production route boundary', () => {
   it('blocks a server-disabled M5 request even when the client sends enabled=true', async () => {
     const run = await invokeActualRoute({ serverEnabled: false, clientEnabled: true });
-    expect(run.response.status).toBe(409); expect(run.body.typedReason).toBe('v3_feature_disabled');
+    expect(run.response.status).toBe(409);
+    expect(run.body).toEqual({ kind: 'route_failure', typedReason: 'v3_feature_disabled' });
     expect(run.calls.count).toBe(0); expect(run.calls.retries).toBe(0);
   });
 
@@ -244,11 +274,112 @@ describe('M5.2 actual production route boundary', () => {
     expect(run.calls.maxRetries).toEqual([0]);
   });
 
-  it('returns truthful 502 for provider failure and proves callWithRetry makes no retry', async () => {
+  it('returns a typed 422 M5 source-floor failure with only bounded evidence', async () => {
+    const source = 'Ava Patel is a Product Engineer at Other Works.';
+    const run = await invokeActualRoute({
+      action: 'summary_stronger',
+      routeOverrides: { visibleSummary: source, visibleSummaryFacts: undefined },
+    });
+    expect(run.response.status).toBe(422);
+    expect(run.body).toMatchObject({
+      kind: 'handled_failure',
+      typedReason: 'unsupported_claim',
+      evidence: {
+        unsupportedClaimCategory: 'source_floor_mismatch',
+        writerCandidateReachedValidation: false,
+        evaluatorReached: false,
+        safeNoOpConsidered: false,
+        safeNoOpSelected: false,
+        safeNoOpEligibilityReason: 'role_employer_frame_inconsistency',
+      },
+    });
+    expect(run.body).not.toHaveProperty('error');
+    expect(run.body).not.toHaveProperty('candidate');
+    expect(run.calls.count).toBe(0);
+  });
+
+  it('preserves bounded M5 evidence when an executor exception reaches the API error envelope', async () => {
+    const run = await invokeActualRoute({ executorMode: 'throw' });
+    expect(run.response.status).toBe(500);
+    expect(run.body).toMatchObject({
+      kind: 'route_failure',
+      typedReason: 'generation_validation_failed',
+      evidence: {
+        unsupportedClaimCategory: null,
+        writerCandidateReachedValidation: false,
+        evaluatorReached: false,
+        safeNoOpConsidered: false,
+        safeNoOpSelected: false,
+        safeNoOpEligibilityReason: 'not_applicable',
+        m5ProviderFailure: {
+          phase: 'initial_writer',
+          failureStage: 'orchestration',
+          providerHttpStatus: null,
+          providerErrorType: null,
+        },
+      },
+    });
+    expect(run.body).not.toHaveProperty('candidate');
+    expect(run.body).not.toHaveProperty('prompt');
+    expect(run.calls.count).toBe(0);
+  });
+
+  it('keeps an unknown SDK-seam exception unknown and proves callWithRetry makes no retry', async () => {
     const run = await invokeActualRoute({ providerMode: 'throw' });
-    expect(run.response.status).toBe(502); expect(run.body.typedReason).toBe('writer_request_failed');
+    expect(run.response.status).toBe(500); expect(run.body.typedReason).toBe('writer_request_failed');
+    expect(run.body.evidence.m5ProviderFailure).toMatchObject({
+      phase: 'initial_writer', failureStage: 'sdk_request',
+      providerHttpStatus: null, providerErrorType: null, providerHttpResponseReceived: null,
+    });
     expect(run.calls.count).toBe(1); expect(run.calls.retries).toBe(0);
     expect(run.calls.maxRetries).toEqual([0]);
+  });
+
+  it.each([
+    ['rate-limit', 429, 'rate_limit', 429],
+    ['timeout', 504, 'timeout', null],
+  ] as const)('preserves known %s cause through real route status mapping', async (
+    mode,
+    expectedStatus,
+    expectedCause,
+    expectedUpstreamStatus,
+  ) => {
+    const run = await invokeActualRoute({ providerMode: mode });
+    expect(run.response.status).toBe(expectedStatus);
+    expect(run.body.typedReason).toBe('writer_request_failed');
+    expect(run.body.evidence.m5ProviderFailure).toMatchObject({
+      phase: 'initial_writer',
+      failureStage: 'sdk_request',
+      providerErrorType: expectedCause,
+      providerHttpStatus: expectedUpstreamStatus,
+    });
+    expect(run.calls.count).toBe(1);
+    expect(run.calls.retries).toBe(0);
+  });
+
+  it('captures the real M5 outbound request contract offline at the mocked SDK seam', async () => {
+    const run = await invokeActualRoute({ action: 'summary_stronger' });
+    const writer = run.calls.requests[0] as Record<string, unknown>;
+    const clientOptions = run.calls.clientOptions[0] as Record<string, unknown>;
+    expect(writer).toMatchObject({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 1800,
+      temperature: 0,
+      tool_choice: {
+        type: 'tool',
+        name: SUMMARY_V3_STYLE_M5_WRITER_TOOL_NAME,
+        disable_parallel_tool_use: true,
+      },
+    });
+    expect((writer.tools as Array<Record<string, unknown>>)[0]).toMatchObject({
+      name: SUMMARY_V3_STYLE_M5_WRITER_TOOL_NAME,
+      strict: true,
+    });
+    expect(clientOptions).toMatchObject({ apiKey: 'm52-route-test-key', maxRetries: 0 });
+    expect(typeof clientOptions.timeout).toBe('number');
+    expect(run.calls.maxRetries).toEqual([0, 0]);
+    expect(run.calls.retries).toBe(0);
+    expect(JSON.stringify(writer)).not.toContain('m52-route-test-key');
   });
 
   it('rejects cross-locale input before provider invocation', async () => {
@@ -265,7 +396,12 @@ describe('M5.2 actual production route boundary', () => {
 
   it('fails a repair at four calls without a second repair, retry, fallback, or V2', async () => {
     const run = await invokeActualRoute({ action: 'summary_professional', providerMode: 'repair-fail' });
-    expect(run.response.status).toBe(502); expect(run.body.typedReason).toBe('repair_evaluator_request_failed');
+    expect(run.response.status).toBe(500); expect(run.body.typedReason).toBe('repair_evaluator_request_failed');
+    expect(run.body.evidence).toMatchObject({
+      writerAttempts: 1, evaluatorAttempts: 1, repairWriterAttempts: 1, repairEvaluatorAttempts: 1,
+      writerCandidateReachedValidation: true, evaluatorReached: true,
+      m5ProviderFailure: { phase: 'post_repair_evaluator', failureStage: 'sdk_request', providerErrorType: null },
+    });
     expect(run.calls.count).toBe(4); expect(run.calls.retries).toBe(0);
     expect(run.calls.maxRetries).toEqual([0, 0, 0, 0]);
   });

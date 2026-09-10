@@ -106,16 +106,21 @@ import type {
 import {
   SUMMARY_V3_INITIAL_EVALUATOR_TIMEOUT_MS,
   SUMMARY_V3_INITIAL_WRITER_TIMEOUT_MS,
+  classifySummaryV3ProviderFailure,
   computeSummaryV3ServerDeadline,
   type SummaryV3WriterResponse,
 } from '@/lib/ai-core-v3/summary-generate-server';
-import type { SummaryV3ProviderPhase } from '@/lib/ai-core-v3/summary-generate';
+import type {
+  SummaryV3ProviderFailureEnvelope,
+  SummaryV3ProviderPhase,
+} from '@/lib/ai-core-v3/summary-generate';
 import {
   executeSummaryV3StyleRoute,
   isSummaryV3StyleRouteAction,
   normalizeSummaryV3StyleRouteRequest,
   type SummaryV3StyleProviderInvocation,
 } from '@/lib/ai-core-v3/summary-style-m5-provider';
+import { createSummaryV3StyleM5RouteFailure } from '@/lib/ai-core-v3/summary-style-m5-transport';
 import {
   CONTENT_LOCALIZE_V3_OPERATION,
   createContentLocalizeV3ProviderDependencies,
@@ -144,6 +149,42 @@ const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
 const RATE_LIMIT_MAX_REQUESTS_IP = 20;
 /** Verified Pro token-hash burst limit — higher than IP so rapid UI actions are not mistaken for outages. */
 const RATE_LIMIT_MAX_REQUESTS_PRO = 60;
+
+// This is deliberately the only M5 evidence attached when execution itself
+// throws before a terminal M5 result exists. It makes the boundary observable
+// without exposing a provider response, prompt, candidate, or CV content.
+const M5_ROUTE_EXCEPTION_EVIDENCE = Object.freeze({
+  unsupportedClaimCategory: null,
+  writerCandidateReachedValidation: false,
+  evaluatorReached: false,
+  safeNoOpConsidered: false,
+  safeNoOpSelected: false,
+  safeNoOpEligibilityReason: 'not_applicable' as const,
+  roleIdentityResolution: 'not_required' as const,
+  m5ProviderFailure: null,
+});
+
+function m5ProviderFailureDisposition(failure: SummaryV3ProviderFailureEnvelope): {
+  code: AiErrorCode;
+  status: number;
+  retryAfter: number | null;
+} {
+  switch (failure.providerErrorType) {
+    case 'invalid_request': return { code: 'generation_validation_failed', status: 400, retryAfter: null };
+    case 'authentication': return { code: 'provider_auth_error', status: 401, retryAfter: null };
+    case 'permission': return { code: 'provider_auth_error', status: 403, retryAfter: null };
+    case 'rate_limit': return { code: 'provider_rate_limited', status: 429, retryAfter: 60 };
+    case 'provider_5xx': return { code: 'provider_temporarily_unavailable', status: 503, retryAfter: 60 };
+    case 'timeout': return { code: 'request_timeout', status: 504, retryAfter: null };
+    case 'connection/network': return { code: 'network_error', status: 502, retryAfter: null };
+    case 'response_extraction': return { code: 'generation_validation_failed', status: 502, retryAfter: null };
+    case 'unknown':
+    default:
+      // A local TypeError or otherwise unclassified exception is not evidence
+      // that the provider was unavailable.
+      return { code: 'generation_validation_failed', status: 500, retryAfter: null };
+  }
+}
 
 const rateLimitMap = new Map<string, { count: number; windowStart: number }>();
 
@@ -2130,39 +2171,59 @@ Rules:
         AI_CORE_V3_ENABLED: process.env.AI_CORE_V3_ENABLED ?? process.env.NEXT_PUBLIC_AI_CORE_V3_ENABLED,
       });
       if (!v3Enabled) {
-        return jsonResponse({
-          ok: false,
-          action,
-          typedReason: 'v3_feature_disabled',
-        }, { status: 409 });
+        return jsonResponse(
+          createSummaryV3StyleM5RouteFailure('v3_feature_disabled'),
+          { status: 409 },
+        );
       }
       deadlineAt = computeSummaryV3ServerDeadline(serverReceivedAt);
       const m5Request = normalizeSummaryV3StyleRouteRequest(action, params, serverReceivedAt);
-      const result = await executeSummaryV3StyleRoute(m5Request, {
-        timeoutForPhase: (phase) => phase === 'initial_writer'
-          ? SUMMARY_V3_INITIAL_WRITER_TIMEOUT_MS
-          : phase === 'initial_evaluator'
-            ? SUMMARY_V3_INITIAL_EVALUATOR_TIMEOUT_MS
-            : AI_PROVIDER_CALL_TIMEOUT_MS,
-        invoke: async (invocation: SummaryV3StyleProviderInvocation) => {
-          const response = await callWithRetry({
-            model: MODEL,
-            max_tokens: invocation.role === 'writer' ? 1800 : 1400,
-            temperature: 0,
-            system: invocation.role === 'writer'
-              ? `You are the single AI Core V3 Summary style writer. Invoke only the ${invocation.toolName} tool and preserve every required identity and fact.`
-              : `You are the independent non-writing AI Core V3 Summary style evaluator. Invoke only the ${invocation.toolName} tool and return structured evidence only.`,
-            tools: [invocation.tool],
-            tool_choice: invocation.toolChoice,
-            messages: [{ role: 'user', content: invocation.prompt }],
-          }, deadlineAt, undefined, invocation.timeoutMs, invocation.role === 'writer' ? 'provider' : 'verifier', undefined, false);
-          return response;
-        },
-      });
+      let result;
+      try {
+        result = await executeSummaryV3StyleRoute(m5Request, {
+          timeoutForPhase: (phase) => phase === 'initial_writer'
+            ? SUMMARY_V3_INITIAL_WRITER_TIMEOUT_MS
+            : phase === 'initial_evaluator'
+              ? SUMMARY_V3_INITIAL_EVALUATOR_TIMEOUT_MS
+              : AI_PROVIDER_CALL_TIMEOUT_MS,
+          invoke: async (invocation: SummaryV3StyleProviderInvocation) => {
+            const response = await callWithRetry({
+              model: MODEL,
+              max_tokens: invocation.role === 'writer' ? 1800 : 1400,
+              temperature: 0,
+              system: invocation.role === 'writer'
+                ? `You are the single AI Core V3 Summary style writer. Invoke only the ${invocation.toolName} tool and preserve every required identity and fact.`
+                : `You are the independent non-writing AI Core V3 Summary style evaluator. Invoke only the ${invocation.toolName} tool and return structured evidence only.`,
+              tools: [invocation.tool],
+              tool_choice: invocation.toolChoice,
+              messages: [{ role: 'user', content: invocation.prompt }],
+            }, deadlineAt, undefined, invocation.timeoutMs, invocation.role === 'writer' ? 'provider' : 'verifier', undefined, false);
+            return response;
+          },
+        });
+      } catch (error) {
+        const failure = classifySummaryV3ProviderFailure(error, 'initial_writer', 'orchestration');
+        const classified = m5ProviderFailureDisposition(failure);
+        return jsonResponse(createSummaryV3StyleM5RouteFailure(
+          classified.code,
+          { ...M5_ROUTE_EXCEPTION_EVIDENCE, m5ProviderFailure: failure },
+        ), {
+          status: classified.status,
+          headers: classified.retryAfter
+            ? { 'Retry-After': String(classified.retryAfter) }
+            : undefined,
+        });
+      }
+      const providerFailureDisposition = result.kind === 'handled_failure'
+        && result.evidence.m5ProviderFailure
+        ? m5ProviderFailureDisposition(result.evidence.m5ProviderFailure)
+        : null;
       const status = result.kind === 'candidate_ready' || result.kind === 'safe_no_op'
         ? 200
         : result.kind === 'not_applicable'
           ? 422
+          : providerFailureDisposition
+            ? providerFailureDisposition.status
           : /(?:_request_failed|_transport_malformed)$/u.test(result.typedReason)
             ? 502
             : 422;

@@ -1,6 +1,7 @@
 import {
   SUMMARY_V3_STYLE_M5_EVALUATOR_TOOL_NAME,
   SUMMARY_V3_STYLE_M5_EVALUATOR_TOOL,
+  SUMMARY_V3_STYLE_M5_ROLE_IDENTITY_RESOLUTIONS,
   SUMMARY_V3_STYLE_M5_WRITER_TOOL_NAME,
   SUMMARY_V3_STYLE_M5_WRITER_TOOL,
   SUMMARY_V3_STYLE_STRATEGIES,
@@ -51,10 +52,22 @@ import {
   type SummaryV3StylePhaseStatus,
   type SummaryV3StyleRequest,
   type SummaryV3StyleResult,
+  type SummaryV3StyleRoleIdentityResolution,
+  type SummaryV3StyleSafeNoOpEligibilityReason,
+  type SummaryV3StyleUnsupportedClaimCategory,
   type SummaryV3StyleViolation,
   type SummaryV3StyleViolationCode,
 } from './summary-style-m5';
 import { immutableCopy } from './immutability';
+import { detectRoleLabelSourceLocale } from '@/lib/cv-summary-structured-role-localization';
+import {
+  SummaryV3ProviderTransportError,
+  classifySummaryV3ProviderFailure,
+} from './summary-generate-server';
+import type {
+  SummaryV3ProviderFailureEnvelope,
+  SummaryV3ProviderPhase,
+} from './summary-generate';
 
 /** The server executor is injected; no external SDK is instantiated here. */
 export interface SummaryV3StyleWriterInput {
@@ -74,6 +87,10 @@ export interface SummaryV3StyleWriterInput {
   readonly requiredFacts: SummaryV3StyleOperationSnapshot['requiredFacts'];
   readonly transformableDuty: SummaryV3StyleOperationSnapshot['transformableDuty'];
   readonly entityLocks: readonly Readonly<{ kind: string; value: string; hash: string }>[];
+  readonly roleIdentity: Readonly<{
+    status: 'not_assessed' | 'equivalent' | 'contradiction' | 'unresolved';
+    selectedEntryId: string | null;
+  }>;
   readonly styleContract: readonly string[];
   readonly forcedTool: Readonly<{
     toolName: typeof SUMMARY_V3_STYLE_M5_WRITER_TOOL_NAME;
@@ -103,6 +120,14 @@ export interface SummaryV3StyleEvaluatorInput {
   readonly transformableDuty: SummaryV3StyleOperationSnapshot['transformableDuty'];
   readonly manifestValidationCeiling: SummaryV3StyleOperationSnapshot['manifestFacts'];
   readonly entityLocks: readonly Readonly<{ kind: string; value: string; hash: string }>[];
+  readonly roleIdentity: Readonly<{
+    status: 'not_assessed' | 'equivalent' | 'contradiction' | 'unresolved';
+    selectedEntryId: string | null;
+    structuredRole: string | null;
+    roleSourceLocale: string | null;
+    employer: string | null;
+    rolePresentation: SummaryV3StyleOperationSnapshot['selectedEntries'][number]['rolePresentation'];
+  }>;
   readonly forcedTool: Readonly<{
     toolName: typeof SUMMARY_V3_STYLE_M5_EVALUATOR_TOOL_NAME;
     toolChoice: 'required';
@@ -134,6 +159,7 @@ interface ParsedEvaluation {
   }>>>;
   readonly representedFactIdHashes: readonly string[];
   readonly missingFactIdHashes: readonly string[];
+  readonly roleIdentityResolution: SummaryV3StyleRoleIdentityResolution;
   readonly styleEvidence: ParsedStyleEvidence;
 }
 
@@ -228,7 +254,8 @@ const MATERIAL_NUMERIC_RELATION_TERMS = new Set([
 // locale-quality decisions to the injected evaluator.
 const MATERIAL_RESULT_RELATION_TERMS = new Set([
   ...MATERIAL_NUMERIC_RELATION_TERMS,
-  'saving', 'savings', 'award', 'awards', 'promotion', 'promotions',
+  'save', 'saves', 'saved', 'saving', 'savings', 'money',
+  'award', 'awards', 'promotion', 'promotions',
   'client', 'clients', 'customer', 'customers', 'result', 'results',
   'outcome', 'outcomes', 'impact',
 ]);
@@ -237,7 +264,8 @@ const MATERIAL_RESULT_RELATION_TERMS = new Set([
 // assertion. Reserve this smaller ceiling for actual result claims.
 const SOURCE_MATERIAL_RESULT_CEILING_TERMS = new Set([
   ...MATERIAL_NUMERIC_RELATION_TERMS,
-  'saving', 'savings', 'award', 'awards', 'promotion', 'promotions',
+  'save', 'saves', 'saved', 'saving', 'savings', 'money',
+  'award', 'awards', 'promotion', 'promotions',
   'result', 'results', 'outcome', 'outcomes', 'impact',
 ]);
 const NAMED_TOOL_LEXEME_PATTERN = /(?:\.NET|\p{Lu}[\p{L}\p{N}]*(?:\.[\p{L}\p{N}]+)*(?:\+\+|#)?)/gu;
@@ -299,6 +327,13 @@ type SummaryV3StyleEntryIdentitySurface = Readonly<{
   readonly normalizedValue: string;
 }>;
 
+type SummaryV3StyleRoleIdentityStatus = 'not_assessed' | 'equivalent' | 'contradiction' | 'unresolved';
+
+type SummaryV3StyleRoleIdentityDecision = Readonly<{
+  status: SummaryV3StyleRoleIdentityStatus;
+  selectedEntryId: string | null;
+}>;
+
 /**
  * Resolve entry identity only through exact fact anchors. A visible longer
  * same-kind surface wins over its literal phrase prefix (`Acme Labs` over
@@ -310,12 +345,22 @@ function exactEntryIdentitySurfaces(
 ): readonly SummaryV3StyleEntryIdentitySurface[] {
   return snapshot.selectedEntries.flatMap((entry) => (['role', 'employer'] as const).flatMap((kind) => {
     const value = snapshot.manifestFacts.find((fact) => fact.id === `${entry.stableId}:${kind}`)?.text;
-    return value ? [immutableCopy({
+    const source = value ? [immutableCopy({
       entryId: entry.stableId,
       kind,
       value,
       normalizedValue: normalizeSummaryV3StyleText(value).toLocaleLowerCase(),
     }) as SummaryV3StyleEntryIdentitySurface] : [];
+    if (kind !== 'role' || !entry.rolePresentation) return source;
+    return [
+      ...source,
+      immutableCopy({
+        entryId: entry.stableId,
+        kind: 'role' as const,
+        value: entry.rolePresentation.text,
+        normalizedValue: normalizeSummaryV3StyleText(entry.rolePresentation.text).toLocaleLowerCase(),
+      }) as SummaryV3StyleEntryIdentitySurface,
+    ];
   }));
 }
 
@@ -672,26 +717,92 @@ function hasExplicitSourceIdentityInconsistency(snapshot: SummaryV3StyleOperatio
 }
 
 /**
- * Optional page annotations are not the only identity evidence. A compact,
- * direct English role/employer frame in the visible source is itself a
- * manifest-validation claim. Keep this deliberately bounded: native/other
- * forms remain evaluator-owned, while an overt `is a Role at Employer` (or
- * `works as Role at Employer`) mismatch never reaches a writer.
+ * Decide the bounded role/employer identity relation for one overt role frame.
+ * Exact source or validated entry-owned presentation surfaces are equivalent;
+ * a known role belonging to another entry or same-locale mismatch is a real
+ * contradiction. A different locale without validated presentation evidence
+ * is unresolved and remains evaluator-owned, never silently accepted.
  */
-function hasUnannotatedSourceRoleEmployerFrameInconsistency(snapshot: SummaryV3StyleOperationSnapshot): boolean {
-  if (snapshot.mode !== 'enhance_existing_content') return false;
+function roleEmployerFrameDecision(
+  snapshot: SummaryV3StyleOperationSnapshot,
+  roleSurface: string,
+  employerSurface: string,
+): SummaryV3StyleRoleIdentityDecision {
   const identities = exactEntryIdentitySurfaces(snapshot);
+  if (snapshot.mode !== 'enhance_existing_content') return { status: 'not_assessed', selectedEntryId: null };
   const normalizeEmployerIdentity = (value: string): string => normalizeSummaryV3StyleText(value)
     .toLocaleLowerCase()
     // The bounded corporate suffix grammar leaves a terminal organization
     // period as sentence punctuation (`Atlas, Inc.`), rather than making it
     // part of the identity capture. It is not a different employer claim.
     .replace(/\.$/u, '');
-  const pairs = snapshot.selectedEntries.map((entry) => ({
-    role: identities.find((identity) => identity.entryId === entry.stableId && identity.kind === 'role')?.normalizedValue || '',
-    employer: normalizeEmployerIdentity(identities.find((identity) => identity.entryId === entry.stableId && identity.kind === 'employer')?.value || ''),
-  })).filter((pair) => pair.role && pair.employer);
-  if (pairs.length === 0) return false;
+  const normalizedRole = normalizeSummaryV3StyleText(roleSurface).toLocaleLowerCase();
+  const normalizedEmployer = normalizeEmployerIdentity(employerSurface);
+  const employerEntries = snapshot.selectedEntries.filter((entry) => (
+    normalizeEmployerIdentity(identities.find((identity) => identity.entryId === entry.stableId && identity.kind === 'employer')?.value || '')
+      === normalizedEmployer
+  ));
+  const currentEntry = snapshot.currentRoleEntryId
+    ? snapshot.selectedEntries.find((entry) => entry.stableId === snapshot.currentRoleEntryId) || null
+    : null;
+  const currentEmployerMatches = Boolean(currentEntry && employerEntries.some((entry) => entry.stableId === currentEntry!.stableId));
+  if (!currentEmployerMatches) return { status: 'contradiction', selectedEntryId: null };
+  const exactRoleEntryIds = new Set(identities
+    .filter((identity) => identity.kind === 'role' && identity.normalizedValue === normalizedRole)
+    .map((identity) => identity.entryId));
+  if (exactRoleEntryIds.has(currentEntry!.stableId)) {
+    return { status: 'equivalent', selectedEntryId: currentEntry!.stableId };
+  }
+  // Japanese identity frames conventionally use a bounded role suffix
+  // (`エンジニア`) for a compound manifest role (`ソフトウェアエンジニア`).
+  // Preserve that previously validated locale-specific equivalence without
+  // turning generic cross-locale token overlap into identity authority.
+  if (snapshot.requestedLocale === 'ja') {
+    const suffixForEmployer = employerEntries.filter((entry) => {
+      const role = identities.find((identity) => identity.entryId === entry.stableId && identity.kind === 'role')?.normalizedValue || '';
+      return normalizedRole.length >= 2 && role.endsWith(normalizedRole);
+    });
+    if (suffixForEmployer.length === 1) {
+      return { status: 'equivalent', selectedEntryId: suffixForEmployer[0]!.stableId };
+    }
+  }
+  // A role that is exact for another entry is never borrowed through a shared
+  // employer or aggregate manifest vocabulary.
+  if (exactRoleEntryIds.size > 0) return { status: 'contradiction', selectedEntryId: null };
+
+  const sourceRoleLocale = canonicalSummaryV3StyleLocale(detectRoleLabelSourceLocale(roleSurface))
+    || snapshot.requestedLocale;
+  const matchingRoleLocale = [currentEntry]
+    .filter((entry): entry is NonNullable<typeof currentEntry> => Boolean(entry))
+    .map((entry) => canonicalSummaryV3StyleLocale(entry.roleSourceLocale || '')
+      || canonicalSummaryV3StyleLocale(detectRoleLabelSourceLocale(
+        identities.find((identity) => identity.entryId === entry.stableId && identity.kind === 'role')?.value || '',
+      ))
+      || snapshot.requestedLocale);
+  if (matchingRoleLocale.some((locale) => locale !== sourceRoleLocale)) {
+    return { status: 'unresolved', selectedEntryId: currentEntry!.stableId };
+  }
+  return { status: 'contradiction', selectedEntryId: null };
+}
+
+/**
+ * Optional page annotations are not the only identity evidence. A compact,
+ * direct role/employer frame in the visible source is itself a
+ * manifest-validation claim. Keep this deliberately bounded: native/other
+ * forms remain evaluator-owned, while an overt mismatch is rejected only
+ * when it is a proven contradiction.
+ */
+function roleEmployerIdentityDecision(
+  snapshot: SummaryV3StyleOperationSnapshot,
+  text = snapshot.sourceSummary,
+): SummaryV3StyleRoleIdentityDecision {
+  if (snapshot.mode !== 'enhance_existing_content') return { status: 'not_assessed', selectedEntryId: null };
+  const identities = exactEntryIdentitySurfaces(snapshot);
+  const hasIdentity = snapshot.selectedEntries.some((entry) => (
+    identities.some((identity) => identity.entryId === entry.stableId && identity.kind === 'role')
+    && identities.some((identity) => identity.entryId === entry.stableId && identity.kind === 'employer')
+  ));
+  if (!hasIdentity) return { status: 'not_assessed', selectedEntryId: null };
   const casedToken = "[\\p{Lu}][\\p{L}\\p{N}&/'’+#-]*";
   const casedSurface = `${casedToken}(?:\\s+${casedToken}){0,4}`;
   // The overt English identity grammar is the guard. Role and employer
@@ -712,69 +823,59 @@ function hasUnannotatedSourceRoleEmployerFrameInconsistency(snapshot: SummaryV3S
     `(?:^|[.!?。！？।]\\s*)${casedSurface},\\s*(?:an?\\s+)?(${roleSurface})\\s+(?:at|with)\\s+(${employerSurface})(?=$|[.!?。！？।,;:]|\\s+(?:for|from|since|who|where|while|and|but|with|on|during|after|before)\\b)`,
     'gu',
   );
-  const source = normalizeSummaryV3StyleText(snapshot.sourceSummary);
+  const source = normalizeSummaryV3StyleText(text);
   const literalRegex = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
   const frames = [
     ...Array.from(source.matchAll(directFrame)),
     ...Array.from(source.matchAll(appositionalFrame)),
-  ];
-  if (frames.some((match) => {
-    const role = normalizeSummaryV3StyleText(match[1] || '').toLocaleLowerCase();
-    const employer = normalizeEmployerIdentity(match[2] || '');
-    return !pairs.some((pair) => pair.role === role && pair.employer === employer);
-  })) return true;
+  ].map((match) => ({ role: match[1] || '', employer: match[2] || '' }));
+  if (frames.length > 0) {
+    const decisions = frames.map((frame) => roleEmployerFrameDecision(snapshot, frame.role, frame.employer));
+    if (decisions.some((decision) => decision.status === 'contradiction')) return { status: 'contradiction', selectedEntryId: null };
+    if (decisions.some((decision) => decision.status === 'unresolved')) return { status: 'unresolved', selectedEntryId: decisions.find((decision) => decision.selectedEntryId)?.selectedEntryId || null };
+    return { status: 'equivalent', selectedEntryId: decisions.find((decision) => decision.selectedEntryId)?.selectedEntryId || null };
+  }
   // These are deliberately small, direct locale grammars—not a general
   // classifier. They use an exact manifest employer and an overt local role
   // frame, so an unannotated contradictory source never gains safe-no-op
   // authority. Other natural-language forms remain evaluator-owned.
   const localeSource = source.toLocaleLowerCase();
-  const roleIsCompatible = (candidateRole: string, sourceRole: string): boolean => {
-    const role = normalizeSummaryV3StyleText(sourceRole).toLocaleLowerCase();
-    // A visible role may use an exact suffix of a manifest compound (for
-    // example Japanese `エンジニア` for `ソフトウェアエンジニア`), but a
-    // different full role does not become compatible through token overlap.
-    return candidateRole === role || (role.length >= 2 && candidateRole.endsWith(role));
-  };
-  const frameHasMismatch = (pair: typeof pairs[number], frame: RegExp): boolean => Array.from(localeSource.matchAll(frame))
-    .some((match) => {
-      const role = match[1] || '';
-      return !pairs.some((candidate) => candidate.employer === pair.employer
-        && roleIsCompatible(candidate.role, role));
+  const localizedFrames = (patternForEmployer: (employer: string) => RegExp): Array<{ role: string; employer: string }> =>
+    snapshot.selectedEntries.flatMap((entry) => {
+      const employer = identities.find((identity) => identity.entryId === entry.stableId && identity.kind === 'employer')?.value || '';
+      if (!employer) return [];
+      return Array.from(localeSource.matchAll(patternForEmployer(employer)), (match) => ({ role: match[1] || '', employer }));
     });
+  const decideLocalizedFrames = (framesForLocale: Array<{ role: string; employer: string }>): SummaryV3StyleRoleIdentityDecision => {
+    if (framesForLocale.length === 0) return { status: 'not_assessed', selectedEntryId: null };
+    const decisions = framesForLocale.map((frame) => roleEmployerFrameDecision(snapshot, frame.role, frame.employer));
+    if (decisions.some((decision) => decision.status === 'contradiction')) return { status: 'contradiction', selectedEntryId: null };
+    if (decisions.some((decision) => decision.status === 'unresolved')) return { status: 'unresolved', selectedEntryId: decisions.find((decision) => decision.selectedEntryId)?.selectedEntryId || null };
+    return { status: 'equivalent', selectedEntryId: decisions.find((decision) => decision.selectedEntryId)?.selectedEntryId || null };
+  };
   const localeRoleSurface = '[\\p{L}\\p{M}\\p{N}ー #+.-]{1,64}?';
   if (snapshot.requestedLocale === 'ja') {
-    return pairs.some((pair) => frameHasMismatch(pair, new RegExp(
-      `${literalRegex(pair.employer)}の(${localeRoleSurface})として`,
-      'gu',
-    )));
+    return decideLocalizedFrames(localizedFrames((employer) => new RegExp(`${literalRegex(employer)}の(${localeRoleSurface})として`, 'giu')));
   }
   if (snapshot.requestedLocale === 'de') {
-    return pairs.some((pair) => frameHasMismatch(pair, new RegExp(
-      `\\b(?:ist|war)\\s+(?:ein(?:e|en|em|er)?\\s+)?(${localeRoleSurface})\\s+(?:bei|in)\\s+${literalRegex(pair.employer)}(?=$|[.!?])`,
-      'gu',
-    )));
+    return decideLocalizedFrames(localizedFrames((employer) => new RegExp(`\\b(?:ist|war)\\s+(?:ein(?:e|en|em|er)?\\s+)?(${localeRoleSurface})\\s+(?:bei|in)\\s+${literalRegex(employer)}(?=$|[.!?])`, 'giu')));
   }
   if (snapshot.requestedLocale === 'sr') {
-    return pairs.some((pair) => frameHasMismatch(pair, new RegExp(
-      `\\bje\\s+(${localeRoleSurface})\\s+u\\s+${literalRegex(pair.employer)}(?:[a-zčćđšž]{0,3})?(?=$|[.!?])`,
-      'gu',
-    )));
+    return decideLocalizedFrames(localizedFrames((employer) => new RegExp(`\\bje\\s+(${localeRoleSurface})\\s+u\\s+${literalRegex(employer)}(?:[a-zčćđšž]{0,3})?(?=$|[.!?])`, 'giu')));
   }
   if (snapshot.requestedLocale === 'hi') {
     const hindiRoleToken = '[\\p{L}\\p{M}\\p{N}ー#+.-]+';
     const hindiDirectRoleSurface = `${hindiRoleToken}(?:\\s+${hindiRoleToken}){0,4}?`;
-    return pairs.some((pair) => frameHasMismatch(pair, new RegExp(
-      `${literalRegex(pair.employer)}\\s+में\\s+(${hindiDirectRoleSurface})\\s+(?:है|हैं|था|थी|थे)`,
-      'gu',
-    )));
+    return decideLocalizedFrames(localizedFrames((employer) => new RegExp(`${literalRegex(employer)}\\s+में\\s+(${hindiDirectRoleSurface})\\s+(?:है|हैं|था|थी|थे)`, 'giu')));
   }
   if (snapshot.requestedLocale === 'ar') {
-    return pairs.some((pair) => frameHasMismatch(pair, new RegExp(
-      `(?:^|[.!?؟]\\s*)[\\p{Script=Arabic}\\p{M}]{2,}\\s+(${localeRoleSurface})\\s+في\\s+${literalRegex(pair.employer)}(?=$|[.!?؟])`,
-      'gu',
-    )));
+    return decideLocalizedFrames(localizedFrames((employer) => new RegExp(`(?:^|[.!?؟]\\s*)[\\p{Script=Arabic}\\p{M}]{2,}\\s+(${localeRoleSurface})\\s+في\\s+${literalRegex(employer)}(?=$|[.!?؟])`, 'giu')));
   }
-  return false;
+  return { status: 'not_assessed', selectedEntryId: null };
+}
+
+function hasUnannotatedSourceRoleEmployerFrameInconsistency(snapshot: SummaryV3StyleOperationSnapshot): boolean {
+  return roleEmployerIdentityDecision(snapshot).status === 'contradiction';
 }
 
 /**
@@ -1322,7 +1423,7 @@ function parseEvaluatorOutput(
   }
   const payload = value.input;
   if (!summaryV3StyleHasExactKeys(payload, [
-    'operationId', 'snapshotHash', 'manifestHash', 'style', 'locale', 'candidateHash', 'candidateUnitHashes', 'phases', 'representedFactIdHashes', 'missingFactIdHashes', 'styleEvidence',
+    'operationId', 'snapshotHash', 'manifestHash', 'style', 'locale', 'candidateHash', 'candidateUnitHashes', 'phases', 'representedFactIdHashes', 'missingFactIdHashes', 'roleIdentityResolution', 'styleEvidence',
   ])
     || !exactIdentity(payload, snapshot) || !isSummaryV3StyleRecord(payload.phases)) {
     return evaluatorFailure('evaluator_transport_malformed');
@@ -1337,12 +1438,15 @@ function parseEvaluatorOutput(
   }
   const representedFactIdHashes = payload.representedFactIdHashes;
   const missingFactIdHashes = payload.missingFactIdHashes;
+  const roleIdentityResolution = payload.roleIdentityResolution;
   if (!Array.isArray(representedFactIdHashes) || !Array.isArray(missingFactIdHashes)
     || representedFactIdHashes.length > 256 || missingFactIdHashes.length > 256
     || representedFactIdHashes.some((hash) => !summaryV3StyleIsNonBlank(hash) || hash.length > 80)
     || missingFactIdHashes.some((hash) => !summaryV3StyleIsNonBlank(hash) || hash.length > 80)
     || new Set(representedFactIdHashes).size !== representedFactIdHashes.length
-    || new Set(missingFactIdHashes).size !== missingFactIdHashes.length) {
+    || new Set(missingFactIdHashes).size !== missingFactIdHashes.length
+    || typeof roleIdentityResolution !== 'string'
+    || !(SUMMARY_V3_STYLE_M5_ROLE_IDENTITY_RESOLUTIONS as readonly string[]).includes(roleIdentityResolution)) {
     return evaluatorFailure('evaluator_transport_malformed');
   }
   const allowedFactHashes = new Set(snapshot.requiredFacts.map((fact) => fact.hash));
@@ -1383,6 +1487,7 @@ function parseEvaluatorOutput(
       phases,
       representedFactIdHashes,
       missingFactIdHashes,
+      roleIdentityResolution: roleIdentityResolution as SummaryV3StyleRoleIdentityResolution,
       styleEvidence,
     },
   });
@@ -1390,6 +1495,60 @@ function parseEvaluatorOutput(
 
 function allViolations(evaluation: ParsedEvaluation): readonly SummaryV3StyleViolation[] {
   return REQUIRED_PHASES.flatMap((phase) => evaluation.phases[phase].violations);
+}
+
+function unsupportedClaimCategory(
+  snapshot: SummaryV3StyleOperationSnapshot,
+  candidateText: string,
+  evaluation: ParsedEvaluation | null = null,
+): SummaryV3StyleUnsupportedClaimCategory {
+  if (hasUnsupportedNumericMetric(snapshot, candidateText)) return 'unsupported_metric';
+  if (hasUnattestedNonnumericMaterialResultRelation(snapshot, candidateText)) return 'unsupported_result_relation';
+  if (hasUnsupportedAuthorityOrSeniority(snapshot, candidateText)) return 'unsupported_authority';
+  if (hasInjectedManifestFact(snapshot, candidateText)) return 'manifest_ceiling_mismatch';
+  if (hasUnsupportedSourceInconsistency(snapshot)
+    || hasUnsupportedCandidateSemanticMaterial(snapshot, candidateText)
+    || hasUnsupportedCandidateNamedToolSurface(snapshot, candidateText)
+    || hasEmploymentStateContradiction(snapshot, candidateText)) return 'source_floor_mismatch';
+  const codes = evaluation ? allViolations(evaluation).map((violation) => violation.code) : [];
+  if (codes.includes('unsupported_metric')) return 'unsupported_metric';
+  if (codes.includes('unsupported_authority')) return 'unsupported_authority';
+  return codes.includes('unsupported_claim') ? 'other_typed_category' : 'other_typed_category';
+}
+
+function sourceRetainingSafeNoOpEligibilityReason(
+  snapshot: SummaryV3StyleOperationSnapshot,
+): SummaryV3StyleSafeNoOpEligibilityReason {
+  if (snapshot.style !== 'stronger') return 'wrong_style';
+  if (snapshot.mode !== 'enhance_existing_content') return 'wrong_mode';
+  if (!summaryV3StyleIsNonBlank(snapshot.sourceSummary)) return 'source_empty';
+  if (!summaryV3StyleLocaleSurfaceMatches(snapshot.sourceSummary, snapshot.requestedLocale)) {
+    return 'source_locale_surface_mismatch';
+  }
+  if (!summaryV3StyleLocaleContentMatches(snapshot.sourceSummary, snapshot.requestedLocale)) {
+    return 'source_locale_content_mismatch';
+  }
+  // The visible Summary remains the source floor. Manifest facts are only a
+  // validation ceiling, including when their persisted Experience locale is
+  // different from the Summary locale; no Experience-locale comparison lives
+  // in this source-retention decision.
+  const roleIdentity = roleEmployerIdentityDecision(snapshot);
+  if (roleIdentity.status === 'contradiction') {
+    return 'role_employer_frame_inconsistency';
+  }
+  // A cross-locale role frame without a source-bound target surface is not a
+  // contradiction, but it is not eligible for a silent source-retaining no-op.
+  // The bounded M5 evaluator must establish equivalence for a real rewrite.
+  if (roleIdentity.status === 'unresolved') return 'source_inconsistency';
+  if (hasUnsupportedSourceNonnumericMaterialResultRelation(snapshot)) {
+    return 'source_material_result_relation';
+  }
+  if (hasUnsupportedSourceInconsistency(snapshot)) return 'source_inconsistency';
+  return 'eligible';
+}
+
+function sourceRetainingSafeNoOpAllowed(snapshot: SummaryV3StyleOperationSnapshot): boolean {
+  return sourceRetainingSafeNoOpEligibilityReason(snapshot) === 'eligible';
 }
 
 function sameOrderedFactIds(
@@ -1443,6 +1602,16 @@ function repairCandidateStaysWithinViolationScope(
 
 function allPhasesPassed(evaluation: ParsedEvaluation): boolean {
   return REQUIRED_PHASES.every((phase) => evaluation.phases[phase].status === 'passed');
+}
+
+function roleIdentityResolutionFailure(
+  snapshot: SummaryV3StyleOperationSnapshot,
+  evaluation: ParsedEvaluation,
+): Extract<SummaryV3StyleFailureReason, 'unsupported_claim'> | null {
+  if (evaluation.roleIdentityResolution === 'contradiction'
+    || evaluation.roleIdentityResolution === 'unresolved') return 'unsupported_claim';
+  return roleEmployerIdentityDecision(snapshot).status === 'unresolved'
+    && evaluation.roleIdentityResolution !== 'equivalent' ? 'unsupported_claim' : null;
 }
 
 function styleFulfilled(styleEvidence: ParsedStyleEvidence): boolean {
@@ -1528,6 +1697,20 @@ interface EvidenceUpdate {
   readonly candidate?: SummaryV3StyleCandidate | null;
   readonly evaluation?: ParsedEvaluation | null;
   readonly localFailureReason?: SummaryV3StyleFailureReason | null;
+  readonly unsupportedClaimCategory?: SummaryV3StyleUnsupportedClaimCategory | null;
+  readonly safeNoOpConsidered?: boolean;
+  readonly safeNoOpSelected?: boolean;
+  readonly safeNoOpEligibilityReason?: SummaryV3StyleSafeNoOpEligibilityReason;
+  readonly m5ProviderFailure?: SummaryV3ProviderFailureEnvelope | null;
+}
+
+function orchestrationProviderFailure(
+  error: unknown,
+  phase: SummaryV3ProviderPhase,
+): SummaryV3ProviderFailureEnvelope {
+  return error instanceof SummaryV3ProviderTransportError
+    ? error.envelope
+    : classifySummaryV3ProviderFailure(error, phase, 'orchestration');
 }
 
 function localFailureViolationCode(reason: SummaryV3StyleFailureReason | null | undefined): SummaryV3StyleViolationCode | null {
@@ -1566,7 +1749,9 @@ function makeEvidence(snapshot: SummaryV3StyleOperationSnapshot, update: Evidenc
     return result;
   }, {} as Record<SummaryV3StylePhase, SummaryV3StylePhaseStatus | 'not_evaluated'>);
   if (localPhase) phaseStatuses[localPhase] = 'failed';
-  const meaningfulChangeDetected = candidate
+  const meaningfulChangeDetected = update.safeNoOpSelected
+    ? false
+    : candidate
     ? snapshot.mode === 'generate_from_context'
       ? candidate.normalizedLength > 0
       : normalizeSummaryV3StyleText(candidate.text) !== normalizeSummaryV3StyleText(snapshot.sourceSummary)
@@ -1600,7 +1785,21 @@ function makeEvidence(snapshot: SummaryV3StyleOperationSnapshot, update: Evidenc
     styleFulfilled: evaluation ? !localViolation && styleFulfilled(evaluation.styleEvidence) : null,
     styleEvidence: safeStyleEvidence,
     meaningfulChangeDetected,
-    noOpDetected: evaluation ? !localViolation && styleNoOp(evaluation.styleEvidence) : false,
+    noOpDetected: update.safeNoOpSelected
+      ? true
+      : evaluation ? !localViolation && styleNoOp(evaluation.styleEvidence) : false,
+    unsupportedClaimCategory: update.unsupportedClaimCategory ?? null,
+    writerCandidateReachedValidation: Boolean(candidate && (update.writerAttempts ?? 0) > 0),
+    evaluatorReached: (update.evaluatorAttempts ?? 0) > 0,
+    safeNoOpConsidered: update.safeNoOpConsidered ?? false,
+    safeNoOpSelected: update.safeNoOpSelected ?? false,
+    safeNoOpEligibilityReason: update.safeNoOpEligibilityReason
+      ?? sourceRetainingSafeNoOpEligibilityReason(snapshot),
+    roleIdentityResolution: evaluation?.roleIdentityResolution
+      ?? (roleEmployerIdentityDecision(snapshot).status === 'unresolved' ? 'unresolved'
+        : roleEmployerIdentityDecision(snapshot).status === 'contradiction' ? 'contradiction'
+          : 'not_required'),
+    m5ProviderFailure: update.m5ProviderFailure ?? null,
   }) as SummaryV3StyleEvidence;
   // All retained fields are bounded scalars, hashes, fixed phases, or finite
   // code sets. Keep the complete evidence so the terminal size gate can fail
@@ -1684,6 +1883,7 @@ function writerInput(snapshot: SummaryV3StyleOperationSnapshot): SummaryV3StyleW
     requiredFacts: snapshot.requiredFacts,
     transformableDuty: snapshot.transformableDuty,
     entityLocks: snapshot.entityLocks,
+    roleIdentity: roleEmployerIdentityDecision(snapshot),
     styleContract,
     forcedTool: {
       toolName: SUMMARY_V3_STYLE_M5_WRITER_TOOL_NAME,
@@ -1697,6 +1897,10 @@ function writerInput(snapshot: SummaryV3StyleOperationSnapshot): SummaryV3StyleW
 }
 
 function evaluatorInput(snapshot: SummaryV3StyleOperationSnapshot, candidate: SummaryV3StyleCandidate): SummaryV3StyleEvaluatorInput {
+  const roleIdentity = roleEmployerIdentityDecision(snapshot);
+  const selectedEntry = roleIdentity.selectedEntryId
+    ? snapshot.selectedEntries.find((entry) => entry.stableId === roleIdentity.selectedEntryId) || null
+    : null;
   return immutableCopy({
     operationId: snapshot.operationId,
     snapshotHash: snapshot.snapshotHash,
@@ -1715,6 +1919,17 @@ function evaluatorInput(snapshot: SummaryV3StyleOperationSnapshot, candidate: Su
     transformableDuty: snapshot.transformableDuty,
     manifestValidationCeiling: snapshot.manifestFacts,
     entityLocks: snapshot.entityLocks,
+    roleIdentity: {
+      ...roleIdentity,
+      structuredRole: selectedEntry
+        ? snapshot.manifestFacts.find((fact) => fact.id === `${selectedEntry.stableId}:role`)?.text || null
+        : null,
+      roleSourceLocale: selectedEntry?.roleSourceLocale || null,
+      employer: selectedEntry
+        ? snapshot.manifestFacts.find((fact) => fact.id === `${selectedEntry.stableId}:employer`)?.text || null
+        : null,
+      rolePresentation: selectedEntry?.rolePresentation || null,
+    },
     forcedTool: {
       toolName: SUMMARY_V3_STYLE_M5_EVALUATOR_TOOL_NAME,
       toolChoice: 'required',
@@ -1748,6 +1963,31 @@ function failureForEvaluation(evaluation: ParsedEvaluation): SummaryV3StyleFailu
 function candidateReady(snapshot: SummaryV3StyleOperationSnapshot, candidate: SummaryV3StyleCandidate, evidence: SummaryV3StyleEvidence): SummaryV3StyleResult {
   if (JSON.stringify(evidence).length > 8_192) return createSummaryV3StyleHandledFailure(snapshot, 'diagnostic_size_exceeded', evidence);
   return immutableCopy({ kind: 'candidate_ready', style: snapshot.style, mode: snapshot.mode, candidate, evidence }) as SummaryV3StyleResult;
+}
+
+function safeNoOpResult(
+  snapshot: SummaryV3StyleOperationSnapshot,
+  evidence: SummaryV3StyleEvidence,
+  category: SummaryV3StyleUnsupportedClaimCategory | null = evidence.unsupportedClaimCategory,
+): SummaryV3StyleResult {
+  const selectedEvidence = immutableCopy({
+    ...evidence,
+    meaningfulChangeDetected: false,
+    noOpDetected: true,
+    unsupportedClaimCategory: category,
+    safeNoOpConsidered: true,
+    safeNoOpSelected: true,
+  }) as SummaryV3StyleEvidence;
+  if (JSON.stringify(selectedEvidence).length > 8_192) {
+    return createSummaryV3StyleHandledFailure(snapshot, 'diagnostic_size_exceeded', selectedEvidence);
+  }
+  return immutableCopy({
+    kind: 'safe_no_op',
+    style: snapshot.style,
+    mode: 'enhance_existing_content',
+    typedReason: 'safe_no_op',
+    evidence: selectedEvidence,
+  }) as SummaryV3StyleResult;
 }
 
 /**
@@ -1797,14 +2037,19 @@ export async function executeSummaryV3StyleServer(
     || hasUnsupportedSourceNonnumericMaterialResultRelation(snapshot)) {
     return createSummaryV3StyleHandledFailure(snapshot, 'unsupported_claim', makeEvidence(snapshot, {
       localFailureReason: 'unsupported_claim',
+      unsupportedClaimCategory: 'source_floor_mismatch',
+      safeNoOpEligibilityReason: sourceRetainingSafeNoOpEligibilityReason(snapshot),
     }));
   }
 
   let rawWriter: unknown;
   try {
     rawWriter = await dependencies.write(writerInput(snapshot));
-  } catch {
-    return createSummaryV3StyleHandledFailure(snapshot, 'writer_request_failed', makeEvidence(snapshot, { writerAttempts: 1 }));
+  } catch (error) {
+    return createSummaryV3StyleHandledFailure(snapshot, 'writer_request_failed', makeEvidence(snapshot, {
+      writerAttempts: 1,
+      m5ProviderFailure: orchestrationProviderFailure(error, 'initial_writer'),
+    }));
   }
   const parsedWriter = parseWriterOutput(rawWriter, snapshot);
   if (!parsedWriter.ok) return createSummaryV3StyleHandledFailure(snapshot, parsedWriter.reason, makeEvidence(snapshot, { writerAttempts: 1 }));
@@ -1813,45 +2058,83 @@ export async function executeSummaryV3StyleServer(
   // authority; the broader local style/authority checks retain their normal
   // post-evaluator evidence path below.
   if (hasUnattestedNonnumericMaterialResultRelation(snapshot, parsedWriter.candidate.text)) {
-    return createSummaryV3StyleHandledFailure(snapshot, 'unsupported_claim', makeEvidence(snapshot, {
+    const category = unsupportedClaimCategory(snapshot, parsedWriter.candidate.text);
+    const evidence = makeEvidence(snapshot, {
       writerAttempts: 1,
       candidate: parsedWriter.candidate,
       localFailureReason: 'unsupported_claim',
-    }));
+      unsupportedClaimCategory: category,
+      safeNoOpConsidered: sourceRetainingSafeNoOpAllowed(snapshot),
+    });
+    return sourceRetainingSafeNoOpAllowed(snapshot)
+      ? safeNoOpResult(snapshot, evidence, category)
+      : createSummaryV3StyleHandledFailure(snapshot, 'unsupported_claim', evidence);
   }
 
   let rawEvaluator: unknown;
   try {
     rawEvaluator = await dependencies.evaluate(evaluatorInput(snapshot, parsedWriter.candidate));
-  } catch {
-    return createSummaryV3StyleHandledFailure(snapshot, 'evaluator_request_failed', makeEvidence(snapshot, { writerAttempts: 1, evaluatorAttempts: 1, candidate: parsedWriter.candidate }));
+  } catch (error) {
+    return createSummaryV3StyleHandledFailure(snapshot, 'evaluator_request_failed', makeEvidence(snapshot, {
+      writerAttempts: 1,
+      evaluatorAttempts: 1,
+      candidate: parsedWriter.candidate,
+      m5ProviderFailure: orchestrationProviderFailure(error, 'initial_evaluator'),
+    }));
   }
   const parsedEvaluator = parseEvaluatorOutput(rawEvaluator, snapshot, parsedWriter.candidate);
   if (!parsedEvaluator.ok) return createSummaryV3StyleHandledFailure(snapshot, parsedEvaluator.reason, makeEvidence(snapshot, { writerAttempts: 1, evaluatorAttempts: 1, candidate: parsedWriter.candidate }));
   const initialHardRejection = localHardRejection(snapshot, parsedWriter.candidate.text);
-  const initialStyleFailure = initialHardRejection || (allPhasesPassed(parsedEvaluator.evaluation)
+  const initialRoleIdentityFailure = roleIdentityResolutionFailure(snapshot, parsedEvaluator.evaluation);
+  const initialStyleFailure = initialHardRejection || initialRoleIdentityFailure || (allPhasesPassed(parsedEvaluator.evaluation)
     ? localStyleFailure(snapshot, parsedWriter.candidate, parsedEvaluator.evaluation.styleEvidence)
     : null);
+  const initialEvaluationFailure = allPhasesPassed(parsedEvaluator.evaluation)
+    ? null
+    : failureForEvaluation(parsedEvaluator.evaluation);
+  const initialTerminalFailure = initialStyleFailure || initialEvaluationFailure;
+  const initialUnsupportedCategory = initialTerminalFailure === 'unsupported_claim'
+    ? initialRoleIdentityFailure ? 'source_floor_mismatch'
+      : unsupportedClaimCategory(snapshot, parsedWriter.candidate.text, parsedEvaluator.evaluation)
+    : null;
   const initialEvidence = makeEvidence(snapshot, {
     writerAttempts: 1, evaluatorAttempts: 1, candidate: parsedWriter.candidate, evaluation: parsedEvaluator.evaluation,
     localFailureReason: initialStyleFailure,
+    unsupportedClaimCategory: initialUnsupportedCategory,
+    safeNoOpConsidered: initialTerminalFailure === 'unsupported_claim'
+      && sourceRetainingSafeNoOpAllowed(snapshot),
   });
   if (initialHardRejection) {
-    return createSummaryV3StyleHandledFailure(snapshot, initialHardRejection, initialEvidence);
+    return sourceRetainingSafeNoOpAllowed(snapshot)
+      ? safeNoOpResult(snapshot, initialEvidence, initialUnsupportedCategory)
+      : createSummaryV3StyleHandledFailure(snapshot, initialHardRejection, initialEvidence);
   }
   if (allPhasesPassed(parsedEvaluator.evaluation) && !initialStyleFailure) {
     if (snapshot.mode === 'enhance_existing_content' && parsedEvaluator.evaluation.styleEvidence.noOpDetected) {
-      return immutableCopy({ kind: 'safe_no_op', style: snapshot.style, mode: 'enhance_existing_content', typedReason: 'safe_no_op', evidence: initialEvidence }) as SummaryV3StyleResult;
+      const sourceRetainingAllowed = snapshot.style !== 'stronger' || sourceRetainingSafeNoOpAllowed(snapshot);
+      return sourceRetainingAllowed
+        ? safeNoOpResult(snapshot, initialEvidence)
+        : createSummaryV3StyleHandledFailure(snapshot, 'unsupported_claim', makeEvidence(snapshot, {
+          writerAttempts: 1,
+          evaluatorAttempts: 1,
+          candidate: parsedWriter.candidate,
+          evaluation: parsedEvaluator.evaluation,
+          localFailureReason: 'unsupported_claim',
+          unsupportedClaimCategory: 'source_floor_mismatch',
+        }));
     }
     return candidateReady(snapshot, parsedWriter.candidate, initialEvidence);
   }
   // A no-op is terminal.  A malformed or rejected no-op claim must fail closed,
   // never trigger a repair merely to manufacture a different Summary.
   if (snapshot.mode === 'enhance_existing_content' && parsedEvaluator.evaluation.styleEvidence.noOpDetected) {
-    return createSummaryV3StyleHandledFailure(snapshot, initialStyleFailure || failureForEvaluation(parsedEvaluator.evaluation), initialEvidence);
+    return createSummaryV3StyleHandledFailure(snapshot, initialTerminalFailure || 'evaluator_rejected', initialEvidence);
+  }
+  if (initialTerminalFailure === 'unsupported_claim' && sourceRetainingSafeNoOpAllowed(snapshot)) {
+    return safeNoOpResult(snapshot, initialEvidence, initialUnsupportedCategory);
   }
   if (!canRepair(parsedEvaluator.evaluation) || !dependencies.repairWrite || !dependencies.repairEvaluate) {
-    return createSummaryV3StyleHandledFailure(snapshot, initialStyleFailure || failureForEvaluation(parsedEvaluator.evaluation), initialEvidence);
+    return createSummaryV3StyleHandledFailure(snapshot, initialTerminalFailure || 'evaluator_rejected', initialEvidence);
   }
 
   const violations = allViolations(parsedEvaluator.evaluation);
@@ -1860,9 +2143,10 @@ export async function executeSummaryV3StyleServer(
     rawRepairWriter = await dependencies.repairWrite(immutableCopy({
       ...writerInput(snapshot), originalCandidate: parsedWriter.candidate, violations, repairOnly: true as const,
     }) as SummaryV3StyleRepairWriterInput);
-  } catch {
+  } catch (error) {
     return createSummaryV3StyleHandledFailure(snapshot, 'repair_request_failed', makeEvidence(snapshot, {
       writerAttempts: 1, evaluatorAttempts: 1, repairWriterAttempts: 1, candidate: parsedWriter.candidate, evaluation: parsedEvaluator.evaluation,
+      m5ProviderFailure: orchestrationProviderFailure(error, 'repair_writer'),
     }));
   }
   const parsedRepairWriter = parseWriterOutput(rawRepairWriter, snapshot);
@@ -1888,10 +2172,11 @@ export async function executeSummaryV3StyleServer(
   let rawRepairEvaluator: unknown;
   try {
     rawRepairEvaluator = await dependencies.repairEvaluate(evaluatorInput(snapshot, parsedRepairWriter.candidate));
-  } catch {
+  } catch (error) {
     return createSummaryV3StyleHandledFailure(snapshot, 'repair_evaluator_request_failed', makeEvidence(snapshot, {
       writerAttempts: 1, evaluatorAttempts: 1, repairWriterAttempts: 1, repairEvaluatorAttempts: 1,
       candidate: parsedRepairWriter.candidate,
+      m5ProviderFailure: orchestrationProviderFailure(error, 'post_repair_evaluator'),
     }));
   }
   const parsedRepairEvaluator = parseEvaluatorOutput(rawRepairEvaluator, snapshot, parsedRepairWriter.candidate);
@@ -1903,9 +2188,10 @@ export async function executeSummaryV3StyleServer(
   }
   const repairNoOpClaimed = snapshot.mode === 'enhance_existing_content' && parsedRepairEvaluator.evaluation.styleEvidence.noOpDetected;
   const repairHardRejection = localHardRejection(snapshot, parsedRepairWriter.candidate.text);
+  const repairRoleIdentityFailure = roleIdentityResolutionFailure(snapshot, parsedRepairEvaluator.evaluation);
   const repairStyleFailure = repairNoOpClaimed
     ? 'repair_rejected' as const
-    : repairHardRejection || (allPhasesPassed(parsedRepairEvaluator.evaluation)
+    : repairHardRejection || repairRoleIdentityFailure || (allPhasesPassed(parsedRepairEvaluator.evaluation)
       ? localStyleFailure(snapshot, parsedRepairWriter.candidate, parsedRepairEvaluator.evaluation.styleEvidence)
       : 'repair_rejected');
   const repairEvidence = makeEvidence(snapshot, {

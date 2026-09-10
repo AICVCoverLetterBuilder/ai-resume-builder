@@ -15,6 +15,9 @@ const {
   applyAndroidInternalApiContract,
 } = require('./android-internal-api-contract');
 const {
+  enforceAndroidInternalV3RoutingContract,
+} = require('./android-internal-v3-routing-contract');
+const {
   establishAndroidPackagingEnvironment,
   validateCheckedInCommercialState,
   assertManifest,
@@ -83,6 +86,7 @@ function runAndroidInternalBuild(options = {}) {
     ? process.env
     : { ...options.environment };
   const requiredEnv = (name) => readRequiredEnv(childEnvironment, name);
+  const v3RoutingContract = enforceAndroidInternalV3RoutingContract(childEnvironment);
 
   const apiContract = usesProcessEnvironment
     ? applyAndroidInternalApiContract(process.env)
@@ -150,11 +154,12 @@ function runAndroidInternalBuild(options = {}) {
     || !dependencies.fs.readFileSync(copiedMarker, 'utf8').includes(packagingMarker)) {
     fail(`missing copied packaging marker ${packagingMarker}`);
   }
-  console.log('[build:android:internal] OK copied Android assets are internal, V2-on, diagnostic-enabled, API-host verified, and RevenueCat-configured');
+  console.log('[build:android:internal] OK copied Android assets are internal, M5-on, legacy-V2-compatible, diagnostic-enabled, API-host verified, and RevenueCat-configured');
 
   return Object.freeze({
     ...apiContract,
     childEnvironment,
+    v3RoutingContract,
     expectedCommercialState,
     syncedCommercialManifest,
   });

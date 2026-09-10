@@ -166,6 +166,7 @@ function evaluatorEnvelope(input: SummaryV3StyleEvaluatorInput, options: {
   missingFactIdHashes?: readonly string[];
   candidateHash?: string;
   candidateUnitHashes?: readonly string[];
+  roleIdentityResolution?: unknown;
 } = {}) {
   return {
     toolName: SUMMARY_V3_STYLE_M5_EVALUATOR_TOOL_NAME,
@@ -183,6 +184,9 @@ function evaluatorEnvelope(input: SummaryV3StyleEvaluatorInput, options: {
       phases: options.phases || passingPhases(),
       representedFactIdHashes: options.representedFactIdHashes || input.requiredFacts.map((fact) => fact.hash),
       missingFactIdHashes: options.missingFactIdHashes || [],
+      roleIdentityResolution: Object.prototype.hasOwnProperty.call(options, 'roleIdentityResolution')
+        ? options.roleIdentityResolution
+        : input.roleIdentity.status === 'unresolved' ? 'equivalent' : 'not_required',
       styleEvidence: options.evidence || styleEvidence(input, options.noOpDetected),
     },
   };
@@ -1740,23 +1744,26 @@ describe('M5 shared injected Summary style server executor', () => {
     expect(result).toMatchObject({ kind: 'handled_failure', typedReason: 'candidate_malformed' });
   });
 
-  it('rejects context-ceiling prose injection even when a writer claims only visible fact IDs', async () => {
+  it('rejects context-ceiling prose injection and retains a valid Stronger source', async () => {
     const result = await executeSummaryV3StyleServer(requestFor('stronger'), {
       async write(input) { return writerEnvelope(input, `${candidateByStyle.stronger} Kubernetes`); },
       async evaluate(input) { return evaluatorEnvelope(input); },
     });
-    expect(result).toMatchObject({ kind: 'handled_failure', typedReason: 'unsupported_claim' });
-    if (result.kind === 'handled_failure') {
-      expect(result.evidence).toMatchObject({
-        unsupportedClaimCount: 1,
-        styleFulfilled: false,
-        phaseStatuses: { semantic_grounding: 'failed' },
-        styleEvidence: { fulfilled: false, rejectionReasons: ['unsupported_claim'] },
-      });
-    }
+    expect(result).toMatchObject({
+      kind: 'safe_no_op',
+      typedReason: 'safe_no_op',
+      evidence: {
+        unsupportedClaimCategory: 'manifest_ceiling_mismatch',
+        safeNoOpConsidered: true,
+        safeNoOpSelected: true,
+        meaningfulChangeDetected: false,
+        noOpDetected: true,
+      },
+    });
+    expect(result).not.toHaveProperty('candidate');
   });
 
-  it('rejects a nonnumeric invented revenue relation behind a Stronger predicate replacement before evaluator authority', async () => {
+  it('rejects a nonnumeric invented revenue relation and retains the valid Stronger source before evaluator authority', async () => {
     const sourceWithoutResult = 'Ava Patel is a Product Engineer at Atlas. She builds APIs for customers.';
     let evaluatorCalls = 0;
     const result = await executeSummaryV3StyleServer({
@@ -1771,7 +1778,11 @@ describe('M5 shared injected Summary style server executor', () => {
       },
       async evaluate() { evaluatorCalls += 1; return {}; },
     });
-    expect(result).toMatchObject({ kind: 'handled_failure', typedReason: 'unsupported_claim' });
+    expect(result).toMatchObject({
+      kind: 'safe_no_op', typedReason: 'safe_no_op',
+      evidence: { unsupportedClaimCategory: 'unsupported_result_relation', evaluatorReached: false, safeNoOpSelected: true },
+    });
+    expect(result).not.toHaveProperty('candidate');
     expect(evaluatorCalls).toBe(0);
   });
 
@@ -2338,7 +2349,7 @@ describe('M5 shared injected Summary style server executor', () => {
     expect(Object.isFrozen(repairInput?.violations)).toBe(true);
   });
 
-  it('never repairs unsupported claims or permits a second repair', async () => {
+  it('never repairs unsupported claims and retains the valid source as the sole safe terminal', async () => {
     const calls = { repairWriter: 0, repairEvaluator: 0 };
     const result = await executeSummaryV3StyleServer(requestFor('stronger'), {
       async write(input) { return writerEnvelope(input, candidateByStyle.stronger); },
@@ -2353,11 +2364,15 @@ describe('M5 shared injected Summary style server executor', () => {
       async repairWrite() { calls.repairWriter += 1; return {}; },
       async repairEvaluate() { calls.repairEvaluator += 1; return {}; },
     });
-    expect(result).toMatchObject({ kind: 'handled_failure', typedReason: 'unsupported_claim' });
+    expect(result).toMatchObject({
+      kind: 'safe_no_op', typedReason: 'safe_no_op',
+      evidence: { unsupportedClaimCategory: 'other_typed_category', safeNoOpSelected: true },
+    });
+    expect(result).not.toHaveProperty('candidate');
     expect(calls).toEqual({ repairWriter: 0, repairEvaluator: 0 });
   });
 
-  it('blocks repair when a local unsupported-authority guard contradicts repairable evaluator feedback', async () => {
+  it('blocks repair and retains source when a local unsupported-authority guard contradicts repairable evaluator feedback', async () => {
     const calls = { repairWriter: 0, repairEvaluator: 0 };
     const result = await executeSummaryV3StyleServer(requestFor('stronger'), {
       async write(input) {
@@ -2374,7 +2389,11 @@ describe('M5 shared injected Summary style server executor', () => {
       async repairWrite() { calls.repairWriter += 1; return {}; },
       async repairEvaluate() { calls.repairEvaluator += 1; return {}; },
     });
-    expect(result).toMatchObject({ kind: 'handled_failure', typedReason: 'unsupported_claim' });
+    expect(result).toMatchObject({
+      kind: 'safe_no_op', typedReason: 'safe_no_op',
+      evidence: { unsupportedClaimCategory: 'unsupported_authority', safeNoOpSelected: true },
+    });
+    expect(result).not.toHaveProperty('candidate');
     expect(calls).toEqual({ repairWriter: 0, repairEvaluator: 0 });
   });
 
@@ -2485,7 +2504,11 @@ describe('M5 shared injected Summary style server executor', () => {
         return evaluatorEnvelope(input, { phases });
       },
     });
-    expect(inventedMetric).toMatchObject({ kind: 'handled_failure', typedReason: 'unsupported_claim' });
+    expect(inventedMetric).toMatchObject({
+      kind: 'safe_no_op', typedReason: 'safe_no_op',
+      evidence: { unsupportedClaimCategory: 'unsupported_metric', safeNoOpSelected: true },
+    });
+    expect(inventedMetric).not.toHaveProperty('candidate');
     const provenOnly = await executeSummaryV3StyleServer(requestFor('stronger'), {
       async write(input) { return writerEnvelope(input, candidateByStyle.stronger.replace('Product Engineer', 'proven Product Engineer')); },
       async evaluate(input) { return evaluatorEnvelope(input); },
@@ -2505,7 +2528,11 @@ describe('M5 shared injected Summary style server executor', () => {
       async write(input) { return writerEnvelope(input, `${candidateByStyle.stronger} The work improved delivery by 30%.`); },
       async evaluate(input) { return evaluatorEnvelope(input); },
     });
-    expect(addedMetric).toMatchObject({ kind: 'handled_failure', typedReason: 'unsupported_claim' });
+    expect(addedMetric).toMatchObject({
+      kind: 'safe_no_op', typedReason: 'safe_no_op',
+      evidence: { unsupportedClaimCategory: 'unsupported_metric', safeNoOpSelected: true },
+    });
+    expect(addedMetric).not.toHaveProperty('candidate');
     const shorterAddedMetric = await executeSummaryV3StyleServer(requestFor('shorter'), {
       async write(input) { return writerEnvelope(input, `${candidateByStyle.shorter} It improved delivery by 30%.`); },
       async evaluate(input) { return evaluatorEnvelope(input); },
@@ -3393,7 +3420,11 @@ describe('M5 shared injected Summary style server executor', () => {
       async write(input) { return writerEnvelope(input, 'Ava Patel is a Product Engineer at Atlas. She led reliable APIs, mentors peers, and improved delivery by 20% over 24 months.'); },
       async evaluate(input) { calls.led += 1; return evaluatorEnvelope(input); },
     });
-    expect(led).toMatchObject({ kind: 'handled_failure', typedReason: 'unsupported_claim' });
+    expect(led).toMatchObject({
+      kind: 'safe_no_op', typedReason: 'safe_no_op',
+      evidence: { unsupportedClaimCategory: 'unsupported_authority', safeNoOpSelected: true },
+    });
+    expect(led).not.toHaveProperty('candidate');
     expect(calls).toEqual({ metric: 0, tool: 0, dottedTool: 0, currency: 0, duration: 0, laterName: 0, led: 1 });
   });
 

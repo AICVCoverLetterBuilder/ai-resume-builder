@@ -1,4 +1,5 @@
 import { immutableCopy } from './immutability';
+import type { SummaryV3ProviderFailureEnvelope } from './summary-generate';
 
 /**
  * M5.1 is deliberately a domain-only foundation.  It owns style authority and
@@ -22,6 +23,14 @@ export type SummaryV3StylePhase = (typeof SUMMARY_V3_STYLE_M5_PHASES)[number];
 
 export const SUMMARY_V3_STYLE_M5_SUPPORTED_LOCALES = ['en', 'de', 'sr', 'hi', 'ar', 'ja', 'fr', 'es', 'it', 'hr', 'pt-BR', 'ru'] as const;
 export type SummaryV3StyleSupportedLocale = (typeof SUMMARY_V3_STYLE_M5_SUPPORTED_LOCALES)[number];
+
+export const SUMMARY_V3_STYLE_M5_ROLE_IDENTITY_RESOLUTIONS = [
+  'not_required',
+  'equivalent',
+  'contradiction',
+  'unresolved',
+] as const;
+export type SummaryV3StyleRoleIdentityResolution = (typeof SUMMARY_V3_STYLE_M5_ROLE_IDENTITY_RESOLUTIONS)[number];
 
 /** Input ceilings keep the immutable M5.1 snapshot and its provider contracts bounded. */
 const SUMMARY_V3_STYLE_MAX_MANIFEST_ENTRIES = 64;
@@ -64,6 +73,32 @@ export type SummaryV3StyleFailureReason =
   | 'repair_evaluator_transport_malformed'
   | 'repair_rejected'
   | 'diagnostic_size_exceeded';
+
+/** Privacy-safe terminal category for a rejected Stronger writer candidate. */
+export type SummaryV3StyleUnsupportedClaimCategory =
+  | 'unsupported_metric'
+  | 'unsupported_result_relation'
+  | 'unsupported_achievement'
+  | 'unsupported_authority'
+  | 'source_floor_mismatch'
+  | 'manifest_ceiling_mismatch'
+  | 'other_typed_category';
+
+/**
+ * Bounded, source-only explanation of the M5 Stronger source-retaining
+ * safe-no-op decision. This records no Summary, manifest, or provider text.
+ */
+export type SummaryV3StyleSafeNoOpEligibilityReason =
+  | 'eligible'
+  | 'wrong_style'
+  | 'wrong_mode'
+  | 'source_empty'
+  | 'source_locale_surface_mismatch'
+  | 'source_locale_content_mismatch'
+  | 'source_inconsistency'
+  | 'role_employer_frame_inconsistency'
+  | 'source_material_result_relation'
+  | 'not_applicable';
 
 export type SummaryV3StyleViolationCode =
   | 'missing_fact'
@@ -110,10 +145,27 @@ export interface SummaryV3StyleFactInput {
   readonly transformableDuty?: SummaryV3StyleTransformableDutyInput;
 }
 
+/**
+ * Entry-owned target-language role evidence.  This is presentation lineage,
+ * never semantic authority: the source role and its hash remain immutable and
+ * the alias is usable only while its entry binding and target locale match.
+ */
+export interface SummaryV3StyleRolePresentationEvidence {
+  readonly text: string;
+  readonly sourceLocale: string;
+  readonly targetLocale: string;
+  readonly sourceRoleHash: string;
+  readonly provenance: 'validated_localized_projection' | 'validated_export_title_surface';
+}
+
 export interface SummaryV3StyleExperienceInput {
   readonly stableId: string;
   readonly role: string;
   readonly employer: string;
+  /** Locale of the immutable role source, when entry-owned provenance knows it. */
+  readonly roleSourceLocale?: string;
+  /** Validated target-language surface for this same entry, when present. */
+  readonly rolePresentation?: SummaryV3StyleRolePresentationEvidence;
   readonly employmentState: 'present' | 'completed';
   readonly durationMonths: number;
   readonly facts: readonly SummaryV3StyleFactInput[];
@@ -203,6 +255,8 @@ export interface SummaryV3StyleOperationSnapshot {
     hash: string;
     roleHash: string;
     employerHash: string;
+    roleSourceLocale: string | null;
+    rolePresentation: SummaryV3StyleRolePresentationEvidence | null;
     employmentState: 'present' | 'completed';
     durationMonths: number;
   }>[];
@@ -321,6 +375,15 @@ export type SummaryV3StyleEvidence = Readonly<{
   readonly styleEvidence: SummaryV3StyleFulfillmentEvidence | null;
   readonly meaningfulChangeDetected: boolean;
   readonly noOpDetected: boolean;
+  readonly unsupportedClaimCategory: SummaryV3StyleUnsupportedClaimCategory | null;
+  readonly writerCandidateReachedValidation: boolean;
+  readonly evaluatorReached: boolean;
+  readonly safeNoOpConsidered: boolean;
+  readonly safeNoOpSelected: boolean;
+  readonly safeNoOpEligibilityReason: SummaryV3StyleSafeNoOpEligibilityReason;
+  readonly roleIdentityResolution: SummaryV3StyleRoleIdentityResolution;
+  /** Existing shared, release-safe provider classification; raw errors never cross this boundary. */
+  readonly m5ProviderFailure: SummaryV3ProviderFailureEnvelope | null;
   readonly sourceSummaryHash: string;
   readonly manifestHash: string;
   readonly snapshotHash: string;
@@ -353,6 +416,22 @@ export type SummaryV3StyleResult =
     evidence: SummaryV3StyleEvidence;
   }>;
 
+/** Runtime discriminator authority shared by the server-result union and HTTP client. */
+export const SUMMARY_V3_STYLE_M5_SERVER_RESULT_KINDS = [
+  'candidate_ready',
+  'safe_no_op',
+  'not_applicable',
+  'handled_failure',
+] as const satisfies readonly SummaryV3StyleResult['kind'][];
+
+type SummaryV3StyleM5ServerResultKindsAreExhaustive = Exclude<
+  SummaryV3StyleResult['kind'],
+  (typeof SUMMARY_V3_STYLE_M5_SERVER_RESULT_KINDS)[number]
+> extends never ? true : false;
+
+export const SUMMARY_V3_STYLE_M5_SERVER_RESULT_KINDS_EXHAUSTIVE:
+SummaryV3StyleM5ServerResultKindsAreExhaustive = true;
+
 export interface SummaryV3StyleStrategy {
   readonly style: SummaryV3Style;
   readonly requiresExistingSourceMateriality: boolean;
@@ -380,7 +459,14 @@ export const SUMMARY_V3_STYLE_STRATEGIES: Readonly<Record<SummaryV3Style, Summar
     requiresExistingSourceMateriality: true,
     requiresGroundedPredicateTransformation: true,
     minimumExistingSourceLengthRatio: 0,
-    writerContract: ['strengthen grounded duty predicates', 'do not add authority or metrics'],
+    writerContract: [
+      'strengthen grounded predicate wording before considering achievement or impact framing',
+      'treat sourceText as the sole fact authority for enhance_existing_content',
+      'preserve duties as duties; never convert a duty into an achievement, accomplishment, result, impact, or business outcome',
+      'do not add authority, metrics, numbers, scale, leadership, awards, savings, revenue, efficiency gains, or performance gains unless sourceText explicitly contains them',
+      'when the source contains duties only, use confident active wording without implying a result relation',
+      'if no meaningful grounded strengthening is possible, return sourceText unchanged as the single safe-no-op candidate',
+    ],
     requiredEvidenceKeys: [
       'style', 'strongerPredicateTransformations', 'structuralStrengtheningCount', 'modifierOnlyTransformationDetected',
       'repeatedStyleModifierCount', 'stackedModifierDetected', 'unsupportedAuthorityDetected', 'strongerFulfilled', 'noOpDetected',
@@ -535,7 +621,7 @@ export const SUMMARY_V3_STYLE_M5_EVALUATOR_TOOL = immutableCopy({
   input_schema: {
     type: 'object' as const,
     additionalProperties: false,
-    required: ['operationId', 'snapshotHash', 'manifestHash', 'style', 'locale', 'candidateHash', 'candidateUnitHashes', 'phases', 'representedFactIdHashes', 'missingFactIdHashes', 'styleEvidence'],
+    required: ['operationId', 'snapshotHash', 'manifestHash', 'style', 'locale', 'candidateHash', 'candidateUnitHashes', 'phases', 'representedFactIdHashes', 'missingFactIdHashes', 'roleIdentityResolution', 'styleEvidence'],
     properties: {
       operationId: { type: 'string' }, snapshotHash: { type: 'string' }, manifestHash: { type: 'string' },
        style: { type: 'string', enum: [...SUMMARY_V3_STYLE_M5_STYLES] }, locale: { type: 'string', enum: [...SUMMARY_V3_STYLE_M5_SUPPORTED_LOCALES] },
@@ -553,6 +639,7 @@ export const SUMMARY_V3_STYLE_M5_EVALUATOR_TOOL = immutableCopy({
       },
       representedFactIdHashes: { type: 'array', maxItems: 256, items: { type: 'string' } },
       missingFactIdHashes: { type: 'array', maxItems: 256, items: { type: 'string' } },
+      roleIdentityResolution: { type: 'string', enum: [...SUMMARY_V3_STYLE_M5_ROLE_IDENTITY_RESOLUTIONS] },
       styleEvidence: {
         oneOf: [
           SUMMARY_V3_STYLE_M5_SHORTER_EVIDENCE_SCHEMA,
@@ -563,6 +650,118 @@ export const SUMMARY_V3_STYLE_M5_EVALUATOR_TOOL = immutableCopy({
     },
   },
 });
+
+/**
+ * Anthropic's strict tool boundary accepts only a bounded subset of JSON
+ * Schema.  The authoritative M5 schemas above intentionally retain local
+ * safety ceilings (for example maxItems and numeric bounds) so the parser can
+ * reject oversized or malformed provider candidates.  Those local-only
+ * constraints cannot be sent verbatim to Anthropic: direct messages.create
+ * calls do not apply the SDK's schema transformer, and the API rejects them
+ * with HTTP 400.  Keep the authoritative schemas immutable and derive a
+ * deterministic provider wire projection instead.
+ */
+export type SummaryV3StyleProviderTool = Readonly<{
+  name: string;
+  description: string;
+  strict: true;
+  input_schema: Readonly<{
+    type: 'object';
+    [key: string]: unknown;
+  }>;
+}>;
+
+const SUMMARY_V3_STYLE_PROVIDER_UNSUPPORTED_KEYS = new Set([
+  'minimum',
+  'maximum',
+  'exclusiveMinimum',
+  'exclusiveMaximum',
+  'multipleOf',
+  'minLength',
+  'maxLength',
+  'maxItems',
+  'maxContains',
+  'uniqueItems',
+  'contains',
+  'minProperties',
+  'maxProperties',
+]);
+
+function schemaRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+/**
+ * oneOf is projected to anyOf only for the evaluator's styleEvidence union.
+ * Each branch carries a non-empty, pairwise-disjoint style enum, making the
+ * alternatives a true discriminator partition rather than an overlapping
+ * union.  An unexpected overlapping/undiscriminated oneOf fails closed.
+ */
+function hasDisjointStyleAlternatives(value: unknown): value is readonly unknown[] {
+  if (!Array.isArray(value) || value.length === 0) return false;
+  const seen = new Set<string>();
+  for (const variant of value) {
+    const record = schemaRecord(variant);
+    const properties = schemaRecord(record?.properties);
+    const style = schemaRecord(properties?.style);
+    const enumValues = style?.enum;
+    if (!Array.isArray(enumValues) || enumValues.length === 0) return false;
+    for (const item of enumValues) {
+      if (typeof item !== 'string' || seen.has(item)) return false;
+      seen.add(item);
+    }
+  }
+  return true;
+}
+
+function projectSummaryV3StyleProviderSchema(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(projectSummaryV3StyleProviderSchema);
+  const record = schemaRecord(value);
+  if (!record) return value;
+  const projected: Record<string, unknown> = {};
+  const removed: string[] = [];
+  for (const [key, child] of Object.entries(record)) {
+    if (key === 'oneOf') {
+      if (!hasDisjointStyleAlternatives(child)) {
+        throw new Error('M5 provider schema oneOf lacks a disjoint style discriminator');
+      }
+      projected.anyOf = child.map(projectSummaryV3StyleProviderSchema);
+      continue;
+    }
+    if (key === 'minItems' && child !== 0 && child !== 1) {
+      removed.push(`${key}=${JSON.stringify(child)}`);
+      continue;
+    }
+    if (SUMMARY_V3_STYLE_PROVIDER_UNSUPPORTED_KEYS.has(key)) {
+      removed.push(`${key}=${JSON.stringify(child)}`);
+      continue;
+    }
+    projected[key] = projectSummaryV3StyleProviderSchema(child);
+  }
+  if (removed.length > 0) {
+    const existing = typeof projected.description === 'string' ? projected.description : '';
+    const note = `Provider transport omits local-only constraints (${removed.join(', ')}); M5 local validation remains authoritative.`;
+    projected.description = existing ? `${existing}\n\n${note}` : note;
+  }
+  return projected;
+}
+
+export function projectSummaryV3StyleToolForProvider(
+  tool: typeof SUMMARY_V3_STYLE_M5_WRITER_TOOL | typeof SUMMARY_V3_STYLE_M5_EVALUATOR_TOOL,
+): SummaryV3StyleProviderTool {
+  return immutableCopy({
+    name: tool.name,
+    description: tool.description,
+    strict: true as const,
+    input_schema: projectSummaryV3StyleProviderSchema(tool.input_schema) as SummaryV3StyleProviderTool['input_schema'],
+  });
+}
+
+/** Stable wire contracts used by every M5 writer/evaluator invocation. */
+export const SUMMARY_V3_STYLE_M5_WRITER_PROVIDER_TOOL = projectSummaryV3StyleToolForProvider(SUMMARY_V3_STYLE_M5_WRITER_TOOL);
+export const SUMMARY_V3_STYLE_M5_EVALUATOR_PROVIDER_TOOL = projectSummaryV3StyleToolForProvider(SUMMARY_V3_STYLE_M5_EVALUATOR_TOOL);
 
 export function isSummaryV3Style(value: unknown): value is SummaryV3Style {
   return typeof value === 'string' && (SUMMARY_V3_STYLE_M5_STYLES as readonly string[]).includes(value);
@@ -1580,6 +1779,38 @@ function candidateTextRepresentsFact(
   return hasGroundedReplacement;
 }
 
+/**
+ * A non-empty Stronger request can lack a single marked duty when the visible
+ * Summary and Experience manifest use different locales. Permit only a
+ * multi-fact paraphrase to reach the independent evaluator: at least two
+ * source facts must change, each changed fact retains a bounded lexical floor,
+ * and all numeric/material/entity guards remain independently enforced by the
+ * writer parser. A one-fact unmarked predicate substitution remains closed.
+ */
+function candidateRepresentsUnmarkedMultiFactStrongerParaphrase(
+  snapshot: SummaryV3StyleOperationSnapshot,
+  candidateText: string,
+): boolean {
+  if (snapshot.style !== 'stronger' || snapshot.mode !== 'enhance_existing_content'
+    || snapshot.transformableDuty || snapshot.requiredFacts.length < 3) return false;
+  const candidateTokens = new Set(summaryV3StyleFactAnchorTokens(candidateText));
+  const sourceTokens = new Set(snapshot.requiredFacts.flatMap((fact) => summaryV3StyleFactAnchorTokens(fact.text)));
+  let changedFactCount = 0;
+  for (const fact of snapshot.requiredFacts) {
+    if (candidateTextRepresentsFact(snapshot, fact, candidateText)) continue;
+    const anchors = summaryV3StyleFactAnchorTokens(fact.text);
+    if (anchors.length === 0) return false;
+    const numericAnchors = anchors.filter((anchor) => /\p{N}/u.test(anchor));
+    if (numericAnchors.some((anchor) => !candidateTokens.has(anchor))) return false;
+    const overlap = anchors.filter((anchor) => candidateTokens.has(anchor)).length;
+    const requiredOverlap = Math.min(3, Math.max(1, anchors.length - 1));
+    if (overlap < requiredOverlap) return false;
+    changedFactCount += 1;
+  }
+  return changedFactCount >= 2
+    && Array.from(candidateTokens).some((token) => !sourceTokens.has(token));
+}
+
 function relationOccurrences(value: string, relationValue: string): readonly number[] {
   const normalized = normalizedRelationText(value);
   const needle = normalizedRelationText(relationValue);
@@ -1653,7 +1884,8 @@ export function summaryV3StyleCandidateRepresentsRequiredFacts(
   // multilingual representation authority. The literal preservation floor is
   // intentionally limited to visible-summary transformation mode.
   if (snapshot.mode === 'generate_from_context') return true;
-  return snapshot.requiredFacts.every((fact) => candidateTextRepresentsFact(snapshot, fact, candidateText));
+  return snapshot.requiredFacts.every((fact) => candidateTextRepresentsFact(snapshot, fact, candidateText))
+    || candidateRepresentsUnmarkedMultiFactStrongerParaphrase(snapshot, candidateText);
 }
 
 /**
@@ -1670,7 +1902,7 @@ export function summaryV3StyleCandidateUnitsRepresentDeclaredFacts(
   return candidate.units.every((unit) => unit.factIds.every((factId) => {
     const fact = factsById.get(factId);
     return !!fact && candidateTextRepresentsFact(snapshot, fact, unit.text);
-  }));
+  }) || candidateRepresentsUnmarkedMultiFactStrongerParaphrase(snapshot, unit.text));
 }
 
 function sourceUnits(value: string): readonly SummaryV3StyleSourceUnit[] {
@@ -1882,6 +2114,25 @@ function validateManifest(input: SummaryV3StyleManifestInput): {
     assertStringId(entry?.stableId, 'entry.stableId');
     assertText(entry?.role, 'entry.role');
     assertText(entry?.employer, 'entry.employer');
+    if (entry.roleSourceLocale !== undefined
+      && (typeof entry.roleSourceLocale !== 'string' || entry.roleSourceLocale.length > 32)) {
+      throw new SummaryV3StyleInputError('malformed_request', 'entry.roleSourceLocale');
+    }
+    if (entry.rolePresentation !== undefined) {
+      const presentation = entry.rolePresentation;
+      if (!isRecord(presentation)
+        || typeof presentation.text !== 'string'
+        || !summaryV3StyleIsNonBlank(presentation.text)
+        || presentation.text.length > 500
+        || typeof presentation.sourceLocale !== 'string'
+        || typeof presentation.targetLocale !== 'string'
+        || typeof presentation.sourceRoleHash !== 'string'
+        || !/^m5_[a-z0-9]{1,32}$/u.test(presentation.sourceRoleHash)
+        || (presentation.provenance !== 'validated_localized_projection'
+          && presentation.provenance !== 'validated_export_title_surface')) {
+        throw new SummaryV3StyleInputError('malformed_request', 'entry.rolePresentation');
+      }
+    }
     if (entry.employmentState !== 'present' && entry.employmentState !== 'completed') {
       throw new SummaryV3StyleInputError('malformed_request', 'entry.employmentState');
     }
@@ -2158,14 +2409,41 @@ export function createSummaryV3StyleOperationSnapshot(request: SummaryV3StyleReq
   );
   const transformableDuty = validateTransformableDuty(facts, sourceSummary, ownership.style, mode, locks);
   const relationBindings = entityRelationBindings(sourceSummary, locks, facts);
-  const selectedEntries = manifestState.entries.map((entry) => immutableCopy({
+  const selectedEntries = manifestState.entries.map((entry) => {
+    const roleSourceLocale = canonicalSummaryV3StyleLocale(entry.roleSourceLocale) || null;
+    const rawPresentation = entry.rolePresentation;
+    const rolePresentation = rawPresentation
+      && canonicalSummaryV3StyleLocale(rawPresentation.targetLocale) === ownership.requestedLocale
+      && canonicalSummaryV3StyleLocale(rawPresentation.sourceLocale)
+      && rawPresentation.sourceRoleHash === hashSummaryV3StyleValue(entry.role)
+      && normalizeSummaryV3StyleText(rawPresentation.text) !== normalizeSummaryV3StyleText(entry.role)
+      ? immutableCopy({
+        text: rawPresentation.text,
+        sourceLocale: canonicalSummaryV3StyleLocale(rawPresentation.sourceLocale)!,
+        targetLocale: ownership.requestedLocale,
+        sourceRoleHash: rawPresentation.sourceRoleHash,
+        provenance: rawPresentation.provenance,
+      }) as SummaryV3StyleRolePresentationEvidence
+      : null;
+    return immutableCopy({
     stableId: entry.stableId,
-    hash: hashSummaryV3StyleValue(`${entry.stableId}:${entry.role}:${entry.employer}:${entry.employmentState}:${entry.durationMonths}`),
+    hash: hashSummaryV3StyleValue(JSON.stringify({
+      stableId: entry.stableId,
+      role: entry.role,
+      employer: entry.employer,
+      roleSourceLocale,
+      rolePresentation,
+      employmentState: entry.employmentState,
+      durationMonths: entry.durationMonths,
+    })),
     roleHash: hashSummaryV3StyleValue(entry.role),
     employerHash: hashSummaryV3StyleValue(entry.employer),
+    roleSourceLocale,
+    rolePresentation,
     employmentState: entry.employmentState,
     durationMonths: entry.durationMonths,
-  }));
+    });
+  });
   const manifestHash = hashSummaryV3StyleValue(JSON.stringify({
     manifestId: request.manifest.manifestId,
     contextId: request.manifest.contextId,
@@ -2251,6 +2529,14 @@ export function createSummaryV3StyleInitialEvidence(snapshot: SummaryV3StyleOper
     styleEvidence: null,
     meaningfulChangeDetected: false,
     noOpDetected: false,
+    unsupportedClaimCategory: null,
+    writerCandidateReachedValidation: false,
+    evaluatorReached: false,
+    safeNoOpConsidered: false,
+    safeNoOpSelected: false,
+    safeNoOpEligibilityReason: 'not_applicable',
+    roleIdentityResolution: 'not_required',
+    m5ProviderFailure: null,
     sourceSummaryHash: snapshot.sourceSummaryHash,
     manifestHash: snapshot.manifestHash,
     snapshotHash: snapshot.snapshotHash,

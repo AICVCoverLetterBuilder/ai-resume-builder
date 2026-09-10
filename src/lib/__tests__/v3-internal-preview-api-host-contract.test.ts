@@ -31,6 +31,20 @@ const commercialContract = require('../../../scripts/android-commercial-state-co
     hostClass: 'production' | 'vercel_preview';
   }) => { apiHost: string };
 };
+const v3RoutingContract = require('../../../scripts/android-internal-v3-routing-contract.js') as {
+  ANDROID_INTERNAL_V3_ROUTING_CONTRACT_REVISION: string;
+  AndroidInternalV3RoutingContractError: new (code: string, message: string) => Error & { code: string };
+  enforceAndroidInternalV3RoutingContract: (environment: Environment) => {
+    revision: string;
+    publicFlag: 'true';
+    serverFlag: 'true';
+    summaryStyleOwner: 'm5';
+  };
+  assertAndroidInternalM5Assets: (blob: string) => {
+    compiledPublicFlag: true;
+    summaryStyleOwner: 'm5';
+  };
+};
 
 const PRODUCTION = 'https://ai-resume-builder-six-gamma.vercel.app';
 const PREVIEW = 'https://example-project-random-team.vercel.app';
@@ -73,7 +87,6 @@ function importFreshBuildModule(
 function baseRunnerEnvironment(overrides: Environment = {}): Environment {
   return {
     NEXT_PUBLIC_REVENUECAT_ANDROID_API_KEY: 'rc_test_public_key',
-    NEXT_PUBLIC_AI_CORE_V3_ENABLED: 'false',
     NEXT_PUBLIC_BUILD_CHANNEL: 'internal',
     NEXT_PUBLIC_ENABLE_AI_TEST_RESET: 'true',
     ANDROID_VERSION_CODE: '408',
@@ -142,6 +155,14 @@ function expectEveryChildUrl(childCalls: ChildCall[], expected: string) {
   expect(childCalls.length).toBeGreaterThan(0);
   for (const call of childCalls) {
     expect(call.options.env?.NEXT_PUBLIC_API_BASE_URL).toBe(expected);
+  }
+}
+
+function expectEveryChildM5Enabled(childCalls: ChildCall[]) {
+  expect(childCalls.length).toBeGreaterThan(0);
+  for (const call of childCalls) {
+    expect(call.options.env?.NEXT_PUBLIC_AI_CORE_V3_ENABLED).toBe('true');
+    expect(call.options.env?.AI_CORE_V3_ENABLED).toBe('true');
   }
 }
 
@@ -539,6 +560,86 @@ describe('AI Core V3 internal preview API-host build contract', () => {
     assertImportSafe(ANDROID_SCRIPT, 'runAndroidInternalBuild');
   });
 
+  it('makes an omitted AAB562-style environment explicitly M5-owned', () => {
+    const environment: Environment = { UNRELATED_SENTINEL: 'preserved' };
+    const result = v3RoutingContract.enforceAndroidInternalV3RoutingContract(environment);
+
+    expect(result).toEqual({
+      revision: 'android-internal-v3-routing-contract-562-v1',
+      publicFlag: 'true',
+      serverFlag: 'true',
+      summaryStyleOwner: 'm5',
+    });
+    expect(environment).toEqual({
+      UNRELATED_SENTINEL: 'preserved',
+      NEXT_PUBLIC_AI_CORE_V3_ENABLED: 'true',
+      AI_CORE_V3_ENABLED: 'true',
+    });
+  });
+
+  it.each([
+    ['public', { NEXT_PUBLIC_AI_CORE_V3_ENABLED: 'false' }, 'invalid_next_public_ai_core_v3_enabled'],
+    ['server', { AI_CORE_V3_ENABLED: 'false' }, 'invalid_ai_core_v3_enabled'],
+  ] as const)('rejects an explicitly disabled %s V3 flag', (_label, environment, code) => {
+    expect(() => v3RoutingContract.enforceAndroidInternalV3RoutingContract(environment))
+      .toThrow(v3RoutingContract.AndroidInternalV3RoutingContractError);
+    try {
+      v3RoutingContract.enforceAndroidInternalV3RoutingContract(environment);
+    } catch (error) {
+      expect((error as { code?: string }).code).toBe(code);
+    }
+  });
+
+  it('accepts only compiled-enabled M5 Summary style assets', () => {
+    const enabled = [
+      'm5Operation',
+      'summary_style',
+      'summary_stronger',
+      'notApplicableDiagnosticFieldViolations',
+      'AI_CORE_V3_ENABLED:"true"',
+    ].join(' ');
+    expect(v3RoutingContract.assertAndroidInternalM5Assets(enabled)).toMatchObject({
+      compiledPublicFlag: true,
+      summaryStyleOwner: 'm5',
+    });
+    expect(() => v3RoutingContract.assertAndroidInternalM5Assets(
+      enabled.replace('AI_CORE_V3_ENABLED:"true"', 'AI_CORE_V3_ENABLED:runtime.env.NEXT_PUBLIC_AI_CORE_V3_ENABLED'),
+    )).toThrow(/remained a runtime lookup/u);
+    expect(() => v3RoutingContract.assertAndroidInternalM5Assets(
+      enabled.replace('m5Operation', 'legacyDiagnostic'),
+    )).toThrow(/missing M5 marker/u);
+  });
+
+  it('fails the static internal runner before side effects when M5 is explicitly disabled', () => {
+    const runner = importFreshBuildModule(STATIC_SCRIPT, 'runStaticInternalBuild');
+    const childCalls: ChildCall[] = [];
+    const filesystemMutations: string[] = [];
+    const sideEffects: string[] = [];
+
+    expect(() => runner({
+      environment: baseRunnerEnvironment({ NEXT_PUBLIC_AI_CORE_V3_ENABLED: 'false' }),
+      dependencies: staticRunnerDependencies(childCalls, filesystemMutations, sideEffects),
+    })).toThrow(/must be exactly "true" for an internal Android M5 candidate/u);
+    expect(childCalls).toHaveLength(0);
+    expect(filesystemMutations).toHaveLength(0);
+    expect(sideEffects).toHaveLength(0);
+  });
+
+  it('fails the Android internal runner before side effects when M5 is explicitly disabled', () => {
+    const runner = importFreshBuildModule(ANDROID_SCRIPT, 'runAndroidInternalBuild');
+    const childCalls: ChildCall[] = [];
+    const filesystemMutations: string[] = [];
+    const sideEffects: string[] = [];
+
+    expect(() => runner({
+      environment: baseRunnerEnvironment({ NEXT_PUBLIC_AI_CORE_V3_ENABLED: 'false' }),
+      dependencies: androidRunnerDependencies(childCalls, filesystemMutations, sideEffects),
+    })).toThrow(/must be exactly "true" for an internal Android M5 candidate/u);
+    expect(childCalls).toHaveLength(0);
+    expect(filesystemMutations).toHaveLength(0);
+    expect(sideEffects).toHaveLength(0);
+  });
+
   it('the static internal runner forwards the resolved production environment to every child command', () => {
     const runner = importFreshBuildModule(STATIC_SCRIPT, 'runStaticInternalBuild');
     const childCalls: ChildCall[] = [];
@@ -553,8 +654,10 @@ describe('AI Core V3 internal preview API-host build contract', () => {
     expect(result.apiBaseUrl).toBe(PRODUCTION);
     expect(childCalls).toHaveLength(2);
     expectEveryChildUrl(childCalls, PRODUCTION);
+    expectEveryChildM5Enabled(childCalls);
     expect(result.childEnvironment.UNRELATED_SENTINEL).toBe('preserved');
-    expect(result.childEnvironment.NEXT_PUBLIC_AI_CORE_V3_ENABLED).toBe('false');
+    expect(result.childEnvironment.NEXT_PUBLIC_AI_CORE_V3_ENABLED).toBe('true');
+    expect(result.childEnvironment.AI_CORE_V3_ENABLED).toBe('true');
     expect(result.childEnvironment.NEXT_PUBLIC_BUILD_CHANNEL).toBe('internal');
     expect(result.childEnvironment.NEXT_PUBLIC_ENABLE_AI_TEST_RESET).toBe('true');
     expect(result.childEnvironment.ANDROID_VERSION_CODE).toBe('408');
@@ -578,10 +681,12 @@ describe('AI Core V3 internal preview API-host build contract', () => {
     expect(result.apiBaseUrl).toBe(PREVIEW);
     expect(childCalls).toHaveLength(2);
     expectEveryChildUrl(childCalls, PREVIEW);
+    expectEveryChildM5Enabled(childCalls);
     expect(new Set(childCalls.map((call) => call.options.env?.NEXT_PUBLIC_API_BASE_URL)))
       .toEqual(new Set([PREVIEW]));
     expect(result.childEnvironment.UNRELATED_SENTINEL).toBe('preserved');
-    expect(result.childEnvironment.NEXT_PUBLIC_AI_CORE_V3_ENABLED).toBe('false');
+    expect(result.childEnvironment.NEXT_PUBLIC_AI_CORE_V3_ENABLED).toBe('true');
+    expect(result.childEnvironment.AI_CORE_V3_ENABLED).toBe('true');
     expect(result.childEnvironment.NEXT_PUBLIC_BUILD_CHANNEL).toBe('internal');
     expect(result.childEnvironment.NEXT_PUBLIC_ENABLE_AI_TEST_RESET).toBe('true');
     expect(result.childEnvironment.SIGNING_SENTINEL).toBe('unchanged');
@@ -608,8 +713,10 @@ describe('AI Core V3 internal preview API-host build contract', () => {
     expect(result.apiBaseUrl).toBe(PRODUCTION);
     expect(childCalls).toHaveLength(4);
     expectEveryChildUrl(childCalls, PRODUCTION);
+    expectEveryChildM5Enabled(childCalls);
     expect(result.childEnvironment.UNRELATED_SENTINEL).toBe('preserved');
-    expect(result.childEnvironment.NEXT_PUBLIC_AI_CORE_V3_ENABLED).toBe('false');
+    expect(result.childEnvironment.NEXT_PUBLIC_AI_CORE_V3_ENABLED).toBe('true');
+    expect(result.childEnvironment.AI_CORE_V3_ENABLED).toBe('true');
     expect(result.childEnvironment.NEXT_PUBLIC_BUILD_CHANNEL).toBe('internal');
     expect(result.childEnvironment.NEXT_PUBLIC_ENABLE_AI_TEST_RESET).toBe('true');
     expect(result.childEnvironment.SIGNING_SENTINEL).toBe('unchanged');
@@ -642,10 +749,12 @@ describe('AI Core V3 internal preview API-host build contract', () => {
     expect(result.apiBaseUrl).toBe(PREVIEW);
     expect(childCalls).toHaveLength(4);
     expectEveryChildUrl(childCalls, PREVIEW);
+    expectEveryChildM5Enabled(childCalls);
     expect(new Set(childCalls.map((call) => call.options.env?.NEXT_PUBLIC_API_BASE_URL)))
       .toEqual(new Set([PREVIEW]));
     expect(result.childEnvironment.UNRELATED_SENTINEL).toBe('preserved');
-    expect(result.childEnvironment.NEXT_PUBLIC_AI_CORE_V3_ENABLED).toBe('false');
+    expect(result.childEnvironment.NEXT_PUBLIC_AI_CORE_V3_ENABLED).toBe('true');
+    expect(result.childEnvironment.AI_CORE_V3_ENABLED).toBe('true');
     expect(result.childEnvironment.NEXT_PUBLIC_BUILD_CHANNEL).toBe('internal');
     expect(result.childEnvironment.NEXT_PUBLIC_ENABLE_AI_TEST_RESET).toBe('true');
     expect(result.childEnvironment.SIGNING_SENTINEL).toBe('unchanged');

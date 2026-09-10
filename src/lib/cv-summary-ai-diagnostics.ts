@@ -170,11 +170,14 @@ import {
   clearCvAiDiagnosticHistory,
   validateCvAiDiagnosticMarkerField,
   type CvAiCandidateLineageRecord,
+  type CvAiDiagnosticInvariantFailure,
 } from './cv-ai-diagnostics-contract';
 import { INTERNAL_AI_RESET_ENABLED } from './build-channel';
 import type {
   SummaryV3GenerateTerminalEvent,
   SummaryV3InternalRejectionAudit,
+  SummaryV3ProviderErrorType,
+  SummaryV3ProviderFailureStage,
   SummaryV3ProviderFailureEnvelope,
 } from './ai-core-v3/summary-generate';
 import { getApiBaseUrl } from './api';
@@ -328,11 +331,22 @@ serbianStructuredDomainGateApplicable hindiWarehouseGrammarFieldsApplicable serb
 `.trim().split(/\s+/u));
 const M4_V2_AUTHORITATIVE_FIELD_SET = new Set(M4_V2_AUTHORITATIVE_CONSTRUCTOR_FIELDS);
 
-/** Fields emitted only by the M4 terminal receipt or common commit envelope. */
-const M4_NON_CONSTRUCTOR_AUTHORITATIVE_FIELDS = Object.freeze(`
+/** Shared fields emitted by the common commit envelope. */
+const M4_SHARED_NON_CONSTRUCTOR_AUTHORITATIVE_FIELDS = Object.freeze(`
 authBoundary
-operationKind diagnosticContractRevision compiledDiagnosticMarker assetRevision cvAiDiagnosticsV2299Revision internalDiagnosticsEnabled internalResetEnabled internalBuildContractUsed serverUrlConfigured apiBaseUrlConfigured capacitorServerUrlConfigured apiHostClass apiHostClassificationContractRevision sourceCommitShort sourceCommitStatus diagnosticInvariantCheckPassed diagnosticInvariantFailureCount diagnosticInvariantFailures diagnosticCompletenessPassed missingRequiredDiagnosticFields nullRequiredDiagnosticFields notApplicableDiagnosticFieldViolations unexpectedDiagnosticFieldTypes diagnosticPayloadByteSize diagnosticPayloadTruncated diagnosticTruncatedSection diagnosticPrivacyViolations privacyCheckPassed m4Operation m4LegacyV2DiagnosticFieldsApplicable m4SourceWasEmpty m4StructuredDurationMonths m4AvailableFactCount m4RequiredFactCount m4CoveredFactCount m4OwnershipResult m4RouteHttpStatus m4Writer m4Evaluator m4ProviderFailure m4Phases m4CandidatePresent m4CandidateHash m4CandidateLength m4CandidateUnitCount m4CandidateUnitHashes m4CandidateUnitLengths m4SemanticViolationCount m4SemanticViolationCodes m4LanguageQualityViolationCount m4LanguageQualityViolationCodes m4ViolationFactIdHashesByCode m4ViolationEntryIdHashesByCode m4PrimaryValidationRejectionCode m4RepairAttempted m4ApplyAuthorized m4ApplyAttempted m4ApplyCommitted m4PersistenceAttempted m4PersistenceResult m4CanonicalApplyAttempted m4CanonicalApplyResult m4UsageAttempted m4UsageResult m4UsageForwardWriteResult m4UsageVerificationResult m4UsageRollbackAttempted m4UsageRollbackResult m4UsageCountAtRequest m4UsageFinalStateKnown m4ActualUsageBefore m4ActualUsageAfter m4ActualUsageDelta m4RollbackAttempted m4CommittedSummaryHash m4CommittedContentLocale m4CommitCandidateMatched m4RollbackResult m4V2FallthroughCount m4UsageDelta
+operationKind diagnosticContractRevision compiledDiagnosticMarker assetRevision cvAiDiagnosticsV2299Revision internalDiagnosticsEnabled internalResetEnabled internalBuildContractUsed serverUrlConfigured apiBaseUrlConfigured capacitorServerUrlConfigured apiHostClass apiHostClassificationContractRevision sourceCommitShort sourceCommitStatus diagnosticInvariantCheckPassed diagnosticInvariantFailureCount diagnosticInvariantFailures diagnosticCompletenessPassed missingRequiredDiagnosticFields nullRequiredDiagnosticFields notApplicableDiagnosticFieldViolations unexpectedDiagnosticFieldTypes diagnosticPayloadByteSize diagnosticPayloadTruncated diagnosticTruncatedSection diagnosticPrivacyViolations privacyCheckPassed
 `.trim().split(/\s+/u));
+
+/** Explicit M4-only fields emitted by the M4 terminal receipt. */
+const M4_ONLY_NON_CONSTRUCTOR_AUTHORITATIVE_FIELDS = Object.freeze(`
+m4Operation m4LegacyV2DiagnosticFieldsApplicable m4SourceWasEmpty m4StructuredDurationMonths m4AvailableFactCount m4RequiredFactCount m4CoveredFactCount m4OwnershipResult m4RouteHttpStatus m4Writer m4Evaluator m4ProviderFailure m4Phases m4CandidatePresent m4CandidateHash m4CandidateLength m4CandidateUnitCount m4CandidateUnitHashes m4CandidateUnitLengths m4SemanticViolationCount m4SemanticViolationCodes m4LanguageQualityViolationCount m4LanguageQualityViolationCodes m4ViolationFactIdHashesByCode m4ViolationEntryIdHashesByCode m4PrimaryValidationRejectionCode m4RepairAttempted m4ApplyAuthorized m4ApplyAttempted m4ApplyCommitted m4PersistenceAttempted m4PersistenceResult m4CanonicalApplyAttempted m4CanonicalApplyResult m4UsageAttempted m4UsageResult m4UsageForwardWriteResult m4UsageVerificationResult m4UsageRollbackAttempted m4UsageRollbackResult m4UsageCountAtRequest m4UsageFinalStateKnown m4ActualUsageBefore m4ActualUsageAfter m4ActualUsageDelta m4RollbackAttempted m4CommittedSummaryHash m4CommittedContentLocale m4CommitCandidateMatched m4RollbackResult m4V2FallthroughCount m4UsageDelta
+`.trim().split(/\s+/u));
+
+/** Fields emitted only by the M4 terminal receipt or common commit envelope. */
+const M4_NON_CONSTRUCTOR_AUTHORITATIVE_FIELDS = Object.freeze([
+  ...M4_SHARED_NON_CONSTRUCTOR_AUTHORITATIVE_FIELDS,
+  ...M4_ONLY_NON_CONSTRUCTOR_AUTHORITATIVE_FIELDS,
+]);
 
 const M4_NON_CONSTRUCTOR_FIELD_SET = new Set([
   ...M4_NON_CONSTRUCTOR_AUTHORITATIVE_FIELDS,
@@ -363,6 +377,413 @@ export const M4_SUMMARY_EXTERNAL_REQUIRED_FIELDS = Object.freeze([
 ].filter((field) => !M4_OPTIONAL_EXTERNAL_FIELDS.includes(
   field as (typeof M4_OPTIONAL_EXTERNAL_FIELDS)[number],
 )));
+
+/**
+ * M5 has one explicit style-operation view over the same Summary diagnostic
+ * store.  The inventory is deliberately derived from the existing field
+ * ledger, then partitioned into disjoint authority sets so a newly emitted
+ * field fails closed instead of silently becoming a V2 requirement.
+ */
+export type SummaryM5FieldAuthority =
+  | 'SHARED_AUTHORITATIVE'
+  | 'M5_AUTHORITATIVE'
+  | 'V2_NOT_APPLICABLE_TO_M5'
+  | 'M4_NOT_APPLICABLE_TO_M5'
+  | 'PRESENT_BUT_NOT_EVALUATED'
+  | 'DEPRECATED';
+
+const M5_SHARED_FIELDS = Object.freeze([
+  ...M4_SHARED_CONSTRUCTOR_FIELDS,
+  ...M4_TERMINAL_RECEIPT_FIELDS,
+  ...M4_SHARED_NON_CONSTRUCTOR_AUTHORITATIVE_FIELDS,
+]);
+const M5_SHARED_FIELD_SET = new Set<string>(M5_SHARED_FIELDS);
+
+const M5_AUTHORITATIVE_FIELDS = Object.freeze([
+  'm5Operation',
+  'summaryFinalCandidateDiagnosticsRevision',
+  'unsupportedClaimCategory',
+  'writerCandidateReachedValidation',
+  'evaluatorReached',
+  'safeNoOpConsidered',
+  'safeNoOpSelected',
+  'safeNoOpEligibilityReason',
+  'roleIdentityResolution',
+  'm5FailureStage',
+  'm5CanonicalFailureCause',
+] as const);
+const M5_AUTHORITATIVE_FIELD_SET = new Set<string>(M5_AUTHORITATIVE_FIELDS);
+
+const M5_M4_NOT_APPLICABLE_FIELDS = M4_ONLY_NON_CONSTRUCTOR_AUTHORITATIVE_FIELDS;
+const M5_M4_NOT_APPLICABLE_FIELD_SET = new Set<string>(M5_M4_NOT_APPLICABLE_FIELDS);
+
+export const M5_SUMMARY_FIELD_INVENTORY = Object.freeze([
+  ...SUMMARY_AI_DIAGNOSTIC_CONSTRUCTOR_FIELDS,
+  ...M4_NON_CONSTRUCTOR_AUTHORITATIVE_FIELDS,
+  ...M4_TERMINAL_RECEIPT_FIELDS,
+  'diagnosticTruncatedSection',
+  'repairSelected',
+  'repairCandidatePresent',
+  'repairAccepted',
+  'candidateLineage',
+  ...M5_AUTHORITATIVE_FIELDS,
+].filter((field, index, all) => all.indexOf(field) === index));
+
+const M5_DEPRECATED_FIELDS = Object.freeze(['summaryV2FactIdPathActive'] as const);
+const M5_DEPRECATED_FIELD_SET = new Set<string>(M5_DEPRECATED_FIELDS);
+
+/** Deliberate V2 authority decisions. Never derive this list from inventory leftovers. */
+const M5_V2_NOT_APPLICABLE_FIELDS = Object.freeze([
+  ...M4_V2_AUTHORITATIVE_CONSTRUCTOR_FIELDS,
+  ...M4_NOT_APPLICABLE_CONSTRUCTOR_FIELDS,
+  ...M4_PRESENT_BUT_NOT_EVALUATED_CONSTRUCTOR_FIELDS,
+  'repairSelected',
+  'repairCandidatePresent',
+  'repairAccepted',
+  'candidateLineage',
+]);
+const M5_V2_NOT_APPLICABLE_FIELD_SET = new Set<string>(M5_V2_NOT_APPLICABLE_FIELDS);
+
+export const M5_SUMMARY_FIELD_AUTHORITY = Object.freeze({
+  SHARED_AUTHORITATIVE: M5_SHARED_FIELDS,
+  M5_AUTHORITATIVE: M5_AUTHORITATIVE_FIELDS,
+  V2_NOT_APPLICABLE_TO_M5: M5_V2_NOT_APPLICABLE_FIELDS,
+  M4_NOT_APPLICABLE_TO_M5: M5_M4_NOT_APPLICABLE_FIELDS,
+  PRESENT_BUT_NOT_EVALUATED: Object.freeze([] as string[]),
+  DEPRECATED: M5_DEPRECATED_FIELDS,
+});
+
+export const M5_FIELD_AUTHORITY_UNCLASSIFIED_COUNT = M5_SUMMARY_FIELD_INVENTORY.filter((field) => (
+  !M5_SHARED_FIELD_SET.has(field)
+  && !M5_AUTHORITATIVE_FIELD_SET.has(field)
+  && !M5_V2_NOT_APPLICABLE_FIELD_SET.has(field)
+  && !M5_M4_NOT_APPLICABLE_FIELD_SET.has(field)
+  && !M5_DEPRECATED_FIELD_SET.has(field)
+)).length;
+
+export const M5_FIELD_AUTHORITY_DUPLICATE_COUNT = (() => {
+  const all = Object.values(M5_SUMMARY_FIELD_AUTHORITY).flat();
+  return all.filter((field, index) => all.indexOf(field) !== index).length;
+})();
+
+export function getM5SummaryFieldAuthority(field: string): SummaryM5FieldAuthority | null {
+  if (M5_SHARED_FIELD_SET.has(field)) return 'SHARED_AUTHORITATIVE';
+  if (M5_AUTHORITATIVE_FIELD_SET.has(field)) return 'M5_AUTHORITATIVE';
+  if (M5_V2_NOT_APPLICABLE_FIELD_SET.has(field)) return 'V2_NOT_APPLICABLE_TO_M5';
+  if (M5_M4_NOT_APPLICABLE_FIELD_SET.has(field)) return 'M4_NOT_APPLICABLE_TO_M5';
+  if (M5_DEPRECATED_FIELD_SET.has(field)) return 'DEPRECATED';
+  return null;
+}
+
+export function assertM5SummaryFieldAuthorityCoverage(fields: readonly string[]): void {
+  const unclassified = dedupeStableStrings(fields.filter((field) => !getM5SummaryFieldAuthority(field)));
+  if (unclassified.length > 0) {
+    throw new Error(`unclassified M5 diagnostic fields: ${unclassified.join(',')}`);
+  }
+  if (M5_FIELD_AUTHORITY_DUPLICATE_COUNT > 0) {
+    throw new Error(`duplicate M5 diagnostic field authority: ${M5_FIELD_AUTHORITY_DUPLICATE_COUNT}`);
+  }
+}
+
+export type M5SummaryApplicabilityCheck = Readonly<{
+  unclassifiedFields: readonly string[];
+  notApplicableDiagnosticFieldViolations: readonly string[];
+  unexpectedDiagnosticFieldTypes: readonly string[];
+}>;
+
+export function checkM5SummaryDiagnosticApplicability(
+  trace: Readonly<Record<string, unknown>>,
+): M5SummaryApplicabilityCheck {
+  const unclassifiedFields: string[] = [];
+  const notApplicableDiagnosticFieldViolations: string[] = [];
+  for (const field of Object.keys(trace)) {
+    const authority = getM5SummaryFieldAuthority(field);
+    if (!authority) unclassifiedFields.push(field);
+    else if (authority === 'V2_NOT_APPLICABLE_TO_M5'
+      || authority === 'M4_NOT_APPLICABLE_TO_M5'
+      || authority === 'PRESENT_BUT_NOT_EVALUATED'
+      || authority === 'DEPRECATED') {
+      notApplicableDiagnosticFieldViolations.push(field);
+    }
+  }
+  const unexpectedDiagnosticFieldTypes: string[] = [];
+  if (trace.m5Operation !== 'summary_style') {
+    unexpectedDiagnosticFieldTypes.push('m5Operation:not_summary_style');
+  }
+  const unsupportedCategories = new Set([
+    'unsupported_metric', 'unsupported_result_relation', 'unsupported_achievement',
+    'unsupported_authority', 'source_floor_mismatch', 'manifest_ceiling_mismatch',
+    'other_typed_category',
+  ]);
+  const safeNoOpEligibilityReasons = new Set([
+    'eligible', 'wrong_style', 'wrong_mode', 'source_empty',
+    'source_locale_surface_mismatch', 'source_locale_content_mismatch',
+    'source_inconsistency', 'role_employer_frame_inconsistency',
+    'source_material_result_relation', 'not_applicable',
+  ]);
+  const roleIdentityResolutions = new Set([
+    'not_required', 'equivalent', 'contradiction', 'unresolved',
+  ]);
+  const failureStages = new Set<SummaryV3ProviderFailureStage>([
+    'request_construction', 'sdk_request', 'response_extraction',
+    'tool_validation', 'orchestration', 'unknown',
+  ]);
+  const canonicalFailureCauses = new Set<SummaryV3ProviderErrorType>([
+    'invalid_request', 'authentication', 'permission', 'rate_limit',
+    'provider_5xx', 'timeout', 'connection/network', 'response_extraction', 'unknown',
+  ]);
+  if (trace.unsupportedClaimCategory !== null
+    && (typeof trace.unsupportedClaimCategory !== 'string'
+      || !unsupportedCategories.has(trace.unsupportedClaimCategory))) {
+    unexpectedDiagnosticFieldTypes.push('unsupportedClaimCategory:invalid');
+  }
+  for (const field of [
+    'writerCandidateReachedValidation', 'evaluatorReached', 'safeNoOpConsidered', 'safeNoOpSelected',
+  ]) {
+    if (typeof trace[field] !== 'boolean') unexpectedDiagnosticFieldTypes.push(`${field}:not_boolean`);
+  }
+  if (typeof trace.safeNoOpEligibilityReason !== 'string'
+    || !safeNoOpEligibilityReasons.has(trace.safeNoOpEligibilityReason)) {
+    unexpectedDiagnosticFieldTypes.push('safeNoOpEligibilityReason:invalid');
+  }
+  if (typeof trace.roleIdentityResolution !== 'string'
+    || !roleIdentityResolutions.has(trace.roleIdentityResolution)) {
+    unexpectedDiagnosticFieldTypes.push('roleIdentityResolution:invalid');
+  }
+  if (trace.m5FailureStage !== null
+    && (typeof trace.m5FailureStage !== 'string'
+      || !failureStages.has(trace.m5FailureStage as SummaryV3ProviderFailureStage))) {
+    unexpectedDiagnosticFieldTypes.push('m5FailureStage:invalid');
+  }
+  if (trace.m5CanonicalFailureCause !== null
+    && (typeof trace.m5CanonicalFailureCause !== 'string'
+      || !canonicalFailureCauses.has(trace.m5CanonicalFailureCause as SummaryV3ProviderErrorType))) {
+    unexpectedDiagnosticFieldTypes.push('m5CanonicalFailureCause:invalid');
+  }
+  return Object.freeze({
+    unclassifiedFields: dedupeStableStrings(unclassifiedFields),
+    notApplicableDiagnosticFieldViolations: dedupeStableStrings(notApplicableDiagnosticFieldViolations),
+    unexpectedDiagnosticFieldTypes: dedupeStableStrings(unexpectedDiagnosticFieldTypes),
+  });
+}
+
+export type SummaryM5ProjectedDiagnostic = Readonly<Record<string, unknown> & {
+  m5Operation: 'summary_style';
+}>;
+
+function isSummaryM5ProjectedDiagnostic(
+  trace: Readonly<Record<string, unknown>>,
+): trace is SummaryM5ProjectedDiagnostic {
+  return trace.m5Operation === 'summary_style';
+}
+
+const M5_DIAGNOSTIC_APPLICABILITY = Object.freeze({
+  required: Object.freeze([
+    'schemaVersion', 'marker', 'capturedAt', 'appVersionCode', 'appVersionName', 'nextBuildId',
+    'buildChannel', 'requestedLocale', 'uiLocale', 'storedContentLocale', 'operationMode',
+    'rewriteStyle', 'requestIdHash', 'summarySourcePresent', 'summarySourceLength',
+    'summarySourceHash', 'snapshotCreatedBeforeRequest', 'snapshotMatchesApplyContext',
+    'finalCandidateSource', 'providerCandidatePresent', 'apiResponseKind', 'serverFallbackUsed',
+    'clientFallbackUsed', 'meaningfulChangeDetected', 'noOpDetected', 'raceGuardResult',
+    'finalPostconditionsPassed', 'visibleApplySucceeded', 'countedAsSuccess', 'usageCountBefore',
+    'usageCountAfter', 'finalTypedFailureReason', 'rejectionStage', 'stages', 'operationKind',
+    'diagnosticContractRevision', 'apiBaseUrlConfigured', 'capacitorServerUrlConfigured',
+    'apiHostClassificationContractRevision', 'sourceCommitStatus', 'm5Operation',
+    'unsupportedClaimCategory', 'writerCandidateReachedValidation', 'evaluatorReached',
+    'safeNoOpConsidered', 'safeNoOpSelected', 'safeNoOpEligibilityReason', 'roleIdentityResolution',
+    'm5FailureStage', 'm5CanonicalFailureCause',
+  ] as const),
+});
+
+export type M5SummaryDiagnosticCompleteness = Readonly<{
+  passed: boolean;
+  missingRequiredDiagnosticFields: string[];
+  nullRequiredDiagnosticFields: string[];
+  notApplicableDiagnosticFieldViolations: string[];
+  unexpectedDiagnosticFieldTypes: string[];
+}>;
+
+export function checkM5SummaryDiagnosticCompleteness(
+  trace: Record<string, unknown>,
+): M5SummaryDiagnosticCompleteness {
+  const missing: string[] = [];
+  const nullish: string[] = [];
+  const nullableWhenUnavailable = new Set([
+    'appVersionCode', 'appVersionName', 'nextBuildId', 'buildChannel',
+    'storedContentLocale', 'finalTypedFailureReason', 'rejectionStage', 'unsupportedClaimCategory',
+    'm5FailureStage', 'm5CanonicalFailureCause',
+  ]);
+  for (const key of M5_DIAGNOSTIC_APPLICABILITY.required) {
+    if (!(key in trace)) missing.push(key);
+    else if (!nullableWhenUnavailable.has(key)
+      && (trace[key] === null || trace[key] === undefined)) nullish.push(key);
+  }
+  const applicability = checkM5SummaryDiagnosticApplicability(trace);
+  const markerCheck = validateCvAiDiagnosticMarkerField({
+    ...trace,
+    operationKind: trace.operationKind || 'summary',
+  });
+  missing.push(...markerCheck.missingRequiredDiagnosticFields);
+  nullish.push(...markerCheck.nullRequiredDiagnosticFields);
+  return {
+    passed: missing.length === 0
+      && nullish.length === 0
+      && applicability.unclassifiedFields.length === 0
+      && applicability.notApplicableDiagnosticFieldViolations.length === 0
+      && applicability.unexpectedDiagnosticFieldTypes.length === 0,
+    missingRequiredDiagnosticFields: dedupeStableStrings(missing),
+    nullRequiredDiagnosticFields: dedupeStableStrings(nullish),
+    notApplicableDiagnosticFieldViolations: [
+      ...applicability.unclassifiedFields,
+      ...applicability.notApplicableDiagnosticFieldViolations,
+    ],
+    unexpectedDiagnosticFieldTypes: [...applicability.unexpectedDiagnosticFieldTypes],
+  };
+}
+
+export function checkM5SummaryDiagnosticInvariants(
+  trace: Record<string, unknown>,
+): { passed: boolean; failures: CvAiDiagnosticInvariantFailure[] } {
+  const failures: CvAiDiagnosticInvariantFailure[] = [];
+  const push = (invariantCode: string, observed: CvAiDiagnosticInvariantFailure['observed']) => {
+    failures.push({ invariantCode, observed });
+  };
+  const success = trace.countedAsSuccess === true;
+  const applied = trace.visibleApplySucceeded === true;
+  const before = typeof trace.usageCountBefore === 'number' ? trace.usageCountBefore : null;
+  const after = typeof trace.usageCountAfter === 'number' ? trace.usageCountAfter : null;
+  if (success && !applied) {
+    push('m5_success_requires_visible_apply', { countedAsSuccess: true, visibleApplySucceeded: applied });
+  }
+  if (success && (before === null || after === null || after !== before + 1)) {
+    push('m5_success_requires_usage_delta_one', {
+      usageCountBefore: before,
+      usageCountAfter: after,
+    });
+  }
+  if (!success && !applied && (before === null || after === null || after !== before)) {
+    push('m5_failure_requires_zero_usage_delta', {
+      usageCountBefore: before,
+      usageCountAfter: after,
+    });
+  }
+  if (!applied && success) {
+    push('m5_no_visible_apply_forbids_success_increment', {
+      visibleApplySucceeded: applied,
+      countedAsSuccess: success,
+    });
+  }
+  if (trace.finalCandidateSource === 'v3_style' && trace.providerCandidatePresent !== true) {
+    push('m5_style_source_requires_provider_candidate', {
+      finalCandidateSource: 'v3_style',
+      providerCandidatePresent: trace.providerCandidatePresent === true,
+    });
+  }
+  if (trace.finalTypedFailureReason === 'operation_superseded'
+    && (trace.countedAsSuccess === true || trace.visibleApplySucceeded === true)) {
+    push('m5_operation_superseded_cannot_apply', {
+      countedAsSuccess: success,
+      visibleApplySucceeded: applied,
+    });
+  }
+  if (trace.finalTypedFailureReason === 'stale_snapshot'
+    && (trace.countedAsSuccess === true || trace.visibleApplySucceeded === true)) {
+    push('m5_stale_snapshot_cannot_apply', {
+      countedAsSuccess: success,
+      visibleApplySucceeded: applied,
+    });
+  }
+  if (trace.evaluatorReached === true && trace.writerCandidateReachedValidation !== true) {
+    push('m5_evaluator_requires_validated_writer_candidate', {
+      evaluatorReached: true,
+      writerCandidateReachedValidation: trace.writerCandidateReachedValidation === true,
+    });
+  }
+  if ((trace.roleIdentityResolution === 'contradiction' || trace.roleIdentityResolution === 'unresolved')
+    && (success || applied)) {
+    push('m5_unaccepted_role_identity_forbids_apply_or_usage', {
+      roleIdentityResolution: String(trace.roleIdentityResolution),
+      countedAsSuccess: success,
+      visibleApplySucceeded: applied,
+    });
+  }
+  if (trace.roleIdentityResolution === 'equivalent' && trace.evaluatorReached !== true) {
+    push('m5_equivalent_role_identity_requires_evaluator', {
+      roleIdentityResolution: 'equivalent',
+      evaluatorReached: trace.evaluatorReached === true,
+    });
+  }
+  const m5FailureStage = typeof trace.m5FailureStage === 'string' ? trace.m5FailureStage : null;
+  const m5CanonicalFailureCause = typeof trace.m5CanonicalFailureCause === 'string'
+    ? trace.m5CanonicalFailureCause : null;
+  const upstreamProviderStatus = typeof trace.providerHttpStatus === 'number'
+    ? trace.providerHttpStatus : null;
+  if (!m5FailureStage && (m5CanonicalFailureCause !== null || upstreamProviderStatus !== null)) {
+    push('m5_provider_failure_evidence_requires_stage', {
+      m5FailureStage,
+      m5CanonicalFailureCause,
+      providerHttpStatus: upstreamProviderStatus,
+    });
+  }
+  if (m5FailureStage === 'request_construction' && upstreamProviderStatus !== null) {
+    push('m5_request_construction_forbids_upstream_status', {
+      m5FailureStage,
+      providerHttpStatus: upstreamProviderStatus,
+    });
+  }
+  if ((success || applied) && (m5FailureStage !== null || m5CanonicalFailureCause !== null
+    || upstreamProviderStatus !== null)) {
+    push('m5_success_forbids_provider_failure_evidence', {
+      countedAsSuccess: success,
+      visibleApplySucceeded: applied,
+      m5FailureStage,
+      m5CanonicalFailureCause,
+      providerHttpStatus: upstreamProviderStatus,
+    });
+  }
+  const preWriterSourceFloorRejection = trace.unsupportedClaimCategory === 'source_floor_mismatch'
+    && (trace.safeNoOpEligibilityReason === 'source_inconsistency'
+      || trace.safeNoOpEligibilityReason === 'role_employer_frame_inconsistency'
+      || trace.safeNoOpEligibilityReason === 'source_material_result_relation');
+  if (trace.unsupportedClaimCategory !== null
+    && trace.writerCandidateReachedValidation !== true
+    && !preWriterSourceFloorRejection) {
+    push('m5_unsupported_category_requires_writer_candidate', {
+      unsupportedClaimCategory: String(trace.unsupportedClaimCategory),
+      writerCandidateReachedValidation: trace.writerCandidateReachedValidation === true,
+    });
+  }
+  if (trace.safeNoOpSelected === true) {
+    if (trace.safeNoOpConsidered !== true || trace.noOpDetected !== true) {
+      push('m5_selected_safe_noop_requires_considered_noop', {
+        safeNoOpConsidered: trace.safeNoOpConsidered === true,
+        noOpDetected: trace.noOpDetected === true,
+      });
+    }
+    if (success || applied || before === null || after === null || after !== before) {
+      push('m5_selected_safe_noop_forbids_apply_or_usage', {
+        countedAsSuccess: success,
+        visibleApplySucceeded: applied,
+        usageCountBefore: before,
+        usageCountAfter: after,
+      });
+    }
+    if (trace.safeNoOpEligibilityReason !== 'eligible') {
+      push('m5_selected_safe_noop_requires_eligible_source', {
+        safeNoOpEligibilityReason: String(trace.safeNoOpEligibilityReason),
+      });
+    }
+  }
+  if (trace.safeNoOpSelected !== true && trace.safeNoOpConsidered === true
+    && trace.finalTypedFailureReason === null) {
+    push('m5_unselected_safe_noop_requires_terminal_reason', {
+      safeNoOpConsidered: true,
+      safeNoOpSelected: false,
+      finalTypedFailureReason: null,
+    });
+  }
+  return { passed: failures.length === 0, failures };
+}
 
 /** Kept as a compatibility export; it now covers every non-shared constructor field. */
 export const M4_LEGACY_V2_DIAGNOSTIC_FIELDS = Object.freeze(
@@ -396,7 +817,8 @@ export function assertM4SummaryFieldAuthorityCoverage(fields: readonly string[])
 }
 
 export function isM4LegacyV2DiagnosticFieldsApplicable(trace: Record<string, unknown>): boolean {
-  return trace.m4Operation !== 'summary_v3_generate'
+  return trace.m5Operation !== 'summary_style'
+    && trace.m4Operation !== 'summary_v3_generate'
     && trace.m4LegacyV2DiagnosticFieldsApplicable !== false;
 }
 
@@ -426,7 +848,7 @@ export function checkM4SummaryDiagnosticApplicability(
     }
   }
   const unexpectedDiagnosticFieldTypes: string[] = [];
-  if (trace.m4Operation !== 'summary_v3_generate') {
+  if (trace.m4Operation !== 'summary_v3_generate' && trace.m5Operation !== 'summary_style') {
     unexpectedDiagnosticFieldTypes.push('m4Operation:not_summary_v3_generate');
   }
   if (trace.m4LegacyV2DiagnosticFieldsApplicable !== false) {
@@ -469,6 +891,24 @@ export type SummaryDiagnosticProjectionResult =
         | 'unclassified_field'
         | 'invalid_field_authority'
         | 'projection_contract_mismatch';
+    }>
+  | Readonly<{
+      ok: true;
+      variant: 'm5';
+      trace: SummaryM5ProjectedDiagnostic;
+      unclassifiedFields: readonly [];
+      notApplicableFieldViolations: readonly [];
+    }>
+  | Readonly<{
+      ok: false;
+      variant: 'm5';
+      trace: SummaryM5ProjectedDiagnostic;
+      unclassifiedFields: readonly string[];
+      notApplicableFieldViolations: readonly string[];
+      projectionFailureReason:
+        | 'unclassified_field'
+        | 'invalid_field_authority'
+        | 'projection_contract_mismatch';
     }>;
 
 function isSummaryM4ProjectedDiagnostic(
@@ -482,6 +922,55 @@ function isSummaryM4ProjectedDiagnostic(
 export function projectSummaryAiDiagnosticApplicability(
   trace: Readonly<Record<string, unknown>>,
 ): SummaryDiagnosticProjectionResult {
+  if (trace.m5Operation === 'summary_style') {
+    const projected: Record<string, unknown> = { ...trace };
+    const unclassifiedFields: string[] = [];
+    for (const field of Object.keys(projected)) {
+      const authority = getM5SummaryFieldAuthority(field);
+      if (!authority) {
+        unclassifiedFields.push(field);
+        delete projected[field];
+      } else if (authority === 'V2_NOT_APPLICABLE_TO_M5'
+        || authority === 'M4_NOT_APPLICABLE_TO_M5'
+        || authority === 'PRESENT_BUT_NOT_EVALUATED'
+        || authority === 'DEPRECATED') {
+        delete projected[field];
+      }
+    }
+    const safeTrace = Object.freeze(projected);
+    if (!isSummaryM5ProjectedDiagnostic(safeTrace)) {
+      const normalizedTrace = Object.freeze({
+        ...safeTrace,
+        m5Operation: 'summary_style' as const,
+      });
+      return Object.freeze({
+        ok: false,
+        variant: 'm5',
+        trace: normalizedTrace,
+        unclassifiedFields: dedupeStableStrings(unclassifiedFields),
+        notApplicableFieldViolations: [],
+        projectionFailureReason: 'projection_contract_mismatch' as const,
+      });
+    }
+    const unknown = dedupeStableStrings(unclassifiedFields);
+    if (unknown.length > 0) {
+      return Object.freeze({
+        ok: false,
+        variant: 'm5',
+        trace: safeTrace,
+        unclassifiedFields: unknown,
+        notApplicableFieldViolations: [],
+        projectionFailureReason: 'unclassified_field' as const,
+      });
+    }
+    return Object.freeze({
+      ok: true,
+      variant: 'm5',
+      trace: safeTrace,
+      unclassifiedFields: [] as const,
+      notApplicableFieldViolations: [] as const,
+    });
+  }
   if (isM4LegacyV2DiagnosticFieldsApplicable(trace)) {
     return Object.freeze({
       ok: true,
@@ -1070,6 +1559,22 @@ export type SummaryAiDiagnosticDraft = {
   apiHostClass?: string | null;
   apiHostClassificationContractRevision?: string;
   sourceCommitStatus?: string | null;
+  /** Explicit M5 Summary style discriminator; absent on V2 and M4 traces. */
+  m5Operation?: 'summary_style';
+  unsupportedClaimCategory?: 'unsupported_metric' | 'unsupported_result_relation'
+    | 'unsupported_achievement' | 'unsupported_authority' | 'source_floor_mismatch'
+    | 'manifest_ceiling_mismatch' | 'other_typed_category' | null;
+  writerCandidateReachedValidation?: boolean;
+  evaluatorReached?: boolean;
+  safeNoOpConsidered?: boolean;
+  safeNoOpSelected?: boolean;
+  safeNoOpEligibilityReason?: 'eligible' | 'wrong_style' | 'wrong_mode' | 'source_empty'
+    | 'source_locale_surface_mismatch' | 'source_locale_content_mismatch'
+    | 'source_inconsistency' | 'role_employer_frame_inconsistency'
+    | 'source_material_result_relation' | 'not_applicable';
+  roleIdentityResolution?: 'not_required' | 'equivalent' | 'contradiction' | 'unresolved';
+  m5FailureStage?: SummaryV3ProviderFailureStage | null;
+  m5CanonicalFailureCause?: SummaryV3ProviderErrorType | null;
   providerRejectionReason?: string | null;
   providerTypedRejectionReason?: string | null;
   providerSlotRejectionReasons?: string[] | null;
@@ -1326,15 +1831,32 @@ export type SummaryM4ExternalDiagnostic = Readonly<
 >;
 
 export type SummaryV2ExternalDiagnostic = Readonly<
-  Omit<SummaryAiDiagnosticDraft, SummaryM4OnlyField>
+  Omit<SummaryAiDiagnosticDraft, SummaryM4OnlyField | 'm5Operation'>
   & { [K in Exclude<SummaryM4OnlyField, 'm4Operation'>]?: never }
-  & { m4Operation?: undefined }
+  & { m4Operation?: undefined; m5Operation?: undefined }
+>;
+
+type SummaryM5OnlyField = 'm5Operation' | 'summaryFinalCandidateDiagnosticsRevision'
+  | 'unsupportedClaimCategory' | 'writerCandidateReachedValidation' | 'evaluatorReached'
+  | 'safeNoOpConsidered' | 'safeNoOpSelected' | 'safeNoOpEligibilityReason' | 'roleIdentityResolution'
+  | 'm5FailureStage' | 'm5CanonicalFailureCause';
+type SummaryM5ForbiddenField = Exclude<
+  keyof SummaryAiDiagnosticDraft,
+  SummaryM4SharedExternalField | SummaryM5OnlyField | 'diagnosticTruncatedSection'
+>;
+
+export type SummaryM5ExternalDiagnostic = Readonly<
+  Required<Pick<SummaryAiDiagnosticDraft, SummaryM4SharedExternalField>>
+  & Pick<SummaryAiDiagnosticDraft, 'diagnosticTruncatedSection' | 'summaryFinalCandidateDiagnosticsRevision'>
+  & { [K in SummaryM5ForbiddenField]?: never }
+  & { m5Operation: 'summary_style' }
 >;
 
 /** Truthful persisted/exported contract consumed by latest, copy, panel, and history projection. */
 export type SummaryAiDiagnosticTrace =
   | SummaryV2ExternalDiagnostic
-  | SummaryM4ExternalDiagnostic;
+  | SummaryM4ExternalDiagnostic
+  | SummaryM5ExternalDiagnostic;
 
 function deepFreezeSummaryDiagnostic<T extends object>(value: T, seen = new WeakSet<object>()): T {
   if (seen.has(value)) return value;
@@ -1366,8 +1888,30 @@ function isPersistedSummaryM4Diagnostic(value: unknown): value is SummaryM4Exter
   });
 }
 
+const M5_SUMMARY_EXTERNAL_REQUIRED_FIELDS = Object.freeze([
+  ...M4_SHARED_CONSTRUCTOR_FIELDS,
+  ...M4_NON_CONSTRUCTOR_AUTHORITATIVE_FIELDS
+    .filter((field) => !field.startsWith('m4'))
+    .filter((field) => !M4_OPTIONAL_EXTERNAL_FIELDS.includes(
+      field as (typeof M4_OPTIONAL_EXTERNAL_FIELDS)[number],
+    )),
+  ...M4_TERMINAL_RECEIPT_FIELDS,
+  ...M5_AUTHORITATIVE_FIELDS.filter((field) => field !== 'summaryFinalCandidateDiagnosticsRevision'),
+].filter((field, index, all) => all.indexOf(field) === index));
+
+export function isPersistedSummaryM5Diagnostic(value: unknown): value is SummaryM5ExternalDiagnostic {
+  if (!isRecord(value) || value.m5Operation !== 'summary_style') return false;
+  if (M5_SUMMARY_EXTERNAL_REQUIRED_FIELDS.some((key) => !(key in value))) return false;
+  const fieldsAreOwned = Object.keys(value).every((field) => {
+    const authority = getM5SummaryFieldAuthority(field);
+    return authority === 'SHARED_AUTHORITATIVE' || authority === 'M5_AUTHORITATIVE';
+  });
+  return fieldsAreOwned
+    && checkM5SummaryDiagnosticApplicability(value).unexpectedDiagnosticFieldTypes.length === 0;
+}
+
 function isPersistedSummaryV2Diagnostic(value: unknown): value is SummaryV2ExternalDiagnostic {
-  if (!isRecord(value) || value.m4Operation === 'summary_v3_generate') return false;
+  if (!isRecord(value) || 'm4Operation' in value || 'm5Operation' in value) return false;
   return value.schemaVersion === SUMMARY_AI_TRACE_SCHEMA_VERSION
     && typeof value.capturedAt === 'string'
     && typeof value.requestedLocale === 'string'
@@ -1389,6 +1933,8 @@ export type SummaryAiDiagSessionInput = {
   rewriteStyle?: string | null;
   operationMode?: string | null;
   jobContextHash?: string | null;
+  /** Explicit M5 Summary style ownership; never inferred from rewriteStyle. */
+  m5Operation?: 'summary_style';
 };
 
 export class SummaryAiDiagnosticSession {
@@ -1429,6 +1975,18 @@ export class SummaryAiDiagnosticSession {
       templateId: input.templateId || '',
       operationMode: input.operationMode || 'summary_generate',
       rewriteStyle: input.rewriteStyle || null,
+      ...(input.m5Operation ? {
+        m5Operation: input.m5Operation,
+        unsupportedClaimCategory: null,
+        writerCandidateReachedValidation: false,
+        evaluatorReached: false,
+        safeNoOpConsidered: false,
+        safeNoOpSelected: false,
+        safeNoOpEligibilityReason: 'not_applicable',
+        roleIdentityResolution: 'not_required',
+        m5FailureStage: null,
+        m5CanonicalFailureCause: null,
+      } : {}),
       requestIdHash: fingerprintText(input.requestId || ''),
       summarySourcePresent: false,
       summarySourceLength: 0,
@@ -4186,9 +4744,11 @@ export class SummaryAiDiagnosticSession {
       capacitorServerUrlConfigured: false,
       sourceCommitStatus: this.draft.sourceCommitStatus || 'unknown',
     };
-    const invariants = checkSummaryDiagnosticInvariants(
-      provisional as Parameters<typeof checkSummaryDiagnosticInvariants>[0],
-    );
+    const invariants = this.draft.m5Operation === 'summary_style'
+      ? checkM5SummaryDiagnosticInvariants(provisional as Record<string, unknown>)
+      : checkSummaryDiagnosticInvariants(
+        provisional as Parameters<typeof checkSummaryDiagnosticInvariants>[0],
+      );
     const withInvariants = {
       ...provisional,
       diagnosticInvariantCheckPassed: invariants.passed,
@@ -4200,7 +4760,11 @@ export class SummaryAiDiagnosticSession {
     const locale = String(this.draft.requestedLocale || '');
     let completenessPassed = true;
     const nullDecision: string[] = [];
-    if (locale === 'en') {
+    if (this.draft.m5Operation === 'summary_style') {
+      completenessPassed = checkM5SummaryDiagnosticCompleteness(
+        withInvariants as Record<string, unknown>,
+      ).passed;
+    } else if (locale === 'en') {
       const required = [
         'currentRoleConcreteFactCoverage',
         'priorRoleGroundingPassed',
@@ -4274,7 +4838,7 @@ export class SummaryAiDiagnosticSession {
     });
   }
 
-  commit(): SummaryAiDiagnosticTrace {
+  commit(options: { publishLatest?: boolean } = {}): SummaryAiDiagnosticTrace {
     if (this.committedTrace) return this.committedTrace;
     const apiBase = getApiBaseUrl();
     const identity = buildCvAiDiagnosticBuildIdentity({
@@ -4309,9 +4873,11 @@ export class SummaryAiDiagnosticSession {
           ? this.draft.diagnosticInvariantFailures
           : [],
       }
-      : checkSummaryDiagnosticInvariants(
-        base as Parameters<typeof checkSummaryDiagnosticInvariants>[0],
-      );
+      : this.draft.m5Operation === 'summary_style'
+        ? checkM5SummaryDiagnosticInvariants(base as Record<string, unknown>)
+        : checkSummaryDiagnosticInvariants(
+          base as Parameters<typeof checkSummaryDiagnosticInvariants>[0],
+        );
     const projectionInvariantFailures = projection.ok
       ? []
       : [{
@@ -4346,7 +4912,11 @@ export class SummaryAiDiagnosticSession {
         notApplicableDiagnosticFieldViolations: [],
         unexpectedDiagnosticFieldTypes: [],
       }
-      : this.draft.m4Operation === 'summary_v3_generate'
+      : this.draft.m5Operation === 'summary_style'
+        ? checkM5SummaryDiagnosticCompleteness(
+          withInvariants as Record<string, unknown>,
+        )
+        : this.draft.m4Operation === 'summary_v3_generate'
         ? checkM4SummaryDiagnosticCompleteness(
           withInvariants as Record<string, unknown>,
         )
@@ -4385,15 +4955,19 @@ export class SummaryAiDiagnosticSession {
     const persistedCandidate = JSON.parse(JSON.stringify(sized)) as Record<string, unknown>;
     const trace: SummaryAiDiagnosticTrace = projection.variant === 'm4'
       ? deepFreezeSummaryDiagnostic(persistedCandidate as SummaryM4ExternalDiagnostic)
-      : deepFreezeSummaryDiagnostic(persistedCandidate as SummaryV2ExternalDiagnostic);
+      : projection.variant === 'm5'
+        ? deepFreezeSummaryDiagnostic(persistedCandidate as SummaryM5ExternalDiagnostic)
+        : deepFreezeSummaryDiagnostic(persistedCandidate as SummaryV2ExternalDiagnostic);
     this.committedTrace = trace;
-    latestSummaryTrace = trace;
-    try {
-      if (typeof localStorage !== 'undefined') {
-        localStorage.setItem(SUMMARY_AI_DIAG_STORAGE_KEY, JSON.stringify(trace));
+    if (options.publishLatest !== false) {
+      latestSummaryTrace = trace;
+      try {
+        if (typeof localStorage !== 'undefined') {
+          localStorage.setItem(SUMMARY_AI_DIAG_STORAGE_KEY, JSON.stringify(trace));
+        }
+      } catch {
+        /* ignore */
       }
-    } catch {
-      /* ignore */
     }
     try {
       appendCvAiDiagnosticHistory({
@@ -4435,7 +5009,9 @@ function readStored(): SummaryAiDiagnosticTrace | null {
     const raw = localStorage.getItem(SUMMARY_AI_DIAG_STORAGE_KEY);
     if (!raw) return null;
     const parsed: unknown = JSON.parse(raw);
-    if (!isPersistedSummaryM4Diagnostic(parsed) && !isPersistedSummaryV2Diagnostic(parsed)) {
+    if (!isPersistedSummaryM4Diagnostic(parsed)
+      && !isPersistedSummaryM5Diagnostic(parsed)
+      && !isPersistedSummaryV2Diagnostic(parsed)) {
       localStorage.removeItem(SUMMARY_AI_DIAG_STORAGE_KEY);
       return null;
     }
@@ -4594,7 +5170,7 @@ export function summarizeSummaryAiDiagnostic(trace: SummaryAiDiagnosticTrace | n
   let independentFinalDurationClaimCount: number | null = null;
   let visibleDurationClaimCountAfterApply: number | null = null;
   let durationValidationPassed: boolean | null = null;
-  if (trace.m4Operation !== 'summary_v3_generate') {
+  if (trace.m4Operation !== 'summary_v3_generate' && trace.m5Operation !== 'summary_style') {
     durationCount = trace.independentFinalDurationClaimCount;
     independentFinalDurationClaimCount = trace.independentFinalDurationClaimCount;
     visibleDurationClaimCountAfterApply = trace.visibleDurationClaimCountAfterApply ?? null;
