@@ -8,12 +8,14 @@ import {
   canonicalSummaryV3StyleLocale,
   createSummaryV3StyleOperationSnapshot,
   hashSummaryV3StyleValue,
+  SUMMARY_V3_STYLE_M5_WRITER_OUTPUT_CONTRACT_FAILURE_CLASSES,
   type SummaryV3Style,
   type SummaryV3StyleRequest,
   type SummaryV3StyleRoleIdentityResolution,
   type SummaryV3StyleSafeNoOpEligibilityReason,
   type SummaryV3StyleSupportedLocale,
   type SummaryV3StyleUnsupportedClaimCategory,
+  type SummaryV3StyleWriterOutputContractFailureClass,
   type SummaryV3StyleRolePresentationEvidence,
 } from './summary-style-m5';
 import {
@@ -291,11 +293,18 @@ const SAFE_NO_OP_ELIGIBILITY_REASONS = new Set<SummaryV3StyleSafeNoOpEligibility
 const ROLE_IDENTITY_RESOLUTIONS = new Set<SummaryV3StyleRoleIdentityResolution>([
   'not_required', 'equivalent', 'contradiction', 'unresolved',
 ]);
+const WRITER_OUTPUT_CONTRACT_FAILURE_CLASSES = new Set<SummaryV3StyleWriterOutputContractFailureClass>(
+  SUMMARY_V3_STYLE_M5_WRITER_OUTPUT_CONTRACT_FAILURE_CLASSES,
+);
 
 function readClientEvidence(value: unknown): SummaryV3StyleClientEvidence | null {
   const evidence = resultRecord(value);
   if (!evidence) return null;
   const category = evidence.unsupportedClaimCategory;
+  const writerOutputContractFailureClass = evidence.writerOutputContractFailureClass === null
+    || evidence.writerOutputContractFailureClass === undefined
+    ? null
+    : evidence.writerOutputContractFailureClass;
   const m5ProviderFailure = evidence.m5ProviderFailure === null || evidence.m5ProviderFailure === undefined
     ? null
     : parseSummaryV3ProviderFailureEnvelope(evidence.m5ProviderFailure);
@@ -303,6 +312,10 @@ function readClientEvidence(value: unknown): SummaryV3StyleClientEvidence | null
     && m5ProviderFailure === null) return null;
   if (category !== null && (typeof category !== 'string'
     || !UNSUPPORTED_CLAIM_CATEGORIES.has(category as SummaryV3StyleUnsupportedClaimCategory))) return null;
+  if (writerOutputContractFailureClass !== null && (typeof writerOutputContractFailureClass !== 'string'
+    || !WRITER_OUTPUT_CONTRACT_FAILURE_CLASSES.has(
+      writerOutputContractFailureClass as SummaryV3StyleWriterOutputContractFailureClass,
+    ))) return null;
   if (typeof evidence.writerCandidateReachedValidation !== 'boolean'
     || typeof evidence.evaluatorReached !== 'boolean'
     || typeof evidence.safeNoOpConsidered !== 'boolean'
@@ -317,6 +330,7 @@ function readClientEvidence(value: unknown): SummaryV3StyleClientEvidence | null
     )) return null;
   return {
     unsupportedClaimCategory: category as SummaryV3StyleUnsupportedClaimCategory | null,
+    writerOutputContractFailureClass: writerOutputContractFailureClass as SummaryV3StyleWriterOutputContractFailureClass | null,
     writerCandidateReachedValidation: evidence.writerCandidateReachedValidation,
     evaluatorReached: evidence.evaluatorReached,
     safeNoOpConsidered: evidence.safeNoOpConsidered,

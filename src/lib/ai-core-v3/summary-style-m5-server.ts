@@ -55,6 +55,7 @@ import {
   type SummaryV3StyleRoleIdentityResolution,
   type SummaryV3StyleSafeNoOpEligibilityReason,
   type SummaryV3StyleUnsupportedClaimCategory,
+  type SummaryV3StyleWriterOutputContractFailureClass,
   type SummaryV3StyleViolation,
   type SummaryV3StyleViolationCode,
 } from './summary-style-m5';
@@ -205,14 +206,22 @@ type ParsedStyleEvidence = ParsedShorterEvidence | ParsedStrongerEvidence | Pars
 
 type WriterParseResult =
   | Readonly<{ ok: true; candidate: SummaryV3StyleCandidate }>
-  | Readonly<{ ok: false; reason: 'writer_transport_malformed' | 'writer_identity_mismatch' | 'candidate_malformed' | 'lost_source_fact' }>;
+  | Readonly<{ ok: false; reason: 'writer_transport_malformed' | 'writer_identity_mismatch' | 'candidate_malformed' }>
+  | Readonly<{ ok: false; reason: 'lost_source_fact'; writerOutputContractFailureClass: SummaryV3StyleWriterOutputContractFailureClass }>;
 
 type EvaluatorParseResult =
   | Readonly<{ ok: true; evaluation: ParsedEvaluation }>
   | Readonly<{ ok: false; reason: 'evaluator_transport_malformed' | 'evaluator_rejected' }>;
 
-function writerFailure(reason: Extract<WriterParseResult, { ok: false }>['reason']): WriterParseResult {
-  return immutableCopy({ ok: false as const, reason }) as WriterParseResult;
+function writerFailure(
+  reason: Extract<WriterParseResult, { ok: false }>['reason'],
+  writerOutputContractFailureClass?: SummaryV3StyleWriterOutputContractFailureClass,
+): WriterParseResult {
+  return immutableCopy({
+    ok: false as const,
+    reason,
+    ...(writerOutputContractFailureClass ? { writerOutputContractFailureClass } : {}),
+  }) as WriterParseResult;
 }
 
 function evaluatorFailure(reason: Extract<EvaluatorParseResult, { ok: false }>['reason']): EvaluatorParseResult {
@@ -1264,6 +1273,21 @@ function candidateTransportHasProhibitedSurface(
     || summaryV3StyleHasReservedTransportMetadataPrefix(surface));
 }
 
+function classifyWriterOutputContractFailure(
+  snapshot: SummaryV3StyleOperationSnapshot,
+  candidate: SummaryV3StyleCandidate,
+  coverage: ReturnType<typeof summarizeSummaryV3StyleFactCoverage>,
+): SummaryV3StyleWriterOutputContractFailureClass | null {
+  if (coverage.missingFactCount > 0) return 'required_fact_coverage';
+  if (!summaryV3StyleCandidatePreservesLocks(snapshot, candidate.text)) return 'source_lock_preservation';
+  if (!summaryV3StyleCandidatePreservesCalendarDateSurfaces(snapshot, candidate.text)) return 'calendar_date_source_floor';
+  if (!summaryV3StyleCandidatePreservesExactMaterialSurfaces(snapshot, candidate.text)) return 'exact_material_source_floor';
+  if (!summaryV3StyleCandidatePreservesEntityFactBindings(snapshot, candidate.text)) return 'entity_fact_binding_preservation';
+  if (!summaryV3StyleCandidateRepresentsRequiredFacts(snapshot, candidate.text)) return 'candidate_source_floor';
+  if (!summaryV3StyleCandidateUnitsRepresentDeclaredFacts(snapshot, candidate)) return 'unit_declared_fact_binding';
+  return null;
+}
+
 function parseWriterOutput(value: unknown, snapshot: SummaryV3StyleOperationSnapshot): WriterParseResult {
   if (!isSummaryV3StyleRecord(value)
     || !summaryV3StyleHasExactKeys(value, ['toolName', 'contentBlockCount', 'textBlockCount', 'toolBlockCount', 'input'])) {
@@ -1304,15 +1328,8 @@ function parseWriterOutput(value: unknown, snapshot: SummaryV3StyleOperationSnap
   if (suppliedFacts.some((factId) => !allowedFacts.has(factId)) || new Set(suppliedFacts).size !== suppliedFacts.length) {
     return writerFailure('candidate_malformed');
   }
-  if (coverage.missingFactCount > 0
-    || !summaryV3StyleCandidatePreservesLocks(snapshot, candidate.text)
-    || !summaryV3StyleCandidatePreservesCalendarDateSurfaces(snapshot, candidate.text)
-    || !summaryV3StyleCandidatePreservesExactMaterialSurfaces(snapshot, candidate.text)
-    || !summaryV3StyleCandidatePreservesEntityFactBindings(snapshot, candidate.text)
-    || !summaryV3StyleCandidateRepresentsRequiredFacts(snapshot, candidate.text)
-    || !summaryV3StyleCandidateUnitsRepresentDeclaredFacts(snapshot, candidate)) {
-    return writerFailure('lost_source_fact');
-  }
+  const writerOutputContractFailureClass = classifyWriterOutputContractFailure(snapshot, candidate, coverage);
+  if (writerOutputContractFailureClass) return writerFailure('lost_source_fact', writerOutputContractFailureClass);
   return immutableCopy({ ok: true, candidate });
 }
 
@@ -1698,6 +1715,7 @@ interface EvidenceUpdate {
   readonly evaluation?: ParsedEvaluation | null;
   readonly localFailureReason?: SummaryV3StyleFailureReason | null;
   readonly unsupportedClaimCategory?: SummaryV3StyleUnsupportedClaimCategory | null;
+  readonly writerOutputContractFailureClass?: SummaryV3StyleWriterOutputContractFailureClass | null;
   readonly safeNoOpConsidered?: boolean;
   readonly safeNoOpSelected?: boolean;
   readonly safeNoOpEligibilityReason?: SummaryV3StyleSafeNoOpEligibilityReason;
@@ -1789,6 +1807,7 @@ function makeEvidence(snapshot: SummaryV3StyleOperationSnapshot, update: Evidenc
       ? true
       : evaluation ? !localViolation && styleNoOp(evaluation.styleEvidence) : false,
     unsupportedClaimCategory: update.unsupportedClaimCategory ?? null,
+    writerOutputContractFailureClass: update.writerOutputContractFailureClass ?? null,
     writerCandidateReachedValidation: Boolean(candidate && (update.writerAttempts ?? 0) > 0),
     evaluatorReached: (update.evaluatorAttempts ?? 0) > 0,
     safeNoOpConsidered: update.safeNoOpConsidered ?? false,
@@ -2052,7 +2071,12 @@ export async function executeSummaryV3StyleServer(
     }));
   }
   const parsedWriter = parseWriterOutput(rawWriter, snapshot);
-  if (!parsedWriter.ok) return createSummaryV3StyleHandledFailure(snapshot, parsedWriter.reason, makeEvidence(snapshot, { writerAttempts: 1 }));
+  if (!parsedWriter.ok) return createSummaryV3StyleHandledFailure(snapshot, parsedWriter.reason, makeEvidence(snapshot, {
+    writerAttempts: 1,
+    writerOutputContractFailureClass: parsedWriter.reason === 'lost_source_fact'
+      ? parsedWriter.writerOutputContractFailureClass
+      : null,
+  }));
   // A nonnumeric material-result injection is a source-floor failure that is
   // fully decidable from writer text. Reject it before it reaches evaluator
   // authority; the broader local style/authority checks retain their normal

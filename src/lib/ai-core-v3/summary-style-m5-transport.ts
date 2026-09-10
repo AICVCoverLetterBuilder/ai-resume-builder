@@ -4,6 +4,7 @@ import type {
   SummaryV3StyleRoleIdentityResolution,
   SummaryV3StyleSafeNoOpEligibilityReason,
   SummaryV3StyleUnsupportedClaimCategory,
+  SummaryV3StyleWriterOutputContractFailureClass,
 } from './summary-style-m5';
 import { SUMMARY_V3_STYLE_M5_SERVER_RESULT_KINDS } from './summary-style-m5';
 
@@ -23,6 +24,7 @@ export type SummaryV3StyleM5RouteFailureReason = AiErrorCode | SummaryV3StyleM5R
 
 export type SummaryV3StyleM5BoundedEvidence = Readonly<{
   unsupportedClaimCategory: SummaryV3StyleUnsupportedClaimCategory | null;
+  writerOutputContractFailureClass: SummaryV3StyleWriterOutputContractFailureClass | null;
   writerCandidateReachedValidation: boolean;
   evaluatorReached: boolean;
   safeNoOpConsidered: boolean;

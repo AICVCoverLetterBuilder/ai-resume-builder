@@ -204,6 +204,7 @@ describe('M5 Summary typed diagnostic applicability', () => {
     expect(readback).toMatchObject({
       m5Operation: 'summary_style',
       roleIdentityResolution: 'equivalent',
+      writerOutputContractFailureClass: null,
       providerHttpStatus: null,
       m5FailureStage: null,
       m5CanonicalFailureCause: null,
@@ -233,6 +234,47 @@ describe('M5 Summary typed diagnostic applicability', () => {
       notApplicableDiagnosticFieldViolations: [],
       unexpectedDiagnosticFieldTypes: [],
     });
+  });
+
+  it('requires a finite parser class for initial writer lost_source_fact and permits evaluator-origin loss without one', async () => {
+    const successful = await buildSuccessfulM5Trace();
+    const parserLost = {
+      ...successful,
+      countedAsSuccess: false,
+      visibleApplySucceeded: false,
+      finalCandidateSource: 'none',
+      providerCandidatePresent: false,
+      writerCandidateReachedValidation: false,
+      evaluatorReached: false,
+      roleIdentityResolution: 'not_required',
+      finalTypedFailureReason: 'lost_source_fact',
+      rejectionStage: 'api_response',
+      usageCountAfter: successful.usageCountBefore,
+      writerOutputContractFailureClass: 'candidate_source_floor',
+    } as unknown as Record<string, unknown>;
+    expect(checkM5SummaryDiagnosticCompleteness(parserLost).passed).toBe(true);
+    expect(checkM5SummaryDiagnosticInvariants(parserLost)).toMatchObject({ passed: true, failures: [] });
+
+    const evaluatorLost = {
+      ...parserLost,
+      writerCandidateReachedValidation: true,
+      evaluatorReached: true,
+      roleIdentityResolution: 'equivalent',
+      writerOutputContractFailureClass: null,
+    } as Record<string, unknown>;
+    expect(checkM5SummaryDiagnosticCompleteness(evaluatorLost).passed).toBe(true);
+    expect(checkM5SummaryDiagnosticInvariants(evaluatorLost)).toMatchObject({ passed: true, failures: [] });
+  });
+
+  it('rejects an unknown writer contract failure class at the diagnostic boundary', async () => {
+    const successful = await buildSuccessfulM5Trace();
+    const unknown = {
+      ...successful,
+      writerOutputContractFailureClass: 'provider_raw_error',
+    } as unknown as Record<string, unknown>;
+    expect(checkM5SummaryDiagnosticApplicability(unknown).unexpectedDiagnosticFieldTypes)
+      .toContain('writerOutputContractFailureClass:invalid');
+    expect(isPersistedSummaryM5Diagnostic(unknown)).toBe(false);
   });
 
   it('persists only finite M5 provider cause fields and rejects app-status masquerading as upstream status', async () => {

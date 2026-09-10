@@ -152,6 +152,8 @@ async function runWithCandidate(
     request?: SummaryV3StyleRequest;
     roleIdentityResolution?: unknown;
     omitRoleIdentityResolution?: boolean;
+    evaluatorLostSourceFact?: boolean;
+    repairWriterMalformed?: boolean;
   } = {},
 ) {
   const calls = { writer: 0, evaluator: 0 };
@@ -166,9 +168,92 @@ async function runWithCandidate(
           ? options.roleIdentityResolution
           : input.roleIdentity.status === 'unresolved' ? 'equivalent' : 'not_required',
       );
+      if (options.evaluatorLostSourceFact) {
+        return {
+          ...evaluation,
+          input: {
+            ...evaluation.input,
+            phases: {
+              ...evaluation.input.phases,
+              semantic_grounding: {
+                status: 'failed',
+                violations: [{
+                  code: 'lost_source_fact',
+                  factIdHashes: [input.requiredFacts[0]!.hash],
+                  unitHashes: [summaryV3StyleCandidateUnitHash(input.candidate.units[0]!)],
+                  repairable: false,
+                }],
+              },
+            },
+            representedFactIdHashes: input.requiredFacts.map((fact) => fact.hash),
+            missingFactIdHashes: [],
+          },
+        };
+      }
+      if (options.repairWriterMalformed) {
+        return {
+          ...evaluation,
+          input: {
+            ...evaluation.input,
+            phases: {
+              ...evaluation.input.phases,
+              style_fulfillment: {
+                status: 'failed',
+                violations: [{
+                  code: 'style_not_fulfilled',
+                  factIdHashes: [input.requiredFacts[0]!.hash],
+                  unitHashes: [summaryV3StyleCandidateUnitHash(input.candidate.units[0]!)],
+                  repairable: true,
+                }],
+              },
+            },
+          },
+        };
+      }
       if (!options.omitRoleIdentityResolution) return evaluation;
       const { roleIdentityResolution: _omitted, ...boundedInput } = evaluation.input;
       return { ...evaluation, input: boundedInput };
+    },
+    ...(options.repairWriterMalformed ? {
+      async repairWrite() { return { malformed: true }; },
+      async repairEvaluate(input: SummaryV3StyleEvaluatorInput) { return passingEvaluation(input); },
+    } : {}),
+  });
+  return { result, calls };
+}
+
+type WriterUnitPlan = Readonly<{ readonly text: string; readonly factIndexes: readonly number[] }>;
+
+async function runWithWriterUnitPlan(
+  plans: readonly WriterUnitPlan[],
+  physicalRequest: SummaryV3StyleRequest = unresolvedPhysicalRequest(),
+) {
+  const calls = { writer: 0, evaluator: 0 };
+  const result = await executeSummaryV3StyleServer(physicalRequest, {
+    async write(input) {
+      calls.writer += 1;
+      return {
+        toolName: SUMMARY_V3_STYLE_M5_WRITER_TOOL_NAME,
+        contentBlockCount: 1,
+        textBlockCount: 0,
+        toolBlockCount: 1,
+        input: {
+          operationId: input.operationId,
+          snapshotHash: input.snapshotHash,
+          manifestHash: input.manifestHash,
+          style: input.style,
+          locale: input.locale,
+          units: plans.map((plan, index) => ({
+            unitId: `physical-writer-unit-${index + 1}`,
+            text: plan.text,
+            factIds: plan.factIndexes.map((factIndex) => input.requiredFacts[factIndex]!.id),
+          })),
+        },
+      };
+    },
+    async evaluate(input) {
+      calls.evaluator += 1;
+      return passingEvaluation(input, false, 'equivalent');
     },
   });
   return { result, calls };
@@ -211,6 +296,38 @@ describe('M8 AAB563 physical-equivalent M5 Stronger boundary', () => {
     const candidate = 'I bring approximately three years of experience. I currently work as an Electrical Service Technician at NordWerk Elektroservice Test, where I perform maintenance work on electrical systems, diagnose and resolve faults in electrical systems, as well as actively support the installation of electrical components.';
     const { result, calls } = await runWithCandidate(candidate);
     expect(result, JSON.stringify(result)).toMatchObject({ kind: 'candidate_ready' });
+    expect(calls).toEqual({ writer: 1, evaluator: 1 });
+  });
+
+  it('keeps evaluator-origin lost_source_fact distinct from initial writer parser loss', async () => {
+    const candidate = 'I bring approximately three years of experience. I currently work as an Electrical Service Technician at NordWerk Elektroservice Test, maintaining electrical systems, diagnosing and resolving electrical faults, and supporting the installation of electrical components.';
+    const { result, calls } = await runWithCandidate(candidate, { evaluatorLostSourceFact: true });
+    expect(result).toMatchObject({
+      kind: 'handled_failure',
+      typedReason: 'lost_source_fact',
+      evidence: {
+        writerAttempts: 1,
+        evaluatorAttempts: 1,
+        writerCandidateReachedValidation: true,
+        evaluatorReached: true,
+        writerOutputContractFailureClass: null,
+      },
+    });
+    expect(calls).toEqual({ writer: 1, evaluator: 1 });
+  });
+
+  it('does not attach an initial writer class to a repair-writer parse terminal', async () => {
+    const candidate = 'I bring approximately three years of experience. I currently work as an Electrical Service Technician at NordWerk Elektroservice Test, maintaining electrical systems, diagnosing and resolving electrical faults, and supporting the installation of electrical components.';
+    const { result, calls } = await runWithCandidate(candidate, { repairWriterMalformed: true });
+    expect(result).toMatchObject({
+      kind: 'handled_failure',
+      typedReason: 'repair_transport_malformed',
+      evidence: {
+        writerOutputContractFailureClass: null,
+        writerCandidateReachedValidation: true,
+        evaluatorReached: true,
+      },
+    });
     expect(calls).toEqual({ writer: 1, evaluator: 1 });
   });
 
@@ -596,5 +713,88 @@ describe('M8 AAB563 physical-equivalent M5 Stronger boundary', () => {
       },
     });
     expect(calls).toEqual({ writer: 1, evaluator: 1 });
+  });
+});
+
+describe('M8 AAB571 multi-unit writer source-floor regression', () => {
+  const durationUnit = 'I bring approximately three years of experience.';
+  const validBody = 'I currently work as an Electrical Service Technician at NordWerk Elektroservice Test, where I reliably maintain electrical systems, diagnose and resolve electrical faults, and support the installation of electrical components.';
+
+  it('admits a grounded multi-unit Stronger candidate to evaluator-owned mixed-locale role resolution', async () => {
+    const { result, calls } = await runWithWriterUnitPlan([
+      { text: durationUnit, factIndexes: [0] },
+      { text: validBody, factIndexes: [1, 2, 3, 4] },
+    ]);
+
+    expect(result, JSON.stringify(result)).toMatchObject({
+      kind: 'candidate_ready',
+      evidence: {
+        writerAttempts: 1,
+        evaluatorAttempts: 1,
+        writerCandidateReachedValidation: true,
+        evaluatorReached: true,
+        roleIdentityResolution: 'equivalent',
+        writerOutputContractFailureClass: null,
+      },
+    });
+    expect(calls).toEqual({ writer: 1, evaluator: 1 });
+  });
+
+  it.each([
+    ['duration meaning', [{ text: validBody, factIndexes: [0, 1, 2, 3, 4] }], 'candidate_source_floor'],
+    ['employer', [
+      { text: durationUnit, factIndexes: [0] },
+      { text: validBody.replace(' at NordWerk Elektroservice Test', ''), factIndexes: [1, 2, 3, 4] },
+    ], 'source_lock_preservation'],
+    ['installation-support duty', [
+      { text: durationUnit, factIndexes: [0] },
+      { text: validBody.replace(', and support the installation of electrical components', ''), factIndexes: [1, 2, 3, 4] },
+    ], 'candidate_source_floor'],
+    ['employer identity', [
+      { text: durationUnit, factIndexes: [0] },
+      { text: validBody.replace('NordWerk Elektroservice Test', 'Other Electrical Works'), factIndexes: [1, 2, 3, 4] },
+    ], 'source_lock_preservation'],
+    ['current role meaning', [
+      { text: durationUnit, factIndexes: [0] },
+      { text: validBody.replace('Electrical Service Technician', 'Software Engineer'), factIndexes: [1, 2, 3, 4] },
+    ], 'exact_material_source_floor'],
+    ['complete source-fact reference coverage', [
+      { text: durationUnit, factIndexes: [0] },
+      { text: validBody, factIndexes: [1, 2, 3] },
+    ], 'required_fact_coverage'],
+  ] as const)('rejects loss of %s before evaluator execution', async (_label, plans, expectedClass) => {
+    const { result, calls } = await runWithWriterUnitPlan(plans);
+    expect(result).toMatchObject({
+      kind: 'handled_failure',
+      typedReason: 'lost_source_fact',
+      evidence: {
+        writerAttempts: 1,
+        evaluatorAttempts: 0,
+        writerCandidateReachedValidation: false,
+        evaluatorReached: false,
+        writerOutputContractFailureClass: expectedClass,
+      },
+    });
+    expect(result).not.toHaveProperty('candidate');
+    expect(calls).toEqual({ writer: 1, evaluator: 0 });
+  });
+
+  it('classifies a unit-declared fact binding failure after whole-candidate preservation', async () => {
+    const { result, calls } = await runWithWriterUnitPlan([
+      { text: durationUnit, factIndexes: [1] },
+      { text: validBody, factIndexes: [0, 2, 3, 4] },
+    ]);
+    expect(result).toMatchObject({
+      kind: 'handled_failure',
+      typedReason: 'lost_source_fact',
+      evidence: {
+        writerAttempts: 1,
+        evaluatorAttempts: 0,
+        writerCandidateReachedValidation: false,
+        evaluatorReached: false,
+        writerOutputContractFailureClass: 'unit_declared_fact_binding',
+      },
+    });
+    expect(calls).toEqual({ writer: 1, evaluator: 0 });
   });
 });

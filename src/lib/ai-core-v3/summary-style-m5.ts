@@ -376,6 +376,7 @@ export type SummaryV3StyleEvidence = Readonly<{
   readonly meaningfulChangeDetected: boolean;
   readonly noOpDetected: boolean;
   readonly unsupportedClaimCategory: SummaryV3StyleUnsupportedClaimCategory | null;
+  readonly writerOutputContractFailureClass: SummaryV3StyleWriterOutputContractFailureClass | null;
   readonly writerCandidateReachedValidation: boolean;
   readonly evaluatorReached: boolean;
   readonly safeNoOpConsidered: boolean;
@@ -507,6 +508,19 @@ const VIOLATION_CODES = new Set<SummaryV3StyleViolationCode>([
 
 export const SUMMARY_V3_STYLE_M5_WRITER_TOOL_NAME = 'submit_summary_style_candidate' as const;
 export const SUMMARY_V3_STYLE_M5_EVALUATOR_TOOL_NAME = 'submit_summary_style_evaluation' as const;
+
+/** Finite parser-owned classes for initial writer source-floor failures. */
+export const SUMMARY_V3_STYLE_M5_WRITER_OUTPUT_CONTRACT_FAILURE_CLASSES = [
+  'required_fact_coverage',
+  'source_lock_preservation',
+  'calendar_date_source_floor',
+  'exact_material_source_floor',
+  'entity_fact_binding_preservation',
+  'candidate_source_floor',
+  'unit_declared_fact_binding',
+] as const;
+export type SummaryV3StyleWriterOutputContractFailureClass =
+  (typeof SUMMARY_V3_STYLE_M5_WRITER_OUTPUT_CONTRACT_FAILURE_CLASSES)[number];
 
 const SUMMARY_V3_STYLE_M5_VIOLATION_SCHEMA = {
   type: 'object' as const,
@@ -1780,23 +1794,23 @@ function candidateTextRepresentsFact(
 }
 
 /**
- * A non-empty Stronger request can lack a single marked duty when the visible
- * Summary and Experience manifest use different locales. Permit only a
- * multi-fact paraphrase to reach the independent evaluator: at least two
- * source facts must change, each changed fact retains a bounded lexical floor,
- * and all numeric/material/entity guards remain independently enforced by the
- * writer parser. A one-fact unmarked predicate substitution remains closed.
+ * Bounded lexical fallback over a caller-supplied Stronger fact scope. The
+ * whole-candidate caller requires at least two changed facts; the per-unit
+ * caller may require one only after whole-candidate preservation has passed.
+ * Numeric/material/entity guards remain independently enforced by the parser.
  */
-function candidateRepresentsUnmarkedMultiFactStrongerParaphrase(
+function candidateRepresentsBoundedStrongerParaphrase(
   snapshot: SummaryV3StyleOperationSnapshot,
+  facts: readonly SummaryV3StyleFact[],
   candidateText: string,
+  minimumChangedFactCount: number,
 ): boolean {
   if (snapshot.style !== 'stronger' || snapshot.mode !== 'enhance_existing_content'
-    || snapshot.transformableDuty || snapshot.requiredFacts.length < 3) return false;
+    || snapshot.transformableDuty || facts.length === 0) return false;
   const candidateTokens = new Set(summaryV3StyleFactAnchorTokens(candidateText));
   const sourceTokens = new Set(snapshot.requiredFacts.flatMap((fact) => summaryV3StyleFactAnchorTokens(fact.text)));
   let changedFactCount = 0;
-  for (const fact of snapshot.requiredFacts) {
+  for (const fact of facts) {
     if (candidateTextRepresentsFact(snapshot, fact, candidateText)) continue;
     const anchors = summaryV3StyleFactAnchorTokens(fact.text);
     if (anchors.length === 0) return false;
@@ -1807,8 +1821,16 @@ function candidateRepresentsUnmarkedMultiFactStrongerParaphrase(
     if (overlap < requiredOverlap) return false;
     changedFactCount += 1;
   }
-  return changedFactCount >= 2
+  return changedFactCount >= minimumChangedFactCount
     && Array.from(candidateTokens).some((token) => !sourceTokens.has(token));
+}
+
+function candidateRepresentsUnmarkedMultiFactStrongerParaphrase(
+  snapshot: SummaryV3StyleOperationSnapshot,
+  candidateText: string,
+): boolean {
+  if (snapshot.requiredFacts.length < 3) return false;
+  return candidateRepresentsBoundedStrongerParaphrase(snapshot, snapshot.requiredFacts, candidateText, 2);
 }
 
 function relationOccurrences(value: string, relationValue: string): readonly number[] {
@@ -1899,10 +1921,14 @@ export function summaryV3StyleCandidateUnitsRepresentDeclaredFacts(
 ): boolean {
   if (snapshot.mode === 'generate_from_context') return true;
   const factsById = new Map(snapshot.requiredFacts.map((fact) => [fact.id, fact] as const));
-  return candidate.units.every((unit) => unit.factIds.every((factId) => {
-    const fact = factsById.get(factId);
-    return !!fact && candidateTextRepresentsFact(snapshot, fact, unit.text);
-  }) || candidateRepresentsUnmarkedMultiFactStrongerParaphrase(snapshot, unit.text));
+  if (!summaryV3StyleCandidateRepresentsRequiredFacts(snapshot, candidate.text)) return false;
+  return candidate.units.every((unit) => {
+    const declaredFacts = unit.factIds.map((factId) => factsById.get(factId));
+    if (declaredFacts.some((fact) => !fact)) return false;
+    const boundedFacts = declaredFacts as readonly SummaryV3StyleFact[];
+    return boundedFacts.every((fact) => candidateTextRepresentsFact(snapshot, fact, unit.text))
+      || candidateRepresentsBoundedStrongerParaphrase(snapshot, boundedFacts, unit.text, 1);
+  });
 }
 
 function sourceUnits(value: string): readonly SummaryV3StyleSourceUnit[] {
@@ -2530,6 +2556,7 @@ export function createSummaryV3StyleInitialEvidence(snapshot: SummaryV3StyleOper
     meaningfulChangeDetected: false,
     noOpDetected: false,
     unsupportedClaimCategory: null,
+    writerOutputContractFailureClass: null,
     writerCandidateReachedValidation: false,
     evaluatorReached: false,
     safeNoOpConsidered: false,

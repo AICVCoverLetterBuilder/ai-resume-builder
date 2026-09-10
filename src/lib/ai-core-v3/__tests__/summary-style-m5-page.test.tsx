@@ -118,6 +118,7 @@ type StoredSummaryDiagnostic = {
   readonly usageCountBefore?: number;
   readonly usageCountAfter?: number;
   readonly unsupportedClaimCategory?: string | null;
+  readonly writerOutputContractFailureClass?: string | null;
   readonly writerCandidateReachedValidation?: boolean;
   readonly evaluatorReached?: boolean;
   readonly safeNoOpConsidered?: boolean;
@@ -591,7 +592,7 @@ function candidateResponse(snapshot: ReturnType<typeof createSummaryV3StyleOpera
     evidence: {
       snapshotHash: snapshot.snapshotHash, manifestHash: snapshot.manifestHash, candidateHash,
       retries: 0, fallbacks: 0, v2Fallthrough: 0,
-      unsupportedClaimCategory: null, writerCandidateReachedValidation: true, evaluatorReached: true,
+      unsupportedClaimCategory: null, writerOutputContractFailureClass: null, writerCandidateReachedValidation: true, evaluatorReached: true,
       safeNoOpConsidered: false, safeNoOpSelected: false, safeNoOpEligibilityReason: 'eligible',
       roleIdentityResolution: 'not_required',
     } };
@@ -607,7 +608,7 @@ function safeNoOpResponse(
     evidence: {
       snapshotHash: snapshot.snapshotHash, manifestHash: snapshot.manifestHash,
       noOpDetected: true, meaningfulChangeDetected: false, retries: 0, fallbacks: 0, v2Fallthrough: 0,
-      unsupportedClaimCategory, writerCandidateReachedValidation: true, evaluatorReached,
+      unsupportedClaimCategory, writerOutputContractFailureClass: null, writerCandidateReachedValidation: true, evaluatorReached,
       safeNoOpConsidered: true, safeNoOpSelected: true, safeNoOpEligibilityReason: 'eligible',
       roleIdentityResolution: 'not_required',
   } };
@@ -696,6 +697,13 @@ function pageRouteProviderMessage(
         : mode === 'unsafe_metric'
           ? `${sourceText} This work reduced downtime by 30%.`
           : sourceText;
+    const sentenceBoundary = text.indexOf('. ');
+    const units = mode === 'safe_rewrite' && sentenceBoundary >= 0
+      ? [
+        { unitId: 'physical-page-unit-1', text: text.slice(0, sentenceBoundary + 1), factIds: [input.requiredFacts[0]!.id] },
+        { unitId: 'physical-page-unit-2', text: text.slice(sentenceBoundary + 2), factIds: input.requiredFacts.slice(1).map((fact) => fact.id) },
+      ]
+      : [{ unitId: 'physical-page-unit', text, factIds: input.requiredFacts.map((fact) => fact.id) }];
     return {
       content: [{
         type: 'tool_use',
@@ -706,7 +714,7 @@ function pageRouteProviderMessage(
           manifestHash: input.manifestHash,
           style: input.style,
           locale: input.locale,
-          units: [{ unitId: 'physical-page-unit', text, factIds: input.requiredFacts.map((fact) => fact.id) }],
+          units,
         },
       }],
     };
@@ -1015,7 +1023,7 @@ describe('M5.3 Summary style client/page boundary', () => {
     expect(result.latestDiagnostic?.diagnosticInvariantCheckPassed).toBe(true);
   });
 
-  it('runs the corrected AAB566 German-position fixture through the rendered page/request-builder/route/server path', async () => {
+  it('runs the AAB571 German-position fixture through the rendered page/request-builder/route/server and multi-unit writer-parser path', async () => {
     const result = await actualPageStyleFlow({
       style: 'stronger',
       cv: physicalGermanPositionMixedLocaleCv(),
@@ -1052,6 +1060,7 @@ describe('M5.3 Summary style client/page boundary', () => {
       usageCountBefore: 0,
       usageCountAfter: 1,
       roleIdentityResolution: 'equivalent',
+      writerOutputContractFailureClass: null,
       diagnosticCompletenessPassed: true,
       diagnosticInvariantCheckPassed: true,
       missingRequiredDiagnosticFields: [],
@@ -1883,6 +1892,28 @@ describe('M5.3 Summary style client/page boundary', () => {
       kind: 'terminal',
       status: 409,
       reason: 'unclassified_transport_response',
+    });
+    expect(result.commitRequest).toBeNull();
+  });
+
+  it('fails closed when the writer contract failure class is an unknown diagnostic enum', async () => {
+    const result = await run({
+      status: 200,
+      responseFactory: (snapshot) => {
+        const response = candidateResponse(snapshot, 'shorter', 'en', 'candidate');
+        return {
+          ...response,
+          evidence: {
+            ...(response.evidence as Record<string, unknown>),
+            writerOutputContractFailureClass: 'untrusted_provider_text',
+          },
+        };
+      },
+    });
+    expect(result.outcome).toMatchObject({
+      kind: 'terminal',
+      status: 200,
+      reason: 'candidate_identity_mismatch',
     });
     expect(result.commitRequest).toBeNull();
   });

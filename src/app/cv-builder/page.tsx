@@ -3675,6 +3675,7 @@ export default function CVBuilderPage() {
           finalTypedFailureReason: null,
           rejectionStage: null,
           unsupportedClaimCategory: outcome.evidence.unsupportedClaimCategory,
+          writerOutputContractFailureClass: null,
           writerCandidateReachedValidation: outcome.evidence.writerCandidateReachedValidation,
           evaluatorReached: outcome.evidence.evaluatorReached,
           safeNoOpConsidered: outcome.evidence.safeNoOpConsidered,
@@ -3705,6 +3706,7 @@ export default function CVBuilderPage() {
           clientFallbackUsed: false,
           finalPostconditionsPassed: true,
           unsupportedClaimCategory: outcome.evidence.unsupportedClaimCategory,
+          writerOutputContractFailureClass: null,
           writerCandidateReachedValidation: outcome.evidence.writerCandidateReachedValidation,
           evaluatorReached: outcome.evidence.evaluatorReached,
           safeNoOpConsidered: outcome.evidence.safeNoOpConsidered,
@@ -3736,6 +3738,7 @@ export default function CVBuilderPage() {
           summaryDiag.patch({
             providerCandidatePresent: outcome.evidence.writerCandidateReachedValidation,
             unsupportedClaimCategory: outcome.evidence.unsupportedClaimCategory,
+            writerOutputContractFailureClass: outcome.evidence.writerOutputContractFailureClass,
             writerCandidateReachedValidation: outcome.evidence.writerCandidateReachedValidation,
             evaluatorReached: outcome.evidence.evaluatorReached,
             safeNoOpConsidered: outcome.evidence.safeNoOpConsidered,
