@@ -19,9 +19,11 @@ import {
   SUMMARY_V3_STYLE_M5_EVALUATOR_OUTPUT_CONTRACT_FAILURE_CLASSES,
   SUMMARY_V3_STYLE_M5_WRITER_OUTPUT_CONTRACT_FAILURE_CLASSES,
   SUMMARY_V3_STYLE_M5_SOURCE_FLOOR_MISMATCH_CLASSES,
+  SUMMARY_V3_STYLE_M5_EMPLOYMENT_STATE_CONTRADICTION_CLASSES,
   type SummaryV3StyleEvaluatorOutputContractFailureClass,
   type SummaryV3StyleWriterOutputContractFailureClass,
   type SummaryV3StyleSourceFloorMismatchClass,
+  type SummaryV3StyleEmploymentStateContradictionClass,
 } from './ai-core-v3/summary-style-m5';
 
 export const SUMMARY_CONTENT_LOCALE_ROLLBACK_361_REVISION =
@@ -412,6 +414,8 @@ const M5_AUTHORITATIVE_FIELDS = Object.freeze([
   'summaryFinalCandidateDiagnosticsRevision',
   'unsupportedClaimCategory',
   'sourceFloorMismatchClass',
+  'employmentStateContradictionClass',
+  'employmentOppositeFrameDetected',
   'evaluatorNoOpClaimed',
   'writerOutputContractFailureClass',
   'evaluatorOutputContractFailureClass',
@@ -537,6 +541,7 @@ export function checkM5SummaryDiagnosticApplicability(
     'not_required', 'equivalent', 'contradiction', 'unresolved',
   ]);
   const sourceFloorMismatchClasses = new Set(SUMMARY_V3_STYLE_M5_SOURCE_FLOOR_MISMATCH_CLASSES);
+  const employmentStateContradictionClasses = new Set(SUMMARY_V3_STYLE_M5_EMPLOYMENT_STATE_CONTRADICTION_CLASSES);
   const writerOutputContractFailureClasses = new Set(
     SUMMARY_V3_STYLE_M5_WRITER_OUTPUT_CONTRACT_FAILURE_CLASSES,
   );
@@ -577,6 +582,16 @@ export function checkM5SummaryDiagnosticApplicability(
       ))) {
     unexpectedDiagnosticFieldTypes.push('sourceFloorMismatchClass:invalid');
   }
+  if (trace.employmentStateContradictionClass !== null
+    && (typeof trace.employmentStateContradictionClass !== 'string'
+      || !employmentStateContradictionClasses.has(
+        trace.employmentStateContradictionClass as SummaryV3StyleEmploymentStateContradictionClass,
+      ))) {
+    unexpectedDiagnosticFieldTypes.push('employmentStateContradictionClass:invalid');
+  }
+  if (typeof trace.employmentOppositeFrameDetected !== 'boolean') {
+    unexpectedDiagnosticFieldTypes.push('employmentOppositeFrameDetected:not_boolean');
+  }
   if (typeof trace.evaluatorNoOpClaimed !== 'boolean') {
     unexpectedDiagnosticFieldTypes.push('evaluatorNoOpClaimed:not_boolean');
   }
@@ -591,6 +606,15 @@ export function checkM5SummaryDiagnosticApplicability(
     && trace.sourceFloorMismatchClass !== null
     && trace.sourceFloorMismatchClass !== undefined) {
     unexpectedDiagnosticFieldTypes.push('sourceFloorMismatchClass:not_applicable');
+  }
+  if (trace.sourceFloorMismatchClass !== 'employment_state_contradiction'
+    && trace.employmentStateContradictionClass !== null
+    && trace.employmentStateContradictionClass !== undefined) {
+    unexpectedDiagnosticFieldTypes.push('employmentStateContradictionClass:not_applicable');
+  }
+  if (trace.sourceFloorMismatchClass !== 'employment_state_contradiction'
+    && trace.employmentOppositeFrameDetected === true) {
+    unexpectedDiagnosticFieldTypes.push('employmentOppositeFrameDetected:not_applicable');
   }
   for (const field of [
     'writerCandidateReachedValidation', 'evaluatorReached', 'safeNoOpConsidered', 'safeNoOpSelected',
@@ -646,6 +670,8 @@ const M5_DIAGNOSTIC_APPLICABILITY = Object.freeze({
     'apiHostClassificationContractRevision', 'sourceCommitStatus', 'm5Operation',
     'unsupportedClaimCategory', 'writerCandidateReachedValidation', 'evaluatorReached',
     'sourceFloorMismatchClass', 'evaluatorNoOpClaimed',
+    'employmentStateContradictionClass',
+    'employmentOppositeFrameDetected',
     'writerOutputContractFailureClass', 'evaluatorOutputContractFailureClass',
     'safeNoOpConsidered', 'safeNoOpSelected', 'safeNoOpEligibilityReason', 'roleIdentityResolution',
     'm5FailureStage', 'm5CanonicalFailureCause',
@@ -669,6 +695,7 @@ export function checkM5SummaryDiagnosticCompleteness(
     'appVersionCode', 'appVersionName', 'nextBuildId', 'buildChannel',
     'storedContentLocale', 'finalTypedFailureReason', 'rejectionStage', 'unsupportedClaimCategory',
     'sourceFloorMismatchClass',
+    'employmentStateContradictionClass',
     'writerOutputContractFailureClass', 'evaluatorOutputContractFailureClass',
     'm5FailureStage', 'm5CanonicalFailureCause',
   ]);
@@ -1719,6 +1746,8 @@ export type SummaryAiDiagnosticDraft = {
     | 'unsupported_achievement' | 'unsupported_authority' | 'source_floor_mismatch'
     | 'manifest_ceiling_mismatch' | 'other_typed_category' | null;
   sourceFloorMismatchClass?: SummaryV3StyleSourceFloorMismatchClass | null;
+  employmentStateContradictionClass?: SummaryV3StyleEmploymentStateContradictionClass | null;
+  employmentOppositeFrameDetected?: boolean;
   evaluatorNoOpClaimed?: boolean;
   writerOutputContractFailureClass?: SummaryV3StyleWriterOutputContractFailureClass | null;
   evaluatorOutputContractFailureClass?: SummaryV3StyleEvaluatorOutputContractFailureClass | null;
@@ -1995,7 +2024,7 @@ export type SummaryV2ExternalDiagnostic = Readonly<
 >;
 
 type SummaryM5OnlyField = 'm5Operation' | 'summaryFinalCandidateDiagnosticsRevision'
-  | 'unsupportedClaimCategory' | 'sourceFloorMismatchClass' | 'evaluatorNoOpClaimed'
+  | 'unsupportedClaimCategory' | 'sourceFloorMismatchClass' | 'employmentStateContradictionClass' | 'employmentOppositeFrameDetected' | 'evaluatorNoOpClaimed'
   | 'writerOutputContractFailureClass' | 'evaluatorOutputContractFailureClass'
   | 'writerCandidateReachedValidation' | 'evaluatorReached'
   | 'safeNoOpConsidered' | 'safeNoOpSelected' | 'safeNoOpEligibilityReason' | 'roleIdentityResolution'
@@ -2139,6 +2168,8 @@ export class SummaryAiDiagnosticSession {
         m5Operation: input.m5Operation,
         unsupportedClaimCategory: null,
         sourceFloorMismatchClass: null,
+        employmentStateContradictionClass: null,
+        employmentOppositeFrameDetected: false,
         evaluatorNoOpClaimed: false,
         writerOutputContractFailureClass: null,
         evaluatorOutputContractFailureClass: null,

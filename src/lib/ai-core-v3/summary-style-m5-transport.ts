@@ -5,6 +5,7 @@ import type {
   SummaryV3StyleSafeNoOpEligibilityReason,
   SummaryV3StyleUnsupportedClaimCategory,
   SummaryV3StyleSourceFloorMismatchClass,
+  SummaryV3StyleEmploymentStateContradictionClass,
   SummaryV3StyleEvaluatorOutputContractFailureClass,
   SummaryV3StyleWriterOutputContractFailureClass,
 } from './summary-style-m5';
@@ -27,6 +28,8 @@ export type SummaryV3StyleM5RouteFailureReason = AiErrorCode | SummaryV3StyleM5R
 export type SummaryV3StyleM5BoundedEvidence = Readonly<{
   unsupportedClaimCategory: SummaryV3StyleUnsupportedClaimCategory | null;
   sourceFloorMismatchClass: SummaryV3StyleSourceFloorMismatchClass | null;
+  employmentStateContradictionClass: SummaryV3StyleEmploymentStateContradictionClass | null;
+  employmentOppositeFrameDetected: boolean;
   evaluatorNoOpClaimed: boolean;
   writerOutputContractFailureClass: SummaryV3StyleWriterOutputContractFailureClass | null;
   evaluatorOutputContractFailureClass: SummaryV3StyleEvaluatorOutputContractFailureClass | null;

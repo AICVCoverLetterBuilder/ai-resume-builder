@@ -56,6 +56,7 @@ import {
   type SummaryV3StyleSafeNoOpEligibilityReason,
   type SummaryV3StyleUnsupportedClaimCategory,
   type SummaryV3StyleSourceFloorMismatchClass,
+  type SummaryV3StyleEmploymentStateContradictionClass,
   type SummaryV3StyleEvaluatorOutputContractFailureClass,
   type SummaryV3StyleWriterOutputContractFailureClass,
   type SummaryV3StyleViolation,
@@ -342,6 +343,15 @@ function hasUnsupportedNumericMetric(snapshot: SummaryV3StyleOperationSnapshot, 
 const PRIOR_STATE_MARKERS = /(?:former|previous|past|completed|ehemalig(?:e|er|es|en)?|früher|bivš\w*|prethod\w*|पूर्व|सابق|前職|以前)/iu;
 const CURRENT_STATE_MARKERS = /(?:current(?:ly)?|present|ongoing|aktuell(?:e|er|es|en)?|trenutn\w*|वर्तमान|حالي(?:ة|ا)?|現在)/iu;
 
+/**
+ * Shadow-only employment-frame parser. It is deliberately separate from the
+ * AAB575 boolean below: its result is observational and cannot alter runtime
+ * acceptance, source-floor classification, repair, or usage behavior.
+ */
+const CURRENT_EMPLOYMENT_FRAME_PREFIX = /(?:\b(?:currently|presently|ongoing|aktuell(?:e|er|es|en)?|trenutn\w*|वर्तमान|حالي(?:ة|ا)?|現在)\s*(?:[\p{L}\p{N}'’+#&./-]+\s+){0,6}|\b(?:work|works|serve|serves)\s+as\s*(?:[\p{L}\p{N}'’+#&./-]+\s+){0,3}|\b(?:am|is|are)\s+(?:an?\s+)?|\b(?:ist|sind|arbeite|arbeitet)\s+(?:als\s+)?|\b(?:je|sam|radi|radim)\s+|\b(?:वर्तमान|حالي(?:ة|ا)?)\s*)$/iu;
+const COMPLETED_EMPLOYMENT_FRAME_PREFIX = /(?:\b(?:formerly|previously|once)\s+(?:worked|served)\s+as\s*(?:[\p{L}\p{N}'’+#&./-]+\s+){0,3}|\b(?:worked|served)\s+as\s*(?:[\p{L}\p{N}'’+#&./-]+\s+){0,3}|\b(?:was|were)\s+(?:an?\s+)?|\b(?:war|waren)\s+(?:als\s+)?|\b(?:former|ehemalig(?:e|er|es|en)?|früher|bivš\w*|prethod\w*)\s*)$/iu;
+const EMPLOYMENT_FRAME_RELATION = /(?:\bat\b|\bwith\b|\bbei\b|\bin\b|\bu\b|\bفي\b|\bب\b|\bमें\b|の|\bу\b|\bв\b)/iu;
+
 type SummaryV3StyleEntryIdentitySurface = Readonly<{
   readonly entryId: string;
   readonly kind: 'role' | 'employer';
@@ -405,26 +415,106 @@ function summaryV3StyleIdentityClauses(value: string): readonly string[] {
     .filter(Boolean);
 }
 
-/** Compact fail-closed state bound, including a role-local mixed-state check. */
-function hasEmploymentStateContradiction(snapshot: SummaryV3StyleOperationSnapshot, candidateText: string): boolean {
-  const states = snapshot.selectedEntries.map((entry) => entry.employmentState);
-  if (states.length === 0) return false;
+function shadowEmploymentFrameStateForClause(
+  snapshot: SummaryV3StyleOperationSnapshot,
+  entry: SummaryV3StyleOperationSnapshot['selectedEntries'][number],
+  clause: string,
+): 'present' | 'completed' | 'neutral' {
+  const identities = exactEntryIdentitySurfaces(snapshot).filter((identity) => identity.entryId === entry.stableId);
+  const roleSurfaces = identities.filter((identity) => identity.kind === 'role');
+  const employerSurfaces = identities.filter((identity) => identity.kind === 'employer');
+  const normalizedClause = normalizeSummaryV3StyleText(clause).toLocaleLowerCase();
+  const roleSurface = roleSurfaces.find((identity) => normalizedClause.includes(identity.normalizedValue));
+  const employerSurface = employerSurfaces.find((identity) => normalizedClause.includes(identity.normalizedValue));
+  if (!roleSurface || !employerSurface) return 'neutral';
+  const roleStart = normalizedClause.indexOf(roleSurface.normalizedValue);
+  const employerStart = normalizedClause.indexOf(employerSurface.normalizedValue);
+  if (roleStart < 0 || employerStart < 0 || !EMPLOYMENT_FRAME_RELATION.test(
+    normalizedClause.slice(Math.min(roleStart, employerStart), Math.max(roleStart, employerStart)),
+  )) return 'neutral';
+  const beforeRole = normalizedClause.slice(Math.max(0, roleStart - 128), roleStart);
+  const current = CURRENT_EMPLOYMENT_FRAME_PREFIX.test(beforeRole);
+  const completed = COMPLETED_EMPLOYMENT_FRAME_PREFIX.test(beforeRole);
+  if (current && !completed) return 'present';
+  if (completed && !current) return 'completed';
+  return 'neutral';
+}
+
+function shadowExplicitOppositeFrameDetected(
+  snapshot: SummaryV3StyleOperationSnapshot,
+  candidateText: string,
+): boolean {
   const candidateClauses = summaryV3StyleIdentityClauses(candidateText);
   for (const entry of snapshot.selectedEntries) {
     const sameClause = candidateClauses.filter((clause) =>
       exactEntryIdsInSummaryV3StyleClause(snapshot, clause).has(entry.stableId));
-    if (entry.employmentState === 'present' && sameClause.some((clause) => PRIOR_STATE_MARKERS.test(clause))) return true;
-    if (entry.employmentState === 'completed' && sameClause.some((clause) => CURRENT_STATE_MARKERS.test(clause))) return true;
+    for (const clause of sameClause) {
+      const candidateState = shadowEmploymentFrameStateForClause(snapshot, entry, clause);
+      if ((entry.employmentState === 'present' && candidateState === 'completed')
+        || (entry.employmentState === 'completed' && candidateState === 'present')) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * AAB575-compatible employment predicate with a bounded first-branch class.
+ * Keep this ordering and boolean semantics unchanged for the observability
+ * candidate; the shadow frame verdict is computed only for diagnostics.
+ */
+export function employmentStateContradictionDecision(
+  snapshot: SummaryV3StyleOperationSnapshot,
+  candidateText: string,
+): Readonly<{
+  contradicted: boolean;
+  class: SummaryV3StyleEmploymentStateContradictionClass | null;
+  explicitOppositeFrameDetected: boolean;
+}> {
+  const explicitOppositeFrameDetected = shadowExplicitOppositeFrameDetected(snapshot, candidateText);
+  const states = snapshot.selectedEntries.map((entry) => entry.employmentState);
+  if (states.length === 0) return { contradicted: false, class: null, explicitOppositeFrameDetected };
+  const candidateClauses = summaryV3StyleIdentityClauses(candidateText);
+  for (const entry of snapshot.selectedEntries) {
+    const sameClause = candidateClauses.filter((clause) =>
+      exactEntryIdsInSummaryV3StyleClause(snapshot, clause).has(entry.stableId));
+    if (entry.employmentState === 'present' && sameClause.some((clause) => PRIOR_STATE_MARKERS.test(clause))) {
+      return { contradicted: true, class: 'present_entry_prior_marker', explicitOppositeFrameDetected };
+    }
+    if (entry.employmentState === 'completed' && sameClause.some((clause) => CURRENT_STATE_MARKERS.test(clause))) {
+      return { contradicted: true, class: 'completed_entry_current_marker', explicitOppositeFrameDetected };
+    }
   }
   if (snapshot.mode === 'enhance_existing_content') {
     const sourceHasPrior = PRIOR_STATE_MARKERS.test(snapshot.sourceSummary);
     const sourceHasCurrent = CURRENT_STATE_MARKERS.test(snapshot.sourceSummary);
-    if (PRIOR_STATE_MARKERS.test(candidateText) !== sourceHasPrior) return true;
-    if (CURRENT_STATE_MARKERS.test(candidateText) !== sourceHasCurrent) return true;
+    if (PRIOR_STATE_MARKERS.test(candidateText) !== sourceHasPrior) {
+      return { contradicted: true, class: 'enhance_prior_marker_parity_mismatch', explicitOppositeFrameDetected };
+    }
+    if (CURRENT_STATE_MARKERS.test(candidateText) !== sourceHasCurrent) {
+      return { contradicted: true, class: 'enhance_current_marker_parity_mismatch', explicitOppositeFrameDetected };
+    }
   }
-  if (states.every((state) => state === 'present')) return PRIOR_STATE_MARKERS.test(candidateText);
-  if (states.every((state) => state === 'completed')) return CURRENT_STATE_MARKERS.test(candidateText);
-  return false;
+  if (states.every((state) => state === 'present') && PRIOR_STATE_MARKERS.test(candidateText)) {
+    return { contradicted: true, class: 'all_present_prior_marker_fallback', explicitOppositeFrameDetected };
+  }
+  if (states.every((state) => state === 'completed') && CURRENT_STATE_MARKERS.test(candidateText)) {
+    return { contradicted: true, class: 'all_completed_current_marker_fallback', explicitOppositeFrameDetected };
+  }
+  return { contradicted: false, class: null, explicitOppositeFrameDetected };
+}
+
+export function employmentStateContradictionClass(
+  snapshot: SummaryV3StyleOperationSnapshot,
+  candidateText: string,
+): SummaryV3StyleEmploymentStateContradictionClass | null {
+  return employmentStateContradictionDecision(snapshot, candidateText).class;
+}
+
+export function hasEmploymentStateContradiction(
+  snapshot: SummaryV3StyleOperationSnapshot,
+  candidateText: string,
+): boolean {
+  return employmentStateContradictionDecision(snapshot, candidateText).contradicted;
 }
 
 function semanticRelationClauses(value: string): readonly string[] {
@@ -1814,6 +1904,7 @@ interface EvidenceUpdate {
   readonly writerOutputContractFailureClass?: SummaryV3StyleWriterOutputContractFailureClass | null;
   readonly evaluatorOutputContractFailureClass?: SummaryV3StyleEvaluatorOutputContractFailureClass | null;
   readonly sourceFloorMismatchClass?: SummaryV3StyleSourceFloorMismatchClass | null;
+  readonly employmentStateContradictionClass?: SummaryV3StyleEmploymentStateContradictionClass | null;
   readonly evaluatorNoOpClaimed?: boolean;
   readonly safeNoOpConsidered?: boolean;
   readonly safeNoOpSelected?: boolean;
@@ -1885,6 +1976,13 @@ function makeEvidence(snapshot: SummaryV3StyleOperationSnapshot, update: Evidenc
       !localViolation && styleFulfilled(evaluation.styleEvidence),
     )
     : null;
+  const effectiveSourceFloorMismatchClass = update.sourceFloorMismatchClass
+    ?? ((update.unsupportedClaimCategory ?? null) === 'source_floor_mismatch'
+      ? sourceFloorMismatchClass(snapshot, candidate?.text || snapshot.sourceSummary, evaluation)
+      : null);
+  const employmentDecision = candidate
+    ? employmentStateContradictionDecision(snapshot, candidate.text)
+    : null;
   const evidence = immutableCopy({
     ...initial,
     writerAttempts: update.writerAttempts ?? 0,
@@ -1906,10 +2004,15 @@ function makeEvidence(snapshot: SummaryV3StyleOperationSnapshot, update: Evidenc
       ? true
       : evaluation ? !localViolation && styleNoOp(evaluation.styleEvidence) : false,
     unsupportedClaimCategory: update.unsupportedClaimCategory ?? null,
-    sourceFloorMismatchClass: update.sourceFloorMismatchClass
-      ?? ((update.unsupportedClaimCategory ?? null) === 'source_floor_mismatch'
-        ? sourceFloorMismatchClass(snapshot, candidate?.text || snapshot.sourceSummary, evaluation)
-        : null),
+    sourceFloorMismatchClass: effectiveSourceFloorMismatchClass,
+    employmentStateContradictionClass: effectiveSourceFloorMismatchClass === 'employment_state_contradiction'
+      ? (update.employmentStateContradictionClass
+        ?? employmentDecision?.class
+        ?? employmentStateContradictionClass(snapshot, candidate?.text || snapshot.sourceSummary))
+      : null,
+    employmentOppositeFrameDetected: effectiveSourceFloorMismatchClass === 'employment_state_contradiction'
+      ? employmentDecision?.explicitOppositeFrameDetected === true
+      : false,
     evaluatorNoOpClaimed: update.evaluatorNoOpClaimed ?? false,
     writerOutputContractFailureClass: update.writerOutputContractFailureClass ?? null,
     evaluatorOutputContractFailureClass: update.evaluatorOutputContractFailureClass ?? null,

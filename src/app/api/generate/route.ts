@@ -162,6 +162,8 @@ const RATE_LIMIT_MAX_REQUESTS_PRO = 60;
 const M5_ROUTE_EXCEPTION_EVIDENCE = Object.freeze({
   unsupportedClaimCategory: null,
   sourceFloorMismatchClass: null,
+  employmentStateContradictionClass: null,
+  employmentOppositeFrameDetected: false,
   evaluatorNoOpClaimed: false,
   writerOutputContractFailureClass: null,
   evaluatorOutputContractFailureClass: null,

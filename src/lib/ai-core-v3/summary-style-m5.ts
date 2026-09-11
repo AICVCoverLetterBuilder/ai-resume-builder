@@ -113,6 +113,18 @@ export const SUMMARY_V3_STYLE_M5_SOURCE_FLOOR_MISMATCH_CLASSES = [
 export type SummaryV3StyleSourceFloorMismatchClass =
   (typeof SUMMARY_V3_STYLE_M5_SOURCE_FLOOR_MISMATCH_CLASSES)[number];
 
+/** Finite, privacy-safe reason emitted only by the employment-state guard. */
+export const SUMMARY_V3_STYLE_M5_EMPLOYMENT_STATE_CONTRADICTION_CLASSES = [
+  'present_entry_prior_marker',
+  'completed_entry_current_marker',
+  'enhance_prior_marker_parity_mismatch',
+  'enhance_current_marker_parity_mismatch',
+  'all_present_prior_marker_fallback',
+  'all_completed_current_marker_fallback',
+] as const;
+export type SummaryV3StyleEmploymentStateContradictionClass =
+  (typeof SUMMARY_V3_STYLE_M5_EMPLOYMENT_STATE_CONTRADICTION_CLASSES)[number];
+
 export type SummaryV3StyleViolationCode =
   | 'missing_fact'
   | 'lost_source_fact'
@@ -390,6 +402,8 @@ export type SummaryV3StyleEvidence = Readonly<{
   readonly noOpDetected: boolean;
   readonly unsupportedClaimCategory: SummaryV3StyleUnsupportedClaimCategory | null;
   readonly sourceFloorMismatchClass: SummaryV3StyleSourceFloorMismatchClass | null;
+  readonly employmentStateContradictionClass: SummaryV3StyleEmploymentStateContradictionClass | null;
+  readonly employmentOppositeFrameDetected: boolean;
   readonly evaluatorNoOpClaimed: boolean;
   readonly writerOutputContractFailureClass: SummaryV3StyleWriterOutputContractFailureClass | null;
   /** Finite full-evaluator parser class; never carries provider content. */
@@ -2758,6 +2772,8 @@ export function createSummaryV3StyleInitialEvidence(snapshot: SummaryV3StyleOper
     noOpDetected: false,
     unsupportedClaimCategory: null,
     sourceFloorMismatchClass: null,
+    employmentStateContradictionClass: null,
+    employmentOppositeFrameDetected: false,
     evaluatorNoOpClaimed: false,
     writerOutputContractFailureClass: null,
     evaluatorOutputContractFailureClass: null,
