@@ -161,6 +161,8 @@ const RATE_LIMIT_MAX_REQUESTS_PRO = 60;
 // without exposing a provider response, prompt, candidate, or CV content.
 const M5_ROUTE_EXCEPTION_EVIDENCE = Object.freeze({
   unsupportedClaimCategory: null,
+  sourceFloorMismatchClass: null,
+  evaluatorNoOpClaimed: false,
   writerOutputContractFailureClass: null,
   evaluatorOutputContractFailureClass: null,
   writerCandidateReachedValidation: false,

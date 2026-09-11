@@ -529,9 +529,34 @@ describe('M8 AAB563 physical-equivalent M5 Stronger boundary', () => {
         unsupportedClaimCategory: null,
         writerCandidateReachedValidation: true,
         evaluatorReached: true,
+        evaluatorNoOpClaimed: false,
+        sourceFloorMismatchClass: null,
         roleIdentityResolution: 'equivalent',
         safeNoOpSelected: false,
         safeNoOpEligibilityReason: 'source_inconsistency',
+      },
+    });
+    expect(calls).toEqual({ writer: 1, evaluator: 1 });
+  });
+
+  it('reproduces the physical cross-locale stronger no-op source-floor terminal', async () => {
+    const { result, calls } = await runWithCandidate(source, {
+      request: unresolvedPhysicalRequest(),
+      noOp: true,
+    });
+    expect(result).toMatchObject({
+      kind: 'safe_no_op',
+      typedReason: 'safe_no_op',
+      evidence: {
+        unsupportedClaimCategory: null,
+        sourceFloorMismatchClass: null,
+        evaluatorNoOpClaimed: true,
+        writerCandidateReachedValidation: true,
+        evaluatorReached: true,
+        roleIdentityResolution: 'equivalent',
+        safeNoOpSelected: true,
+        safeNoOpConsidered: true,
+        safeNoOpEligibilityReason: 'eligible',
       },
     });
     expect(calls).toEqual({ writer: 1, evaluator: 1 });
@@ -550,6 +575,7 @@ describe('M8 AAB563 physical-equivalent M5 Stronger boundary', () => {
       evidence: {
         phaseStatuses: { semantic_grounding: 'failed' },
         unsupportedClaimCategory: 'source_floor_mismatch',
+        sourceFloorMismatchClass: 'role_identity_rejection',
         roleIdentityResolution: 'contradiction',
         writerCandidateReachedValidation: true,
         evaluatorReached: true,
@@ -701,7 +727,11 @@ describe('M8 AAB563 physical-equivalent M5 Stronger boundary', () => {
     });
     const snapshot = createSummaryV3StyleOperationSnapshot(stale);
     expect(snapshot.selectedEntries[0]?.rolePresentation).toBeNull();
-    const { result, calls } = await runWithCandidate(source, { request: stale, noOp: true });
+    const { result, calls } = await runWithCandidate(source, {
+      request: stale,
+      noOp: true,
+      roleIdentityResolution: 'unresolved',
+    });
     expect(result).toMatchObject({
       kind: 'handled_failure',
       typedReason: 'unsupported_claim',

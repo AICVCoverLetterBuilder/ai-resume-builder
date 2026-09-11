@@ -55,6 +55,7 @@ import {
   type SummaryV3StyleRoleIdentityResolution,
   type SummaryV3StyleSafeNoOpEligibilityReason,
   type SummaryV3StyleUnsupportedClaimCategory,
+  type SummaryV3StyleSourceFloorMismatchClass,
   type SummaryV3StyleEvaluatorOutputContractFailureClass,
   type SummaryV3StyleWriterOutputContractFailureClass,
   type SummaryV3StyleViolation,
@@ -1600,8 +1601,32 @@ function unsupportedClaimCategory(
   return codes.includes('unsupported_claim') ? 'other_typed_category' : 'other_typed_category';
 }
 
+/**
+ * The category above is intentionally coarse for the public contract. This
+ * finite subordinate class keeps each source-floor producer auditable without
+ * carrying Summary text, provider output, or identity strings across the
+ * diagnostic boundary.
+ */
+function sourceFloorMismatchClass(
+  snapshot: SummaryV3StyleOperationSnapshot,
+  candidateText: string,
+  evaluation: ParsedEvaluation | null = null,
+  strongerNoOpRetentionDenied = false,
+): SummaryV3StyleSourceFloorMismatchClass | null {
+  if (strongerNoOpRetentionDenied) return 'stronger_noop_retention_denied';
+  if (evaluation && roleIdentityResolutionFailure(snapshot, evaluation)) return 'role_identity_rejection';
+  if (hasEmploymentStateContradiction(snapshot, candidateText)) return 'employment_state_contradiction';
+  if (hasUnsupportedCandidateNamedToolSurface(snapshot, candidateText)) return 'candidate_named_tool_surface';
+  if (hasUnsupportedCandidateSemanticMaterial(snapshot, candidateText)) return 'candidate_semantic_material';
+  if (hasUnsupportedSourceNonnumericMaterialResultRelation(snapshot)) return 'source_material_result_relation';
+  if (hasUnannotatedSourceRoleEmployerFrameInconsistency(snapshot)) return 'role_identity_rejection';
+  if (hasUnsupportedSourceInconsistency(snapshot)) return 'source_inconsistency';
+  return null;
+}
+
 function sourceRetainingSafeNoOpEligibilityReason(
   snapshot: SummaryV3StyleOperationSnapshot,
+  evaluatorRoleIdentityResolution?: SummaryV3StyleRoleIdentityResolution,
 ): SummaryV3StyleSafeNoOpEligibilityReason {
   if (snapshot.style !== 'stronger') return 'wrong_style';
   if (snapshot.mode !== 'enhance_existing_content') return 'wrong_mode';
@@ -1623,7 +1648,8 @@ function sourceRetainingSafeNoOpEligibilityReason(
   // A cross-locale role frame without a source-bound target surface is not a
   // contradiction, but it is not eligible for a silent source-retaining no-op.
   // The bounded M5 evaluator must establish equivalence for a real rewrite.
-  if (roleIdentity.status === 'unresolved') return 'source_inconsistency';
+  if (roleIdentity.status === 'unresolved'
+    && evaluatorRoleIdentityResolution !== 'equivalent') return 'source_inconsistency';
   if (hasUnsupportedSourceNonnumericMaterialResultRelation(snapshot)) {
     return 'source_material_result_relation';
   }
@@ -1631,8 +1657,11 @@ function sourceRetainingSafeNoOpEligibilityReason(
   return 'eligible';
 }
 
-function sourceRetainingSafeNoOpAllowed(snapshot: SummaryV3StyleOperationSnapshot): boolean {
-  return sourceRetainingSafeNoOpEligibilityReason(snapshot) === 'eligible';
+function sourceRetainingSafeNoOpAllowed(
+  snapshot: SummaryV3StyleOperationSnapshot,
+  evaluatorRoleIdentityResolution?: SummaryV3StyleRoleIdentityResolution,
+): boolean {
+  return sourceRetainingSafeNoOpEligibilityReason(snapshot, evaluatorRoleIdentityResolution) === 'eligible';
 }
 
 function sameOrderedFactIds(
@@ -1784,6 +1813,8 @@ interface EvidenceUpdate {
   readonly unsupportedClaimCategory?: SummaryV3StyleUnsupportedClaimCategory | null;
   readonly writerOutputContractFailureClass?: SummaryV3StyleWriterOutputContractFailureClass | null;
   readonly evaluatorOutputContractFailureClass?: SummaryV3StyleEvaluatorOutputContractFailureClass | null;
+  readonly sourceFloorMismatchClass?: SummaryV3StyleSourceFloorMismatchClass | null;
+  readonly evaluatorNoOpClaimed?: boolean;
   readonly safeNoOpConsidered?: boolean;
   readonly safeNoOpSelected?: boolean;
   readonly safeNoOpEligibilityReason?: SummaryV3StyleSafeNoOpEligibilityReason;
@@ -1875,6 +1906,11 @@ function makeEvidence(snapshot: SummaryV3StyleOperationSnapshot, update: Evidenc
       ? true
       : evaluation ? !localViolation && styleNoOp(evaluation.styleEvidence) : false,
     unsupportedClaimCategory: update.unsupportedClaimCategory ?? null,
+    sourceFloorMismatchClass: update.sourceFloorMismatchClass
+      ?? ((update.unsupportedClaimCategory ?? null) === 'source_floor_mismatch'
+        ? sourceFloorMismatchClass(snapshot, candidate?.text || snapshot.sourceSummary, evaluation)
+        : null),
+    evaluatorNoOpClaimed: update.evaluatorNoOpClaimed ?? false,
     writerOutputContractFailureClass: update.writerOutputContractFailureClass ?? null,
     evaluatorOutputContractFailureClass: update.evaluatorOutputContractFailureClass ?? null,
     writerCandidateReachedValidation: Boolean(candidate && (update.writerAttempts ?? 0) > 0),
@@ -2126,6 +2162,7 @@ export async function executeSummaryV3StyleServer(
     return createSummaryV3StyleHandledFailure(snapshot, 'unsupported_claim', makeEvidence(snapshot, {
       localFailureReason: 'unsupported_claim',
       unsupportedClaimCategory: 'source_floor_mismatch',
+      sourceFloorMismatchClass: sourceFloorMismatchClass(snapshot, snapshot.sourceSummary),
       safeNoOpEligibilityReason: sourceRetainingSafeNoOpEligibilityReason(snapshot),
     }));
   }
@@ -2157,6 +2194,9 @@ export async function executeSummaryV3StyleServer(
       candidate: parsedWriter.candidate,
       localFailureReason: 'unsupported_claim',
       unsupportedClaimCategory: category,
+      sourceFloorMismatchClass: category === 'source_floor_mismatch'
+        ? sourceFloorMismatchClass(snapshot, parsedWriter.candidate.text)
+        : null,
       safeNoOpConsidered: sourceRetainingSafeNoOpAllowed(snapshot),
     });
     return sourceRetainingSafeNoOpAllowed(snapshot)
@@ -2201,6 +2241,10 @@ export async function executeSummaryV3StyleServer(
     writerAttempts: 1, evaluatorAttempts: 1, candidate: parsedWriter.candidate, evaluation: parsedEvaluator.evaluation,
     localFailureReason: initialStyleFailure,
     unsupportedClaimCategory: initialUnsupportedCategory,
+    sourceFloorMismatchClass: initialUnsupportedCategory === 'source_floor_mismatch'
+      ? sourceFloorMismatchClass(snapshot, parsedWriter.candidate.text, parsedEvaluator.evaluation)
+      : null,
+    evaluatorNoOpClaimed: parsedEvaluator.evaluation.styleEvidence.noOpDetected,
     safeNoOpConsidered: initialTerminalFailure === 'unsupported_claim'
       && sourceRetainingSafeNoOpAllowed(snapshot),
   });
@@ -2211,9 +2255,23 @@ export async function executeSummaryV3StyleServer(
   }
   if (allPhasesPassed(parsedEvaluator.evaluation) && !initialStyleFailure) {
     if (snapshot.mode === 'enhance_existing_content' && parsedEvaluator.evaluation.styleEvidence.noOpDetected) {
-      const sourceRetainingAllowed = snapshot.style !== 'stronger' || sourceRetainingSafeNoOpAllowed(snapshot);
+      const evaluatorRoleIdentityResolution = parsedEvaluator.evaluation.roleIdentityResolution;
+      const sourceRetainingAllowed = snapshot.style !== 'stronger'
+        || sourceRetainingSafeNoOpAllowed(snapshot, evaluatorRoleIdentityResolution);
+      const effectiveEligibilityReason = sourceRetainingSafeNoOpEligibilityReason(
+        snapshot,
+        evaluatorRoleIdentityResolution,
+      );
       return sourceRetainingAllowed
-        ? safeNoOpResult(snapshot, initialEvidence)
+        ? safeNoOpResult(snapshot, makeEvidence(snapshot, {
+          writerAttempts: 1,
+          evaluatorAttempts: 1,
+          candidate: parsedWriter.candidate,
+          evaluation: parsedEvaluator.evaluation,
+          safeNoOpEligibilityReason: effectiveEligibilityReason,
+          evaluatorNoOpClaimed: true,
+          sourceFloorMismatchClass: null,
+        }))
         : createSummaryV3StyleHandledFailure(snapshot, 'unsupported_claim', makeEvidence(snapshot, {
           writerAttempts: 1,
           evaluatorAttempts: 1,
@@ -2221,6 +2279,14 @@ export async function executeSummaryV3StyleServer(
           evaluation: parsedEvaluator.evaluation,
           localFailureReason: 'unsupported_claim',
           unsupportedClaimCategory: 'source_floor_mismatch',
+          sourceFloorMismatchClass: sourceFloorMismatchClass(
+            snapshot,
+            parsedWriter.candidate.text,
+            parsedEvaluator.evaluation,
+            true,
+          ),
+          safeNoOpEligibilityReason: effectiveEligibilityReason,
+          evaluatorNoOpClaimed: true,
         }));
     }
     return candidateReady(snapshot, parsedWriter.candidate, initialEvidence);
@@ -2301,6 +2367,7 @@ export async function executeSummaryV3StyleServer(
     writerAttempts: 1, evaluatorAttempts: 1, repairWriterAttempts: 1, repairEvaluatorAttempts: 1,
     candidate: parsedRepairWriter.candidate, evaluation: parsedRepairEvaluator.evaluation,
     localFailureReason: repairStyleFailure,
+    evaluatorNoOpClaimed: repairNoOpClaimed,
   });
   if (!allPhasesPassed(parsedRepairEvaluator.evaluation) || repairStyleFailure) {
     return createSummaryV3StyleHandledFailure(snapshot, repairStyleFailure || 'repair_rejected', repairEvidence);

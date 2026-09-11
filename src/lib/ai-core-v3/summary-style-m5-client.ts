@@ -10,12 +10,14 @@ import {
   hashSummaryV3StyleValue,
   SUMMARY_V3_STYLE_M5_EVALUATOR_OUTPUT_CONTRACT_FAILURE_CLASSES,
   SUMMARY_V3_STYLE_M5_WRITER_OUTPUT_CONTRACT_FAILURE_CLASSES,
+  SUMMARY_V3_STYLE_M5_SOURCE_FLOOR_MISMATCH_CLASSES,
   type SummaryV3Style,
   type SummaryV3StyleRequest,
   type SummaryV3StyleRoleIdentityResolution,
   type SummaryV3StyleSafeNoOpEligibilityReason,
   type SummaryV3StyleSupportedLocale,
   type SummaryV3StyleUnsupportedClaimCategory,
+  type SummaryV3StyleSourceFloorMismatchClass,
   type SummaryV3StyleEvaluatorOutputContractFailureClass,
   type SummaryV3StyleWriterOutputContractFailureClass,
   type SummaryV3StyleRolePresentationEvidence,
@@ -291,6 +293,9 @@ const SAFE_NO_OP_ELIGIBILITY_REASONS = new Set<SummaryV3StyleSafeNoOpEligibility
   'source_material_result_relation',
   'not_applicable',
 ]);
+const SOURCE_FLOOR_MISMATCH_CLASSES = new Set<SummaryV3StyleSourceFloorMismatchClass>(
+  SUMMARY_V3_STYLE_M5_SOURCE_FLOOR_MISMATCH_CLASSES,
+);
 
 const ROLE_IDENTITY_RESOLUTIONS = new Set<SummaryV3StyleRoleIdentityResolution>([
   'not_required', 'equivalent', 'contradiction', 'unresolved',
@@ -305,7 +310,12 @@ const EVALUATOR_OUTPUT_CONTRACT_FAILURE_CLASSES = new Set<SummaryV3StyleEvaluato
 function readClientEvidence(value: unknown): SummaryV3StyleClientEvidence | null {
   const evidence = resultRecord(value);
   if (!evidence) return null;
+  const hasSourceFloorMismatchClass = Object.prototype.hasOwnProperty.call(evidence, 'sourceFloorMismatchClass');
   const category = evidence.unsupportedClaimCategory;
+  const sourceFloorMismatchClass = evidence.sourceFloorMismatchClass === null
+    || evidence.sourceFloorMismatchClass === undefined
+    ? null
+    : evidence.sourceFloorMismatchClass;
   const writerOutputContractFailureClass = evidence.writerOutputContractFailureClass === null
     || evidence.writerOutputContractFailureClass === undefined
     ? null
@@ -321,6 +331,10 @@ function readClientEvidence(value: unknown): SummaryV3StyleClientEvidence | null
     && m5ProviderFailure === null) return null;
   if (category !== null && (typeof category !== 'string'
     || !UNSUPPORTED_CLAIM_CATEGORIES.has(category as SummaryV3StyleUnsupportedClaimCategory))) return null;
+  if (sourceFloorMismatchClass !== null && (typeof sourceFloorMismatchClass !== 'string'
+    || !SOURCE_FLOOR_MISMATCH_CLASSES.has(sourceFloorMismatchClass as SummaryV3StyleSourceFloorMismatchClass))) return null;
+  if (hasSourceFloorMismatchClass && category === 'source_floor_mismatch' && sourceFloorMismatchClass === null) return null;
+  if (hasSourceFloorMismatchClass && category !== 'source_floor_mismatch' && sourceFloorMismatchClass !== null) return null;
   if (writerOutputContractFailureClass !== null && (typeof writerOutputContractFailureClass !== 'string'
     || !WRITER_OUTPUT_CONTRACT_FAILURE_CLASSES.has(
       writerOutputContractFailureClass as SummaryV3StyleWriterOutputContractFailureClass,
@@ -333,6 +347,7 @@ function readClientEvidence(value: unknown): SummaryV3StyleClientEvidence | null
     || typeof evidence.evaluatorReached !== 'boolean'
     || typeof evidence.safeNoOpConsidered !== 'boolean'
     || typeof evidence.safeNoOpSelected !== 'boolean'
+    || (evidence.evaluatorNoOpClaimed !== undefined && typeof evidence.evaluatorNoOpClaimed !== 'boolean')
     || typeof evidence.safeNoOpEligibilityReason !== 'string'
     || !SAFE_NO_OP_ELIGIBILITY_REASONS.has(
       evidence.safeNoOpEligibilityReason as SummaryV3StyleSafeNoOpEligibilityReason,
@@ -343,6 +358,10 @@ function readClientEvidence(value: unknown): SummaryV3StyleClientEvidence | null
     )) return null;
   return {
     unsupportedClaimCategory: category as SummaryV3StyleUnsupportedClaimCategory | null,
+    sourceFloorMismatchClass: sourceFloorMismatchClass as SummaryV3StyleSourceFloorMismatchClass | null,
+    // Older bounded envelopes predate this additive diagnostic bit. Missing
+    // is equivalent to false; only an explicit non-boolean is rejected.
+    evaluatorNoOpClaimed: evidence.evaluatorNoOpClaimed === true,
     writerOutputContractFailureClass: writerOutputContractFailureClass as SummaryV3StyleWriterOutputContractFailureClass | null,
     evaluatorOutputContractFailureClass: evaluatorOutputContractFailureClass as SummaryV3StyleEvaluatorOutputContractFailureClass | null,
     writerCandidateReachedValidation: evidence.writerCandidateReachedValidation,

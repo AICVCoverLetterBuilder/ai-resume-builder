@@ -100,6 +100,19 @@ export type SummaryV3StyleSafeNoOpEligibilityReason =
   | 'source_material_result_relation'
   | 'not_applicable';
 
+/** Finite, privacy-safe producer identity for a source-floor terminal. */
+export const SUMMARY_V3_STYLE_M5_SOURCE_FLOOR_MISMATCH_CLASSES = [
+  'source_inconsistency',
+  'source_material_result_relation',
+  'candidate_semantic_material',
+  'candidate_named_tool_surface',
+  'employment_state_contradiction',
+  'role_identity_rejection',
+  'stronger_noop_retention_denied',
+] as const;
+export type SummaryV3StyleSourceFloorMismatchClass =
+  (typeof SUMMARY_V3_STYLE_M5_SOURCE_FLOOR_MISMATCH_CLASSES)[number];
+
 export type SummaryV3StyleViolationCode =
   | 'missing_fact'
   | 'lost_source_fact'
@@ -376,6 +389,8 @@ export type SummaryV3StyleEvidence = Readonly<{
   readonly meaningfulChangeDetected: boolean;
   readonly noOpDetected: boolean;
   readonly unsupportedClaimCategory: SummaryV3StyleUnsupportedClaimCategory | null;
+  readonly sourceFloorMismatchClass: SummaryV3StyleSourceFloorMismatchClass | null;
+  readonly evaluatorNoOpClaimed: boolean;
   readonly writerOutputContractFailureClass: SummaryV3StyleWriterOutputContractFailureClass | null;
   /** Finite full-evaluator parser class; never carries provider content. */
   readonly evaluatorOutputContractFailureClass: SummaryV3StyleEvaluatorOutputContractFailureClass | null;
@@ -2742,6 +2757,8 @@ export function createSummaryV3StyleInitialEvidence(snapshot: SummaryV3StyleOper
     meaningfulChangeDetected: false,
     noOpDetected: false,
     unsupportedClaimCategory: null,
+    sourceFloorMismatchClass: null,
+    evaluatorNoOpClaimed: false,
     writerOutputContractFailureClass: null,
     evaluatorOutputContractFailureClass: null,
     writerCandidateReachedValidation: false,

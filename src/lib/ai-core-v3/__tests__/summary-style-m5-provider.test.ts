@@ -281,7 +281,7 @@ describe('M5.2 Summary style provider adapter', () => {
         return providerMessage(invocation);
       },
     });
-    expect(result).toMatchObject({ kind: 'handled_failure', typedReason: 'unsupported_claim' });
+    expect(result).toMatchObject({ kind: 'safe_no_op', typedReason: 'safe_no_op' });
     expect(invocations.map((invocation) => invocation.role)).toEqual(['writer', 'evaluator']);
     const evaluator = invocations[1];
     expect(evaluator?.role).toBe('evaluator');

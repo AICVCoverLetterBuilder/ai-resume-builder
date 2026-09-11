@@ -1268,6 +1268,8 @@ describe('M5.3 Summary style client/page boundary', () => {
           candidateText: 'must not persist',
           evidence: {
             unsupportedClaimCategory: 'source_floor_mismatch',
+            sourceFloorMismatchClass: 'role_identity_rejection',
+            evaluatorNoOpClaimed: false,
             writerCandidateReachedValidation: false,
             evaluatorReached: false,
             safeNoOpConsidered: false,

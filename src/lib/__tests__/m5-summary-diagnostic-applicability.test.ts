@@ -293,6 +293,35 @@ describe('M5 Summary typed diagnostic applicability', () => {
     expect(isPersistedSummaryM5Diagnostic(unknown)).toBe(false);
   });
 
+  it('requires a finite source-floor class and preserves the parsed evaluator no-op bit', async () => {
+    const successful = await buildSuccessfulM5Trace();
+    expect(successful.evaluatorNoOpClaimed).toBe(false);
+    expect(successful.sourceFloorMismatchClass).toBeNull();
+    const sourceFloor = {
+      ...successful,
+      countedAsSuccess: false,
+      visibleApplySucceeded: false,
+      finalCandidateSource: 'none',
+      providerCandidatePresent: true,
+      finalTypedFailureReason: 'unsupported_claim',
+      rejectionStage: 'api_response',
+      usageCountAfter: successful.usageCountBefore,
+      unsupportedClaimCategory: 'source_floor_mismatch',
+      sourceFloorMismatchClass: 'stronger_noop_retention_denied',
+      evaluatorNoOpClaimed: true,
+      safeNoOpConsidered: false,
+      safeNoOpSelected: false,
+    } as unknown as Record<string, unknown>;
+    expect(checkM5SummaryDiagnosticApplicability(sourceFloor).unexpectedDiagnosticFieldTypes).toEqual([]);
+    expect(checkM5SummaryDiagnosticInvariants(sourceFloor).passed).toBe(true);
+    const unknownClass = { ...sourceFloor, sourceFloorMismatchClass: 'provider_raw_error' };
+    expect(checkM5SummaryDiagnosticApplicability(unknownClass).unexpectedDiagnosticFieldTypes)
+      .toContain('sourceFloorMismatchClass:invalid');
+    const misplacedClass = { ...successful, sourceFloorMismatchClass: 'source_inconsistency' };
+    expect(checkM5SummaryDiagnosticApplicability(misplacedClass).unexpectedDiagnosticFieldTypes)
+      .toContain('sourceFloorMismatchClass:not_applicable');
+  });
+
   it('persists only finite M5 provider cause fields and rejects app-status masquerading as upstream status', async () => {
     const session = new SummaryAiDiagnosticSession({
       uiLocale: 'en', requestedLocale: 'en', contentLocale: 'en',
