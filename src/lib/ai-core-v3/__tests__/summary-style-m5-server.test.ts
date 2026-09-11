@@ -53,7 +53,7 @@ function requestFor(style: SummaryV3Style, overrides: Partial<SummaryV3StyleRequ
 }
 
 const candidateByStyle: Record<SummaryV3Style, string> = {
-  shorter: 'Ava Patel, Product Engineer at Atlas, builds reliable APIs, mentors peers, and improved delivery by 20% over 24 months.',
+  shorter: 'Ava Patel is a Product Engineer at Atlas, builds reliable APIs, mentors peers, improved delivery by 20% over 24 months.',
   stronger: 'Ava Patel is a Product Engineer at Atlas. She engineers reliable APIs, mentors peers, and improved delivery by 20% over 24 months.',
   professional: 'Ava Patel is a Product Engineer at Atlas who builds reliable APIs, mentors peers, and improved delivery by 20% over 24 months.',
 };
@@ -215,6 +215,301 @@ describe('M5 shared injected Summary style server executor', () => {
       expect(diagnostics).not.toMatch(/Ava Patel|Atlas|Product Engineer|builds reliable APIs|Authorization|cookie|bearer|provider body|prompt|sk-/iu);
     }
     expect(calls).toEqual({ writer: 1, evaluator: 1 });
+  });
+
+  it('keeps source employment-state preservation independent from contradiction', async () => {
+    const explicitCurrentSource = 'Ava Patel currently works as a Product Engineer at Atlas. She builds reliable APIs, mentors peers, and improved delivery by 20% over 24 months.';
+    const neutralCandidate = 'Ava Patel, a Product Engineer at Atlas. She engineers reliable APIs, mentors peers, and improved delivery by 20% over 24 months.';
+    const result = await executeSummaryV3StyleServer(requestFor('stronger', { visibleSummary: explicitCurrentSource }), {
+      async write(input) { return writerEnvelope(input, neutralCandidate); },
+      async evaluate(input) { return evaluatorEnvelope(input); },
+    });
+    expect(result.kind).toBe('handled_failure');
+    if (result.kind === 'handled_failure') {
+      expect(result.typedReason).toBe('lost_source_fact');
+      expect(result.evidence.sourceFloorMismatchClass).toBeNull();
+      expect(result.evidence.employmentStateContradictionClass).toBeNull();
+      expect(result.evidence.employmentOppositeFrameDetected).toBe(false);
+    }
+  });
+
+  it('keeps execution terminals bound to the selected employment frame modifiers', async () => {
+    const currentSource = 'Ava Patel currently works at Atlas as Product Engineer. Ava Patel previously used another tool. She builds reliable APIs, mentors peers, and improved delivery by 20% over 24 months.';
+    const completedSource = 'Ava Patel formerly worked at Atlas as Product Engineer. Ava Patel currently supports a side project. She builds reliable APIs, mentors peers, and improved delivery by 20% over 24 months.';
+    const makeRequest = (visibleSummary: string, employmentState: 'present' | 'completed') => {
+      const base = requestFor('stronger');
+      return {
+        ...base,
+        visibleSummary,
+        manifest: {
+          ...base.manifest,
+          currentRoleEntryId: employmentState === 'present' ? 'entry-current' : null,
+          entries: base.manifest.entries.map((entry) => ({ ...entry, employmentState })),
+        },
+      } satisfies SummaryV3StyleRequest;
+    };
+    const run = (request: SummaryV3StyleRequest, candidate: string) => executeSummaryV3StyleServer(request, {
+      async write(input) { return writerEnvelope(input, candidate); },
+      async evaluate(input) { return evaluatorEnvelope(input); },
+    });
+
+    const currentPreserved = await run(makeRequest(currentSource, 'present'),
+      'Ava Patel currently works at Atlas as Product Engineer. Ava Patel previously used another tool. She engineers reliable APIs, mentors peers, and improved delivery by 20% over 24 months.');
+    expect(currentPreserved.kind).toBe('candidate_ready');
+    if (currentPreserved.kind === 'candidate_ready') {
+      expect(currentPreserved.evidence.employmentStateContradictionClass).toBeNull();
+      expect(currentPreserved.evidence.employmentOppositeFrameDetected).toBe(false);
+    }
+
+    const completedPreserved = await run(makeRequest(completedSource, 'completed'),
+      'Ava Patel formerly worked at Atlas as Product Engineer. Ava Patel currently supports a side project. She engineers reliable APIs, mentors peers, and improved delivery by 20% over 24 months.');
+    expect(completedPreserved.kind).toBe('candidate_ready');
+    if (completedPreserved.kind === 'candidate_ready') {
+      expect(completedPreserved.evidence.employmentStateContradictionClass).toBeNull();
+      expect(completedPreserved.evidence.employmentOppositeFrameDetected).toBe(false);
+    }
+
+    const neutral = await run(makeRequest(completedSource, 'completed'),
+      'Ava Patel, a Product Engineer at Atlas. She engineers reliable APIs, mentors peers, and improved delivery by 20% over 24 months.');
+    expect(neutral).toMatchObject({ kind: 'handled_failure', typedReason: 'lost_source_fact' });
+
+    const completedToCurrent = await run(makeRequest(completedSource, 'completed'),
+      'Ava Patel formerly worked at Atlas as Product Engineer. Ava Patel currently supports a side project. Ava Patel currently works at Atlas as Product Engineer. She engineers reliable APIs, mentors peers, and improved delivery by 20% over 24 months.');
+    expect(completedToCurrent).toMatchObject({ kind: 'handled_failure', typedReason: 'unsupported_claim' });
+    if (completedToCurrent.kind === 'handled_failure') {
+      expect(completedToCurrent.evidence.employmentStateContradictionClass).toBe('completed_entry_current_marker');
+      expect(completedToCurrent.evidence.employmentOppositeFrameDetected).toBe(true);
+    }
+
+    const currentToCompleted = await run(makeRequest(currentSource, 'present'),
+      'Ava Patel currently works at Atlas as Product Engineer. Ava Patel previously used another tool. Ava Patel formerly worked at Atlas as Product Engineer. She engineers reliable APIs, mentors peers, and improved delivery by 20% over 24 months.');
+    expect(currentToCompleted).toMatchObject({ kind: 'handled_failure', typedReason: 'unsupported_claim' });
+    if (currentToCompleted.kind === 'handled_failure') {
+      expect(currentToCompleted.evidence.employmentStateContradictionClass).toBe('present_entry_prior_marker');
+      expect(currentToCompleted.evidence.employmentOppositeFrameDetected).toBe(true);
+    }
+  });
+
+  it('keeps execution terminals fail-closed for bounded Hindi and Japanese postposed employment states', async () => {
+    const cases = [
+      {
+        locale: 'hi' as const,
+        role: 'सॉफ्टवेयर इंजीनियर',
+        employer: 'एटलस',
+        present: 'मैं एटलस में सॉफ्टवेयर इंजीनियर हूँ।',
+        completed: 'मैं एटलस में सॉफ्टवेयर इंजीनियर था।',
+        neutral: 'एटलस में सॉफ्टवेयर इंजीनियर ने इंस्टॉलेशन पूरे किए।',
+      },
+      {
+        locale: 'ja' as const,
+        role: 'ソフトウェアエンジニア',
+        employer: 'アトラス',
+        present: 'アトラスのソフトウェアエンジニアとして働いています。',
+        completed: 'アトラスのソフトウェアエンジニアとして働いていました。',
+        neutral: 'アトラスのソフトウェアエンジニアとして構築しました。',
+      },
+    ] as const;
+    const makeRequest = (item: typeof cases[number], source: string, employmentState: 'present' | 'completed') => {
+      const base = emptyLocaleRequest(item.locale);
+      return {
+        ...base,
+        operation: 'summary_professional' as const,
+        operationId: `postposed-${item.locale}-${employmentState}`,
+        style: 'professional' as const,
+        visibleSummary: source,
+        visibleSummaryFacts: undefined,
+        manifest: {
+          ...base.manifest,
+          currentRoleEntryId: employmentState === 'present' ? base.manifest.currentRoleEntryId : null,
+          entries: base.manifest.entries.map((entry) => ({
+            ...entry,
+            role: item.role,
+            employer: item.employer,
+            employmentState,
+          })),
+        },
+      } satisfies SummaryV3StyleRequest;
+    };
+    const run = (request: SummaryV3StyleRequest, candidate: string, noOpDetected = false) => executeSummaryV3StyleServer(request, {
+      async write(input) { return writerEnvelope(input, candidate); },
+      async evaluate(input) { return evaluatorEnvelope(input, { noOpDetected }); },
+    });
+
+    for (const item of cases) {
+      const present = await run(makeRequest(item, item.present, 'present'), item.present, true);
+      expect(present.kind).toBe('safe_no_op');
+      const presentNeutral = await run(makeRequest(item, item.present, 'present'), item.neutral);
+      expect(presentNeutral).toMatchObject({ kind: 'handled_failure', typedReason: 'lost_source_fact' });
+      if (presentNeutral.kind === 'handled_failure') {
+        expect(presentNeutral.evidence.employmentStateContradictionClass).toBeNull();
+        expect(presentNeutral.evidence.employmentOppositeFrameDetected).toBe(false);
+      }
+      const presentToCompleted = await run(makeRequest(item, item.present, 'present'), `${item.present} ${item.completed}`);
+      expect(presentToCompleted).toMatchObject({ kind: 'handled_failure', typedReason: 'unsupported_claim' });
+      if (presentToCompleted.kind === 'handled_failure') {
+        expect(presentToCompleted.evidence.employmentStateContradictionClass).toBe('present_entry_prior_marker');
+        expect(presentToCompleted.evidence.employmentOppositeFrameDetected).toBe(true);
+      }
+
+    }
+  });
+
+  it('fails closed on same-frame conflicting employment states in Enhance and Generate modes', async () => {
+    const cases = [
+      {
+        locale: 'hi' as const,
+        presentSource: 'मैं वर्तमान में एटलस में सॉफ्टवेयर इंजीनियर हूँ। विश्वसनीय एपीआई बनाती हैं।',
+        completedSource: 'सॉफ्टवेयर इंजीनियर। एटलस। विश्वसनीय एपीआई बनाती हैं।',
+        presentConflict: 'मैं वर्तमान में एटलस में सॉफ्टवेयर इंजीनियर हूँ। मैं वर्तमान में एटलस में सॉफ्टवेयर इंजीनियर था। विश्वसनीय एपीआई बनाती हैं।',
+        completedConflict: 'सॉफ्टवेयर इंजीनियर। एटलस। विश्वसनीय एपीआई बनाती हैं। मैं एटलस में सॉफ्टवेयर इंजीनियर थीं। मैं एटलस में सॉफ्टवेयर इंजीनियर हूँ।',
+      },
+      {
+        locale: 'ja' as const,
+        presentSource: '現在アトラスのソフトウェアエンジニアとして働いています。信頼性の高いAPIを構築。',
+        completedSource: 'ソフトウェアエンジニア。アトラス。信頼性の高いAPIを構築。',
+        presentConflict: '現在アトラスのソフトウェアエンジニアとして働いています。現在アトラスのソフトウェアエンジニアとして働いていました。信頼性の高いAPIを構築。',
+        completedConflict: 'ソフトウェアエンジニア。アトラス。信頼性の高いAPIを構築。ソフトウェアエンジニアとしてアトラスで働いていました。ソフトウェアエンジニアとしてアトラスで働いています。',
+      },
+    ] as const;
+    const enhancePresent = await executeSummaryV3StyleServer(requestFor('stronger'), {
+      async write(input) {
+        return writerEnvelope(input, `${source} Ava Patel formerly worked at Atlas as Product Engineer.`);
+      },
+      async evaluate(input) { return evaluatorEnvelope(input); },
+    });
+    expect(enhancePresent).toMatchObject({ kind: 'handled_failure', typedReason: 'unsupported_claim', mode: 'enhance_existing_content' });
+    if (enhancePresent.kind === 'handled_failure') {
+      expect(enhancePresent.evidence.sourceFloorMismatchClass).toBe('employment_state_contradiction');
+      expect(enhancePresent.evidence.employmentStateContradictionClass).toBe('present_entry_prior_marker');
+      expect(enhancePresent.evidence.employmentOppositeFrameDetected).toBe(true);
+    }
+
+    const enhanceCompletedSource = 'Ava Patel formerly worked at Atlas as Product Engineer. She builds reliable APIs, mentors peers, and improved delivery by 20% over 24 months.';
+    const completedBase = requestFor('stronger');
+    const enhanceCompletedRequest = {
+      ...completedBase,
+      operationId: 'same-frame-enhance-completed',
+      visibleSummary: enhanceCompletedSource,
+      manifest: {
+        ...completedBase.manifest,
+        currentRoleEntryId: null,
+        entries: completedBase.manifest.entries.map((entry) => ({ ...entry, employmentState: 'completed' as const })),
+      },
+    } satisfies SummaryV3StyleRequest;
+    const enhanceCompleted = await executeSummaryV3StyleServer(enhanceCompletedRequest, {
+      async write(input) {
+        return writerEnvelope(input, `${enhanceCompletedSource} Ava Patel currently works at Atlas as Product Engineer.`);
+      },
+      async evaluate(input) { return evaluatorEnvelope(input); },
+    });
+    expect(enhanceCompleted).toMatchObject({ kind: 'handled_failure', typedReason: 'unsupported_claim', mode: 'enhance_existing_content' });
+    if (enhanceCompleted.kind === 'handled_failure') {
+      expect(enhanceCompleted.evidence.sourceFloorMismatchClass).toBe('employment_state_contradiction');
+      expect(enhanceCompleted.evidence.employmentStateContradictionClass).toBe('completed_entry_current_marker');
+      expect(enhanceCompleted.evidence.employmentOppositeFrameDetected).toBe(true);
+    }
+
+    for (const item of cases) {
+      const generateBase = emptyLocaleRequest(item.locale);
+      const generate = async (employmentState: 'present' | 'completed', candidate: string) => {
+        const targetEntryId = `generate-${item.locale}-target`;
+        const currentEntryId = `generate-${item.locale}-current`;
+        const targetEntry = {
+          stableId: targetEntryId,
+          role: emptyLocaleFixtures[item.locale].role,
+          employer: emptyLocaleFixtures[item.locale].employer,
+          employmentState,
+          durationMonths: 24,
+          facts: [{ id: `${targetEntryId}-fact`, text: emptyLocaleFixtures[item.locale].fact }],
+        };
+        const currentEntry = {
+          stableId: currentEntryId,
+          role: item.locale === 'hi' ? 'सहायक इंजीनियर' : 'テストエンジニア',
+          employer: item.locale === 'hi' ? 'नोवा' : 'ノヴァ',
+          employmentState: 'present' as const,
+          durationMonths: 12,
+          facts: [{ id: `${currentEntryId}-fact`, text: item.locale === 'hi' ? 'टीमों का समर्थन' : 'チームを支援' }],
+        };
+        const entries = employmentState === 'present' ? [targetEntry] : [currentEntry, targetEntry];
+        const generatedCandidate = employmentState === 'present'
+          ? candidate
+          : `${item.locale === 'hi' ? 'नोवा में सहायक इंजीनियर हूँ। टीमों का समर्थन।' : 'ノヴァのテストエンジニアとして働いています。チームを支援。'} ${candidate}`;
+        const request = {
+          ...generateBase,
+          operation: 'summary_professional' as const,
+          operationId: `same-frame-generate-${item.locale}-${employmentState}`,
+          style: 'professional' as const,
+          visibleSummary: '',
+          visibleSummaryFacts: undefined,
+          protectedEntities: undefined,
+          manifest: {
+            ...generateBase.manifest,
+            currentRoleEntryId: employmentState === 'present' ? targetEntryId : currentEntryId,
+            entries,
+          },
+        } satisfies SummaryV3StyleRequest;
+        const calls = { writer: 0, evaluator: 0, repairWriter: 0, repairEvaluator: 0 };
+        const result = await executeSummaryV3StyleServer(request, {
+          async write(input) { calls.writer += 1; return writerEnvelope(input, generatedCandidate); },
+          async evaluate(input) { calls.evaluator += 1; return evaluatorEnvelope(input); },
+          async repairWrite() { calls.repairWriter += 1; return {}; },
+          async repairEvaluate() { calls.repairEvaluator += 1; return {}; },
+        });
+        return { result, calls };
+      };
+
+      const generatedPresent = await generate('present', item.presentConflict);
+      expect(generatedPresent.result).toMatchObject({ kind: 'handled_failure', typedReason: 'unsupported_claim', mode: 'generate_from_context' });
+      if (generatedPresent.result.kind === 'handled_failure') {
+        expect(generatedPresent.result.evidence.sourceFloorMismatchClass).toBe('employment_state_contradiction');
+        expect(generatedPresent.result.evidence.employmentStateContradictionClass).toBe('present_entry_prior_marker');
+        expect(generatedPresent.result.evidence.employmentOppositeFrameDetected).toBe(true);
+      }
+      expect(generatedPresent.calls).toMatchObject({ writer: 1, evaluator: 1, repairWriter: 0, repairEvaluator: 0 });
+
+      const generatedCompleted = await generate('completed', item.completedConflict);
+      expect(generatedCompleted.result).toMatchObject({ kind: 'handled_failure', typedReason: 'unsupported_claim', mode: 'generate_from_context' });
+      if (generatedCompleted.result.kind === 'handled_failure') {
+        expect(generatedCompleted.result.evidence.sourceFloorMismatchClass).toBe('employment_state_contradiction');
+        expect(generatedCompleted.result.evidence.employmentStateContradictionClass).toBe('completed_entry_current_marker');
+        expect(generatedCompleted.result.evidence.employmentOppositeFrameDetected).toBe(true);
+      }
+      expect(generatedCompleted.calls).toMatchObject({ writer: 1, evaluator: 1, repairWriter: 0, repairEvaluator: 0 });
+    }
+  });
+
+  it('closes role/employer directionality at the execution terminal', async () => {
+    const employerFirstSource = 'Ava Patel works at Atlas as a Product Engineer. She builds reliable APIs, mentors peers, and improved delivery by 20% over 24 months.';
+    const neutralCandidate = 'Ava Patel, a Product Engineer at Atlas. She engineers reliable APIs, mentors peers, and improved delivery by 20% over 24 months.';
+    const currentCandidate = employerFirstSource;
+    const formerCandidate = 'Ava Patel works at Atlas as a Product Engineer. Ava Patel formerly worked at Atlas as a Product Engineer. She builds reliable APIs, mentors peers, and improved delivery by 20% over 24 months.';
+    const base = requestFor('stronger', { visibleSummary: employerFirstSource });
+    const run = (candidate: string) => executeSummaryV3StyleServer(base, {
+      async write(input) { return writerEnvelope(input, candidate); },
+      async evaluate(input) { return evaluatorEnvelope(input); },
+    });
+
+    const neutral = await run(neutralCandidate);
+    expect(neutral).toMatchObject({ kind: 'handled_failure', typedReason: 'lost_source_fact' });
+    if (neutral.kind === 'handled_failure') {
+      expect(neutral.evidence.sourceFloorMismatchClass).toBeNull();
+      expect(neutral.evidence.employmentStateContradictionClass).toBeNull();
+      expect(neutral.evidence.employmentOppositeFrameDetected).toBe(false);
+    }
+
+    const current = await run(currentCandidate);
+    expect(current).toMatchObject({ kind: 'handled_failure', typedReason: 'style_not_fulfilled' });
+    if (current.kind === 'handled_failure') {
+      expect(current.evidence.employmentStateContradictionClass).toBeNull();
+      expect(current.evidence.employmentOppositeFrameDetected).toBe(false);
+    }
+
+    const former = await run(formerCandidate);
+    expect(former).toMatchObject({ kind: 'handled_failure', typedReason: 'unsupported_claim' });
+    if (former.kind === 'handled_failure') {
+      expect(former.evidence.employmentStateContradictionClass).toBe('present_entry_prior_marker');
+      expect(former.evidence.employmentOppositeFrameDetected).toBe(true);
+    }
   });
 
   it('uses the immutable context authority for empty source across all three styles', async () => {
@@ -2562,7 +2857,7 @@ describe('M5 shared injected Summary style server executor', () => {
 
   it('permits dense fact-preserving Shorter compression without forcing an unsafe one- or two-sentence target', async () => {
     const denseSource = 'Ava Patel is a Product Engineer at Atlas. She builds reliable APIs. She mentors peers. She improved delivery by 20% over 24 months.';
-    const compact = 'Ava Patel, Product Engineer at Atlas, builds reliable APIs. She mentors peers. She improved delivery by 20% over 24 months.';
+    const compact = 'Ava Patel is a Product Engineer at Atlas, builds reliable APIs. She mentors peers. She improved delivery by 20% over 24 months.';
     const result = await executeSummaryV3StyleServer({ ...requestFor('shorter'), visibleSummary: denseSource, visibleSummaryFacts: undefined }, {
       async write(input) { return writerEnvelope(input, compact); },
       async evaluate(input) { return evaluatorEnvelope(input); },

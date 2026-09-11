@@ -10,6 +10,7 @@ import {
   employmentStateContradictionClass,
   employmentStateContradictionDecision,
   hasEmploymentStateContradiction,
+  employmentRelationDecision,
 } from '../summary-style-m5-server';
 
 const role = 'Servicetechniker Elektrotechnik';
@@ -108,19 +109,19 @@ function aab575BaselineOracle(snapshot: SummaryV3StyleOperationSnapshot, candida
   return false;
 }
 
-describe('M8 AAB575 employment-state observability parity', () => {
-  it('preserves the AAB575 boolean while exposing a bounded shadow opposite-frame verdict', () => {
+describe('M8 AAB576 semantic employment-state ownership', () => {
+  it('blocks only explicit opposite employment relations bound to the same entry', () => {
     const snapshot = snapshotFor(currentSource);
     const cases = [
       { label: 'A current frame', candidate: currentFrame, expected: false, opposite: false, expectedClass: null },
       { label: 'B current frame plus simple-past duty', candidate: `${currentFrame}, where I resolved faults.`, expected: false, opposite: false, expectedClass: null },
-      { label: 'C current frame plus present-perfect duty', candidate: `${currentFrame}, where I have completed installations and supported projects.`, expected: true, opposite: false, expectedClass: 'enhance_prior_marker_parity_mismatch' },
-      { label: 'D neutral frame', candidate: `${rolePresentation} at ${employer}, where I resolved faults.`, expected: true, opposite: false, expectedClass: 'enhance_current_marker_parity_mismatch' },
+      { label: 'C current frame plus present-perfect duty', candidate: `${currentFrame}, where I have completed installations and supported projects.`, expected: false, opposite: false, expectedClass: null },
+      { label: 'D neutral frame', candidate: `${rolePresentation} at ${employer}, where I resolved faults.`, expected: false, opposite: false, expectedClass: null },
       { label: 'E explicit former frame', candidate: `${formerFrame}.`, expected: true, opposite: true, expectedClass: 'present_entry_prior_marker' },
       { label: 'F completed source plus explicit current frame', candidate: currentFrame, snapshot: snapshotFor(formerFrame, 'completed'), expected: true, opposite: true, expectedClass: 'completed_entry_current_marker' },
       { label: 'G completed source plus completed frame', candidate: formerFrame, snapshot: snapshotFor(formerFrame, 'completed'), expected: false, opposite: false, expectedClass: null },
-      { label: 'H unrelated past duty', candidate: 'I resolved unrelated faults before joining another team.', expected: true, opposite: false, expectedClass: 'enhance_current_marker_parity_mismatch' },
-      { label: 'I current frame plus completed individual task', candidate: `${currentFrame}, where I completed installations.`, expected: true, opposite: false, expectedClass: 'enhance_prior_marker_parity_mismatch' },
+      { label: 'H unrelated past duty', candidate: 'I resolved unrelated faults before joining another team.', expected: false, opposite: false, expectedClass: null },
+      { label: 'I current frame plus completed individual task', candidate: `${currentFrame}, where I completed installations.`, expected: false, opposite: false, expectedClass: null },
     ];
     for (const item of cases) {
       const activeSnapshot = item.snapshot || snapshot;
@@ -132,7 +133,7 @@ describe('M8 AAB575 employment-state observability parity', () => {
     }
   });
 
-  it('matches the committed AAB575 oracle across a deterministic matrix of at least 50 cases', () => {
+  it('enumerates every intentional delta from the committed AAB575 oracle', () => {
     const presentSnapshot = snapshotFor(currentSource, 'present');
     const completedSnapshot = snapshotFor(formerFrame, 'completed');
     const candidates = [
@@ -156,6 +157,9 @@ describe('M8 AAB575 employment-state observability parity', () => {
       `${rolePresentation} with ${employer} completed installations.`,
       `The ${rolePresentation} at ${employer} is currently assigned.`,
       `The ${rolePresentation} at ${employer} was formerly assigned.`,
+      `I am an ${rolePresentation} with ${employer}, and I completed installations.`,
+      `I was an ${rolePresentation} with ${employer}, and I built reliable systems.`,
+      `The team completed a previous project while I worked elsewhere.`,
     ];
     const modes: Array<{ snapshot: SummaryV3StyleOperationSnapshot; label: string }> = [
       { snapshot: presentSnapshot, label: 'present-enhance' },
@@ -164,14 +168,19 @@ describe('M8 AAB575 employment-state observability parity', () => {
     ];
     const matrix = modes.flatMap(({ snapshot, label }) => candidates.map((candidate, index) => ({ snapshot, candidate, label: `${label}-${index}` })));
     expect(matrix.length).toBeGreaterThanOrEqual(50);
-    let mismatches = 0;
+    const deltas: Array<{ label: string; baseline: boolean; observed: boolean; opposite: boolean }> = [];
     for (const item of matrix) {
       const baseline = aab575BaselineOracle(item.snapshot, item.candidate);
-      const observed = employmentStateContradictionDecision(item.snapshot, item.candidate).contradicted;
-      if (baseline !== observed) mismatches += 1;
-      expect(observed, item.label).toBe(baseline);
+      const decision = employmentRelationDecision(item.snapshot, item.candidate);
+      if (baseline !== decision.contradicted) deltas.push({ label: item.label, baseline, observed: decision.contradicted, opposite: decision.explicitOppositeFrameDetected });
     }
-    expect(mismatches).toBe(0);
+    expect(matrix.length).toBeGreaterThanOrEqual(65);
+    expect(deltas.length).toBeGreaterThan(0);
+    expect(deltas.every((delta) => (
+      delta.baseline && !delta.observed && !delta.opposite
+    ) || (
+      !delta.baseline && delta.observed && delta.opposite
+    ))).toBe(true);
   });
 
   it('covers identity-clause absence, both marker groups, mixed states, and multiple entries', () => {
@@ -211,15 +220,44 @@ describe('M8 AAB575 employment-state observability parity', () => {
       currentRoleEntryId: 'entry-current',
     });
     const cases = [
-      'The team discussed a previous project.',
-      `${currentFrame} and I was previously assigned to a project.`,
-      `${currentFrame} and I am currently supporting the team.`,
-      `${formerFrame} and I am currently supporting the team.`,
-      'I worked on a previous project and currently coordinate unrelated work.',
+      { candidate: 'The team discussed a previous project.', expected: false },
+      { candidate: `${currentFrame} and I was previously assigned to a project.`, expected: false },
+      { candidate: `${currentFrame} and I am currently supporting the team.`, expected: false },
+      { candidate: `${formerFrame} and I am currently supporting the team.`, expected: true },
+      { candidate: 'I worked on a previous project and currently coordinate unrelated work.', expected: false },
     ];
-    for (const candidate of cases) {
-      expect(employmentStateContradictionDecision(mixed, candidate).contradicted)
-        .toBe(aab575BaselineOracle(mixed, candidate));
+    for (const item of cases) {
+      expect(employmentStateContradictionDecision(mixed, item.candidate).contradicted, item.candidate)
+        .toBe(item.expected);
+    }
+  });
+
+  it('uses an independently authored expected result for explicit opposite frames', () => {
+    const cases = [
+      {
+        snapshot: snapshotFor(currentSource, 'present'),
+        candidate: formerFrame,
+        expected: 'employment_state_contradiction',
+      },
+      {
+        snapshot: snapshotFor(formerFrame, 'completed'),
+        candidate: currentFrame,
+        expected: 'employment_state_contradiction',
+      },
+      {
+        snapshot: snapshotFor(currentSource, 'present'),
+        candidate: `${currentFrame}, where I completed installations.`,
+        expected: 'accepted',
+      },
+      {
+        snapshot: snapshotFor(currentSource, 'present'),
+        candidate: `${rolePresentation} at ${employer}, where I resolved faults.`,
+        expected: 'accepted',
+      },
+    ] as const;
+    for (const item of cases) {
+      const decision = employmentRelationDecision(item.snapshot, item.candidate);
+      expect(decision.contradicted, item.candidate).toBe(item.expected === 'employment_state_contradiction');
     }
   });
 });

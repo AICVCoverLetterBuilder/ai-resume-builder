@@ -48,6 +48,7 @@ import {
   type SummaryV3StyleFailureReason,
   type SummaryV3StyleFulfillmentEvidence,
   type SummaryV3StyleOperationSnapshot,
+  type SummaryV3StyleSupportedLocale,
   type SummaryV3StylePhase,
   type SummaryV3StylePhaseStatus,
   type SummaryV3StyleRequest,
@@ -340,17 +341,227 @@ function hasUnsupportedNumericMetric(snapshot: SummaryV3StyleOperationSnapshot, 
   return false;
 }
 
-const PRIOR_STATE_MARKERS = /(?:former|previous|past|completed|ehemalig(?:e|er|es|en)?|früher|bivš\w*|prethod\w*|पूर्व|सابق|前職|以前)/iu;
-const CURRENT_STATE_MARKERS = /(?:current(?:ly)?|present|ongoing|aktuell(?:e|er|es|en)?|trenutn\w*|वर्तमान|حالي(?:ة|ا)?|現在)/iu;
+// Historical marker constants are intentionally absent from runtime authority.
 
 /**
- * Shadow-only employment-frame parser. It is deliberately separate from the
- * AAB575 boolean below: its result is observational and cannot alter runtime
- * acceptance, source-floor classification, repair, or usage behavior.
+ * Identity-bound employment relation parser. Employment state is a property
+ * of the selected role/employer frame, never of an isolated duty verb or a
+ * global marker token. This parser is the single runtime authority used by
+ * contradiction and source-preservation checks, and by the diagnostic bit.
  */
-const CURRENT_EMPLOYMENT_FRAME_PREFIX = /(?:\b(?:currently|presently|ongoing|aktuell(?:e|er|es|en)?|trenutn\w*|वर्तमान|حالي(?:ة|ا)?|現在)\s*(?:[\p{L}\p{N}'’+#&./-]+\s+){0,6}|\b(?:work|works|serve|serves)\s+as\s*(?:[\p{L}\p{N}'’+#&./-]+\s+){0,3}|\b(?:am|is|are)\s+(?:an?\s+)?|\b(?:ist|sind|arbeite|arbeitet)\s+(?:als\s+)?|\b(?:je|sam|radi|radim)\s+|\b(?:वर्तमान|حالي(?:ة|ا)?)\s*)$/iu;
-const COMPLETED_EMPLOYMENT_FRAME_PREFIX = /(?:\b(?:formerly|previously|once)\s+(?:worked|served)\s+as\s*(?:[\p{L}\p{N}'’+#&./-]+\s+){0,3}|\b(?:worked|served)\s+as\s*(?:[\p{L}\p{N}'’+#&./-]+\s+){0,3}|\b(?:was|were)\s+(?:an?\s+)?|\b(?:war|waren)\s+(?:als\s+)?|\b(?:former|ehemalig(?:e|er|es|en)?|früher|bivš\w*|prethod\w*)\s*)$/iu;
-const EMPLOYMENT_FRAME_RELATION = /(?:\bat\b|\bwith\b|\bbei\b|\bin\b|\bu\b|\bفي\b|\bب\b|\bमें\b|の|\bу\b|\bв\b)/iu;
+type EmploymentFrameGrammar = Readonly<{
+  readonly relations: readonly RegExp[];
+  readonly employerBeforeRoleRelations: readonly RegExp[];
+  readonly employerBeforeRoleLinks: readonly RegExp[];
+  readonly employerBeforeRoleDirectRelations?: readonly RegExp[];
+  readonly employerBeforeRolePresentPrefixes: readonly RegExp[];
+  readonly employerBeforeRoleCompletedPrefixes: readonly RegExp[];
+  readonly presentPrefixes: readonly RegExp[];
+  readonly completedPrefixes: readonly RegExp[];
+  readonly presentSuffixes?: readonly RegExp[];
+  readonly completedSuffixes?: readonly RegExp[];
+}>;
+
+const EMPLOYMENT_WORDS = `[\\p{L}\\p{M}\\p{N}'’+#&./-]+`;
+
+/**
+ * One locale-aware employment-frame grammar. The same grammar object is used
+ * for source classification, candidate classification, contradiction, source
+ * preservation, and the diagnostic opposite-frame bit.
+ */
+const EMPLOYMENT_FRAME_GRAMMARS: Readonly<Record<SummaryV3StyleSupportedLocale, EmploymentFrameGrammar>> = {
+  en: {
+    relations: [/\b(?:at|with)\b/iu],
+    employerBeforeRoleRelations: [/\b(?:at|with)\s*$/iu],
+    employerBeforeRoleLinks: [/\b(?:as)(?:\s+an?)?\s*$/iu],
+    employerBeforeRolePresentPrefixes: [/\b(?:work|works|serve|serves)\s*$/iu, /\b(?:am|is|are)\s*$/iu],
+    employerBeforeRoleCompletedPrefixes: [/\b(?:worked|served)\s*$/iu, /\b(?:was|were)\s*$/iu],
+    presentPrefixes: [
+      /\b(?:currently|presently|ongoing)\s+(?:work|works|serve|serves)\s+as\s+(?:an?\s+)?$/iu,
+      /\b(?:currently|presently|ongoing)\s+(?:am|is|are)\s+(?:an?\s+)?$/iu,
+      /\b(?:work|works|serve|serves)\s+as\s+(?:an?\s+)?$/iu,
+      new RegExp(`\\b(?:am|is|are)\\s+(?:an?\\s+)?(?:${EMPLOYMENT_WORDS}\\s+){0,2}$`, 'iu'),
+      new RegExp(`\\b(?:am|is|are)\\s+(?:an?\\s+)?(?:${EMPLOYMENT_WORDS}\\s+){0,2}$`, 'iu'),
+    ],
+    completedPrefixes: [
+      new RegExp(`\\b(?:formerly|previously|once)\\s+(?:worked|served)\\s+as\\s*(?:${EMPLOYMENT_WORDS}\\s+){0,3}$`, 'iu'),
+      new RegExp(`\\b(?:worked|served)\\s+as\\s*(?:${EMPLOYMENT_WORDS}\\s+){0,3}$`, 'iu'),
+      /\b(?:was|were)\s+(?:an?\s+)?$/iu,
+    ],
+  },
+  de: {
+    relations: [/\b(?:bei|in)\b/iu],
+    employerBeforeRoleRelations: [/\b(?:bei|in)\s*$/iu],
+    employerBeforeRoleLinks: [/\bals(?:\s+ein(?:e|en|em|er)?)?\s*$/iu],
+    employerBeforeRolePresentPrefixes: [
+      /\b(?:arbeite|arbeitet)\s+(?:aktuell|derzeit|gegenwärtig)\s+(?:bei|in)\s*$/iu,
+      /\b(?:bin|ist|sind)\s+(?:aktuell|derzeit|gegenwärtig)?\s*(?:bei|in)\s*$/iu,
+      /\b(?:arbeite|arbeitet)\s+(?:aktuell|derzeit|gegenwärtig)\s*$/iu,
+      /\b(?:bin|ist|sind)\s+(?:aktuell|derzeit|gegenwärtig)\s*$/iu,
+      /\b(?:arbeite|arbeitet)\s*$/iu,
+      /\b(?:bin|ist|sind)\s*$/iu,
+    ],
+    employerBeforeRoleCompletedPrefixes: [
+      /\b(?:arbeitete|arbeiteten)\s+(?:früher|zuvor|ehemals)\s+(?:bei|in)\s*$/iu,
+      /\b(?:war|waren)\s+(?:früher|zuvor|ehemals)?\s*(?:bei|in)\s*$/iu,
+      /\b(?:arbeitete|arbeiteten)\s*$/iu,
+      /\b(?:war|waren)\s*$/iu,
+    ],
+    presentPrefixes: [
+      /\b(?:arbeite|arbeitet)\s+(?:aktuell\s+)?als\s+(?:ein(?:e|en|em|er)?\s+)?$/iu,
+      /\b(?:ist|sind)\s+(?:ein(?:e|en|em|er)?\s+)?$/iu,
+    ],
+    completedPrefixes: [
+      /\b(?:arbeitete|arbeiteten|arbeitete)\s+(?:früher\s+)?als\s+(?:ein(?:e|en|em|er)?\s+)?$/iu,
+      /\b(?:war|waren)\s+(?:ein(?:e|en|em|er)?\s+)?$/iu,
+    ],
+  },
+  sr: {
+    relations: [/\b(?:u|kod|sa|s)\b/iu],
+    employerBeforeRoleRelations: [/\b(?:u|kod|sa|s)\s*$/iu],
+    employerBeforeRoleLinks: [/\b(?:kao|u\s+ulozi)\s*$/iu],
+    employerBeforeRolePresentPrefixes: [/(?:trenutno\s+)?(?:radim|radi|sam|je)\s*$/iu, /(?:trenutno\s+)?(?:radim|radi|sam|je)\s+(?:u|na)\s*$/iu],
+    employerBeforeRoleCompletedPrefixes: [/(?:prethodno\s+)?(?:sam\s+)?(?:radio|radila|radili|bio|bila|bili)\s*$/iu, /(?:prethodno\s+)?(?:sam\s+)?(?:radio|radila|radili|bio|bila|bili)\s+(?:u|na)\s*$/iu],
+    presentPrefixes: [
+      /\b(?:radim|radi|sam|je)\s+(?:trenutn(?:o|a|i)?\s+)?(?:kao|u\s+ulozi)?\s*$/iu,
+    ],
+    completedPrefixes: [
+      /\b(?:radio|radila|radili|bio|bila|bili)\s+(?:ranije\s+)?(?:kao|u\s+ulozi)?\s*$/iu,
+    ],
+  },
+  hr: {
+    relations: [/\b(?:u|kod|sa|s)\b/iu],
+    employerBeforeRoleRelations: [/\b(?:u|kod|sa|s)\s*$/iu],
+    employerBeforeRoleLinks: [/\b(?:kao|u\s+ulozi)\s*$/iu],
+    employerBeforeRolePresentPrefixes: [/(?:trenutno\s+)?(?:radim|radi|sam|je)\s*$/iu, /(?:trenutno\s+)?(?:radim|radi|sam|je)\s+(?:u|na)\s*$/iu],
+    employerBeforeRoleCompletedPrefixes: [/(?:prethodno\s+)?(?:sam\s+)?(?:radio|radila|radili|bio|bila|bili)\s*$/iu, /(?:prethodno\s+)?(?:sam\s+)?(?:radio|radila|radili|bio|bila|bili)\s+(?:u|na)\s*$/iu],
+    presentPrefixes: [
+      /\b(?:radim|radi|sam|je)\s+(?:trenutn(?:o|a|i)?\s+)?(?:kao|u\s+ulozi)?\s*$/iu,
+    ],
+    completedPrefixes: [
+      /\b(?:radio|radila|radili|bio|bila|bili)\s+(?:ranije\s+)?(?:kao|u\s+ulozi)?\s*$/iu,
+    ],
+  },
+  hi: {
+    relations: [/(?:^|\s)में(?:\s|$)/u],
+    employerBeforeRoleRelations: [/(?:^|\s)में\s*$/u],
+    employerBeforeRoleLinks: [/(?:के\s+रूप\s+में|में)\s*$/u],
+    employerBeforeRoleDirectRelations: [/^\s*में\s*$/u],
+    employerBeforeRolePresentPrefixes: [/(?:वर्तमान(?:\s+में)?|अभी|कार्यरत)\s*$/u],
+    employerBeforeRoleCompletedPrefixes: [/(?:पूर्व(?:\s+में)?|पहले|भूतपूर्व)\s*$/u],
+    presentPrefixes: [],
+    completedPrefixes: [],
+    presentSuffixes: [
+      /^\s*(?:हूँ|है|हैं)(?=\s*(?:$|[.!?।！？,，;:؛]|और(?=\s|$)|लेकिन(?=\s|$)))/u,
+      /^\s*(?:में\s+)?काम\s+कर(?:ता|ती|ते)\s+(?:हूँ|है|हैं)(?=\s*(?:$|[.!?।！？,，;:؛]|और(?=\s|$)|लेकिन(?=\s|$)))/u,
+    ],
+    completedSuffixes: [
+      /^\s*(?:था|थी|थे|थीं)(?=\s*(?:$|[.!?।！？,，;:؛]|और(?=\s|$)|लेकिन(?=\s|$)))/u,
+      /^\s*(?:में\s+)?काम\s+कर(?:ता|ती|ते)\s+(?:था|थी|थे|थीं)(?=\s*(?:$|[.!?।！？,，;:؛]|और(?=\s|$)|लेकिन(?=\s|$)))/u,
+    ],
+  },
+  ar: {
+    relations: [/(?:^|\s)(?:في|ب)(?:\s|$)/u],
+    employerBeforeRoleRelations: [/(?:^|\s)(?:في|ب)\s*$/u],
+    employerBeforeRoleLinks: [/(?:كـ|ك)\s*$/u],
+    employerBeforeRolePresentPrefixes: [/(?:حالي(?:ة|ا)?|أعمل|يعمل|أكون|يكون|حاضِر)\s*$/u, /(?:أعمل|يعمل|أكون|يكون)\s+حاليا\s*$/u],
+    employerBeforeRoleCompletedPrefixes: [/(?:سابق(?:ة|ا)?|عملت|كان|كانت|سابقا)\s*$/u, /عملت\s+سابقا\s*$/u],
+    presentPrefixes: [/(?:أعمل|يعمل|أكون|يكون)\s+(?:حاليا\s+)?(?:كـ|ك)\s*$/u],
+    completedPrefixes: [/عملت\s+(?:سابقا\s+)?(?:كـ|ك)\s*$/u],
+  },
+  ja: {
+    relations: [/の/u, /として/u, /(?:^|\s)で(?:\s|$)/u],
+    employerBeforeRoleRelations: [/(?:^|\s)で\s*$/u],
+    employerBeforeRoleLinks: [/^\s*で\s*$/u, /として\s*$/u],
+    employerBeforeRoleDirectRelations: [/^\s*(?:の|で)\s*$/u],
+    employerBeforeRolePresentPrefixes: [/(?:現在|現職|働いて|務めて|勤務)\s*$/u],
+    employerBeforeRoleCompletedPrefixes: [/(?:前職|以前|かつて|働いていた|務めていた|勤務していた)\s*$/u],
+    presentPrefixes: [],
+    completedPrefixes: [/(?:前職|以前|かつて)(?:では|は|に)?\s*$/u, /(?:働いていた|務めていた|勤務していた)\s*$/u],
+    presentSuffixes: [/^\s*(?:として|で)?働いています(?=\s*(?:$|[.!?。！？、,，;:：]|が|けれども|しかし))/u],
+    completedSuffixes: [/^\s*(?:として|で)?働いていました(?=\s*(?:$|[.!?。！？、,，;:：]|が|けれども|しかし))/u],
+  },
+  fr: {
+    relations: [/\b(?:chez|dans|à|avec|pour)\b/iu],
+    employerBeforeRoleRelations: [/\b(?:chez|dans|à|avec|pour)\s*$/iu],
+    employerBeforeRoleLinks: [/\bcomme(?:\s+un?)?\s*$/iu],
+    employerBeforeRolePresentPrefixes: [/\b(?:travaille|travaillez|travail)\s+(?:actuellement\s+)?(?:chez|dans|à|avec|pour)?\s*$/iu, /\b(?:suis|est|sommes|sont)\s+(?:actuellement\s+)?(?:chez|dans|à|avec|pour)?\s*$/iu, /\b(?:travaille|travaillez|travail)\s*$/iu, /\b(?:suis|est|sommes|sont)\s*$/iu],
+    employerBeforeRoleCompletedPrefixes: [/\b(?:travaillais|travaillait|travaillé)\s*$/iu, /\b(?:étais|était|étaient)\s*$/iu],
+    presentPrefixes: [
+      /\b(?:travaille|travaillez|travail)\s+(?:actuellement\s+)?comme\s+(?:un?\s+)?$/iu,
+      /\b(?:suis|est|sommes|sont)\s+(?:un?\s+)?$/iu,
+    ],
+    completedPrefixes: [
+      /\b(?:ai|a|avez|avait|travaillais|travaillait|travaillé)\s+(?:auparavant\s+)?(?:travaillé\s+)?comme\s+(?:un?\s+)?$/iu,
+      /\b(?:étais|était|étaient)\s+(?:un?\s+)?$/iu,
+    ],
+  },
+  es: {
+    relations: [/\b(?:en|con|para)\b/iu],
+    employerBeforeRoleRelations: [/\b(?:en|con|para)\s*$/iu],
+    employerBeforeRoleLinks: [/\bcomo(?:\s+un?)?\s*$/iu],
+    employerBeforeRolePresentPrefixes: [/\b(?:actualmente\s+)?(?:trabajo|trabaja|trabajamos)\s+(?:en|con|para)?\s*$/iu, /\b(?:soy|es|somos|son)\s+(?:actualmente\s+)?(?:en|con|para)?\s*$/iu, /\b(?:trabajo|trabaja|trabajamos)\s*$/iu, /\b(?:soy|es|somos|son)\s*$/iu],
+    employerBeforeRoleCompletedPrefixes: [/\b(?:trabajé|trabajó|trabajaba|trabajaron)\s*$/iu, /\b(?:era|eran|fui|fue)\s*$/iu],
+    presentPrefixes: [
+      /\b(?:trabajo|trabaja|trabajamos)\s+(?:actualmente\s+)?como\s+(?:un?\s+)?$/iu,
+      /\b(?:soy|es|somos|son)\s+(?:un?\s+)?$/iu,
+    ],
+    completedPrefixes: [
+      /\b(?:trabajé|trabajó|trabajaba|trabajaron)\s+(?:anteriormente\s+)?como\s+(?:un?\s+)?$/iu,
+      /\b(?:era|eran|fui|fue)\s+(?:un?\s+)?$/iu,
+    ],
+  },
+  it: {
+    relations: [/\b(?:presso|in|con|per)\b/iu],
+    employerBeforeRoleRelations: [/\b(?:presso|in|con|per)\s*$/iu],
+    employerBeforeRoleLinks: [/\bcome(?:\s+un?)?\s*$/iu],
+    employerBeforeRolePresentPrefixes: [/\b(?:attualmente\s+)?(?:lavoro|lavora|lavoriamo)\s+(?:presso|in|con|per)?\s*$/iu, /\b(?:sono|è|siamo)\s+(?:attualmente\s+)?(?:presso|in|con|per)?\s*$/iu, /\b(?:lavoro|lavora|lavoriamo)\s*$/iu, /\b(?:sono|è|siamo)\s*$/iu],
+    employerBeforeRoleCompletedPrefixes: [/\b(?:lavoravo|lavorò|lavorato)\s*$/iu, /\b(?:ero|era|erano|fui|fu)\s*$/iu],
+    presentPrefixes: [
+      /\b(?:lavoro|lavora|lavoriamo)\s+(?:attualmente\s+)?come\s+(?:un?\s+)?$/iu,
+      /\b(?:sono|è|siamo|sono)\s+(?:un?\s+)?$/iu,
+    ],
+    completedPrefixes: [
+      /\b(?:ho|ha|avevo|lavoravo|lavorò|lavorato)\s+(?:precedentemente\s+)?(?:lavorato\s+)?come\s+(?:un?\s+)?$/iu,
+      /\b(?:ero|era|erano|fui|fu)\s+(?:un?\s+)?$/iu,
+    ],
+  },
+  'pt-BR': {
+    relations: [/\b(?:em|no|na|com|para)\b/iu],
+    employerBeforeRoleRelations: [/\b(?:em|no|na|com|para)\s*$/iu],
+    employerBeforeRoleLinks: [/\bcomo(?:\s+um?a?)?\s*$/iu],
+    employerBeforeRolePresentPrefixes: [/\b(?:atualmente\s+)?(?:trabalho|trabalha|trabalhamos)\s+(?:em|no|na|com|para)?\s*$/iu, /\b(?:sou|é|somos|são)\s+(?:atualmente\s+)?(?:em|no|na|com|para)?\s*$/iu, /\b(?:trabalho|trabalha|trabalhamos)\s*$/iu, /\b(?:sou|é|somos|são)\s*$/iu],
+    employerBeforeRoleCompletedPrefixes: [/\b(?:trabalhei|trabalhou|trabalhava|trabalharam)\s*$/iu, /\b(?:era|eram|fui|foi)\s*$/iu],
+    presentPrefixes: [
+      /\b(?:trabalho|trabalha|trabalhamos)\s+(?:atualmente\s+)?como\s+(?:um?a?\s+)?$/iu,
+      /\b(?:sou|é|somos|são)\s+(?:um?a?\s+)?$/iu,
+    ],
+    completedPrefixes: [
+      /\b(?:trabalhei|trabalhou|trabalhava|trabalharam)\s+(?:anteriormente\s+)?como\s+(?:um?a?\s+)?$/iu,
+      /\b(?:era|eram|fui|foi)\s+(?:um?a?\s+)?$/iu,
+    ],
+  },
+  ru: {
+    relations: [/(?:^|\s)(?:у|в|на|с)(?:\s|$)/iu],
+    employerBeforeRoleRelations: [/(?:^|\s)(?:у|в|на|с)\s*$/iu],
+    employerBeforeRoleLinks: [/(?:как)\s*$/iu],
+    employerBeforeRolePresentPrefixes: [/(?:работаю|работает|работаем)\s*$/iu, /(являюсь|является)\s*$/iu],
+    employerBeforeRoleCompletedPrefixes: [/(?:работал|работала|работали)\s*$/iu, /(был|была|были)\s*$/iu],
+    presentPrefixes: [
+      /(?:^|\s)(?:работаю|работает|работаем)\s+(?:сейчас\s+)?как\s*$/iu,
+      /(?:^|\s)(?:сейчас\s+я\s+)?(?:являюсь|является)\s*$/iu,
+    ],
+    completedPrefixes: [
+      /(?:^|\s)(?:работал|работала|работали)\s+(?:ранее\s+)?как\s*$/iu,
+      /(?:^|\s)(?:ранее\s+я\s+)?(?:был|была|были)\s*$/iu,
+    ],
+  },
+};
+
+function employmentFrameGrammarFor(locale: string): EmploymentFrameGrammar {
+  const canonical = canonicalSummaryV3StyleLocale(locale);
+  return canonical ? EMPLOYMENT_FRAME_GRAMMARS[canonical] : EMPLOYMENT_FRAME_GRAMMARS.en;
+}
 
 type SummaryV3StyleEntryIdentitySurface = Readonly<{
   readonly entryId: string;
@@ -415,11 +626,12 @@ function summaryV3StyleIdentityClauses(value: string): readonly string[] {
     .filter(Boolean);
 }
 
-function shadowEmploymentFrameStateForClause(
+function employmentFrameStateForClause(
   snapshot: SummaryV3StyleOperationSnapshot,
   entry: SummaryV3StyleOperationSnapshot['selectedEntries'][number],
   clause: string,
-): 'present' | 'completed' | 'neutral' {
+  locale: string,
+): 'present' | 'completed' | 'neutral' | 'conflicting' {
   const identities = exactEntryIdentitySurfaces(snapshot).filter((identity) => identity.entryId === entry.stableId);
   const roleSurfaces = identities.filter((identity) => identity.kind === 'role');
   const employerSurfaces = identities.filter((identity) => identity.kind === 'employer');
@@ -429,78 +641,160 @@ function shadowEmploymentFrameStateForClause(
   if (!roleSurface || !employerSurface) return 'neutral';
   const roleStart = normalizedClause.indexOf(roleSurface.normalizedValue);
   const employerStart = normalizedClause.indexOf(employerSurface.normalizedValue);
-  if (roleStart < 0 || employerStart < 0 || !EMPLOYMENT_FRAME_RELATION.test(
-    normalizedClause.slice(Math.min(roleStart, employerStart), Math.max(roleStart, employerStart)),
-  )) return 'neutral';
+  const grammar = employmentFrameGrammarFor(locale);
+  if (roleStart < 0 || employerStart < 0) return 'neutral';
+  const roleBeforeEmployer = roleStart < employerStart;
+  const relationSurface = normalizedClause.slice(
+    Math.min(roleStart, employerStart),
+    Math.max(roleStart, employerStart),
+  );
+  const beforeEmployer = normalizedClause.slice(Math.max(0, employerStart - 128), employerStart);
   const beforeRole = normalizedClause.slice(Math.max(0, roleStart - 128), roleStart);
-  const current = CURRENT_EMPLOYMENT_FRAME_PREFIX.test(beforeRole);
-  const completed = COMPLETED_EMPLOYMENT_FRAME_PREFIX.test(beforeRole);
+  const beforeEmployerRelation = beforeEmployer.replace(/\S+\s*$/u, '');
+  const stateWindows = roleBeforeEmployer
+    ? [beforeRole]
+    : [beforeEmployer, beforeEmployerRelation, beforeRole];
+  const frameEnd = Math.max(
+    roleStart + roleSurface.normalizedValue.length,
+    employerStart + employerSurface.normalizedValue.length,
+  );
+  const afterFrame = normalizedClause.slice(frameEnd, frameEnd + 160);
+  const relationMatched = roleBeforeEmployer
+    ? grammar.relations.some((relation) => relation.test(relationSurface))
+    : (grammar.employerBeforeRoleRelations.some((relation) => relation.test(beforeEmployer))
+      && grammar.employerBeforeRoleLinks.some((link) => link.test(
+        normalizedClause.slice(
+          employerStart + employerSurface.normalizedValue.length,
+          roleStart,
+        ),
+      )))
+      || (grammar.employerBeforeRoleDirectRelations || []).some((relation) => relation.test(
+        normalizedClause.slice(
+          employerStart + employerSurface.normalizedValue.length,
+          roleStart,
+        ),
+      ));
+  if (!relationMatched) return 'neutral';
+  const current = grammar.presentPrefixes.some((prefix) => stateWindows.some((window) => prefix.test(window)))
+    || (!roleBeforeEmployer && grammar.employerBeforeRolePresentPrefixes.some((prefix) => (
+      stateWindows.some((window) => prefix.test(window))
+    )))
+    || (grammar.presentSuffixes || []).some((suffix) => suffix.test(afterFrame));
+  const completed = grammar.completedPrefixes.some((prefix) => stateWindows.some((window) => prefix.test(window)))
+    || (!roleBeforeEmployer && grammar.employerBeforeRoleCompletedPrefixes.some((prefix) => (
+      stateWindows.some((window) => prefix.test(window))
+    )))
+    || (grammar.completedSuffixes || []).some((suffix) => suffix.test(afterFrame));
+  if (current && completed) return 'conflicting';
   if (current && !completed) return 'present';
   if (completed && !current) return 'completed';
   return 'neutral';
 }
 
-function shadowExplicitOppositeFrameDetected(
+type EmploymentRelationState = 'present' | 'completed' | 'neutral' | 'conflicting';
+
+type EmploymentRelationEntryDecision = Readonly<{
+  readonly entryId: string;
+  readonly sourceState: 'present' | 'completed' | null;
+  readonly candidateState: EmploymentRelationState;
+  readonly explicitOpposite: boolean;
+}>;
+
+export type SummaryV3StyleEmploymentRelationDecision = Readonly<{
+  readonly contradicted: boolean;
+  readonly class: SummaryV3StyleEmploymentStateContradictionClass | null;
+  readonly explicitOppositeFrameDetected: boolean;
+  readonly entries: readonly EmploymentRelationEntryDecision[];
+}>;
+
+function employmentRelationStateForText(
   snapshot: SummaryV3StyleOperationSnapshot,
-  candidateText: string,
-): boolean {
-  const candidateClauses = summaryV3StyleIdentityClauses(candidateText);
+  text: string,
+  locale: string,
+): ReadonlyMap<string, EmploymentRelationState> {
+  const clauses = summaryV3StyleIdentityClauses(text);
+  const result = new Map<string, EmploymentRelationState>();
   for (const entry of snapshot.selectedEntries) {
-    const sameClause = candidateClauses.filter((clause) =>
+    const sameClause = clauses.filter((clause) =>
       exactEntryIdsInSummaryV3StyleClause(snapshot, clause).has(entry.stableId));
-    for (const clause of sameClause) {
-      const candidateState = shadowEmploymentFrameStateForClause(snapshot, entry, clause);
-      if ((entry.employmentState === 'present' && candidateState === 'completed')
-        || (entry.employmentState === 'completed' && candidateState === 'present')) return true;
+    const states = sameClause.map((clause) => employmentFrameStateForClause(snapshot, entry, clause, locale));
+    if (states.includes('conflicting')) {
+      result.set(entry.stableId, 'conflicting');
+      continue;
     }
+    const explicitStates = states.filter((state): state is 'present' | 'completed' => state !== 'neutral');
+    const state = new Set(explicitStates);
+    result.set(entry.stableId, state.size > 1 ? 'conflicting' : state.values().next().value || 'neutral');
   }
-  return false;
+  return result;
 }
 
 /**
- * AAB575-compatible employment predicate with a bounded first-branch class.
- * Keep this ordering and boolean semantics unchanged for the observability
- * candidate; the shadow frame verdict is computed only for diagnostics.
+ * One semantic decision for every selected employment frame. Historical
+ * marker/parity classes remain valid diagnostic values, but are never emitted
+ * by this new runtime decision.
+ */
+export function employmentRelationDecision(
+  snapshot: SummaryV3StyleOperationSnapshot,
+  candidateText: string,
+): SummaryV3StyleEmploymentRelationDecision {
+  const candidateStates = employmentRelationStateForText(snapshot, candidateText, snapshot.requestedLocale);
+  const sourceStates = employmentRelationStateForText(snapshot, snapshot.sourceSummary, snapshot.sourceLocale);
+  const entries = snapshot.selectedEntries.map((entry) => {
+    const sourceState = sourceStates.get(entry.stableId);
+    const candidateState = candidateStates.get(entry.stableId) || 'neutral';
+    const explicitOpposite = (entry.employmentState === 'present' && (candidateState === 'completed' || candidateState === 'conflicting'))
+      || (entry.employmentState === 'completed' && (candidateState === 'present' || candidateState === 'conflicting'));
+    return immutableCopy({
+      entryId: entry.stableId,
+      sourceState: sourceState === 'present' || sourceState === 'completed' ? sourceState : null,
+      candidateState,
+      explicitOpposite,
+    }) as EmploymentRelationEntryDecision;
+  });
+  const opposite = entries.find((entry) => entry.explicitOpposite);
+  return immutableCopy({
+    contradicted: Boolean(opposite),
+    class: opposite
+      ? opposite.sourceState === 'present' || snapshot.selectedEntries.find((entry) => entry.stableId === opposite.entryId)?.employmentState === 'present'
+        ? 'present_entry_prior_marker' as const
+        : 'completed_entry_current_marker' as const
+      : null,
+    explicitOppositeFrameDetected: Boolean(opposite),
+    entries,
+  });
+}
+
+function explicitSourceEmploymentState(
+  snapshot: SummaryV3StyleOperationSnapshot,
+  entryId: string,
+): 'present' | 'completed' | null {
+  const parsed = employmentRelationStateForText(snapshot, snapshot.sourceSummary, snapshot.sourceLocale).get(entryId);
+  return parsed === 'present' || parsed === 'completed' ? parsed : null;
+}
+
+function employmentSourceStatePreservationFailure(
+  snapshot: SummaryV3StyleOperationSnapshot,
+  candidateText: string,
+): boolean {
+  if (snapshot.mode !== 'enhance_existing_content') return false;
+  const relation = employmentRelationDecision(snapshot, candidateText);
+  if (relation.contradicted) return false;
+  return relation.entries.some((entry) => {
+    const sourceState = explicitSourceEmploymentState(snapshot, entry.entryId);
+    return sourceState !== null && entry.candidateState !== sourceState;
+  });
+}
+
+/**
+ * Backward-compatible facade for callers and historical tests. New runtime
+ * decisions are semantic only; lexical parity/fallback branches are gone.
  */
 export function employmentStateContradictionDecision(
   snapshot: SummaryV3StyleOperationSnapshot,
   candidateText: string,
-): Readonly<{
-  contradicted: boolean;
-  class: SummaryV3StyleEmploymentStateContradictionClass | null;
-  explicitOppositeFrameDetected: boolean;
-}> {
-  const explicitOppositeFrameDetected = shadowExplicitOppositeFrameDetected(snapshot, candidateText);
-  const states = snapshot.selectedEntries.map((entry) => entry.employmentState);
-  if (states.length === 0) return { contradicted: false, class: null, explicitOppositeFrameDetected };
-  const candidateClauses = summaryV3StyleIdentityClauses(candidateText);
-  for (const entry of snapshot.selectedEntries) {
-    const sameClause = candidateClauses.filter((clause) =>
-      exactEntryIdsInSummaryV3StyleClause(snapshot, clause).has(entry.stableId));
-    if (entry.employmentState === 'present' && sameClause.some((clause) => PRIOR_STATE_MARKERS.test(clause))) {
-      return { contradicted: true, class: 'present_entry_prior_marker', explicitOppositeFrameDetected };
-    }
-    if (entry.employmentState === 'completed' && sameClause.some((clause) => CURRENT_STATE_MARKERS.test(clause))) {
-      return { contradicted: true, class: 'completed_entry_current_marker', explicitOppositeFrameDetected };
-    }
-  }
-  if (snapshot.mode === 'enhance_existing_content') {
-    const sourceHasPrior = PRIOR_STATE_MARKERS.test(snapshot.sourceSummary);
-    const sourceHasCurrent = CURRENT_STATE_MARKERS.test(snapshot.sourceSummary);
-    if (PRIOR_STATE_MARKERS.test(candidateText) !== sourceHasPrior) {
-      return { contradicted: true, class: 'enhance_prior_marker_parity_mismatch', explicitOppositeFrameDetected };
-    }
-    if (CURRENT_STATE_MARKERS.test(candidateText) !== sourceHasCurrent) {
-      return { contradicted: true, class: 'enhance_current_marker_parity_mismatch', explicitOppositeFrameDetected };
-    }
-  }
-  if (states.every((state) => state === 'present') && PRIOR_STATE_MARKERS.test(candidateText)) {
-    return { contradicted: true, class: 'all_present_prior_marker_fallback', explicitOppositeFrameDetected };
-  }
-  if (states.every((state) => state === 'completed') && CURRENT_STATE_MARKERS.test(candidateText)) {
-    return { contradicted: true, class: 'all_completed_current_marker_fallback', explicitOppositeFrameDetected };
-  }
-  return { contradicted: false, class: null, explicitOppositeFrameDetected };
+): SummaryV3StyleEmploymentRelationDecision {
+  return employmentRelationDecision(snapshot, candidateText);
 }
 
 export function employmentStateContradictionClass(
@@ -1244,11 +1538,15 @@ function hasInjectedManifestFact(snapshot: SummaryV3StyleOperationSnapshot, cand
 function localHardRejection(
   snapshot: SummaryV3StyleOperationSnapshot,
   candidateText: string,
-): Extract<SummaryV3StyleFailureReason, 'unsupported_claim'> | null {
+): Extract<SummaryV3StyleFailureReason, 'unsupported_claim' | 'lost_source_fact'> | null {
   // Language/native surface has the more specific typed terminal. Let the
   // regular local style guard classify it before considering ceiling facts.
   if (!summaryV3StyleLocaleSurfaceMatches(candidateText, snapshot.requestedLocale)
     || !summaryV3StyleLocaleContentMatches(candidateText, snapshot.requestedLocale)) return null;
+  // A visible source employment relation is a source fact in its own right.
+  // Preserve it independently from contradiction: neutral wording is not an
+  // opposite relation, but it cannot silently erase an explicit source state.
+  if (employmentSourceStatePreservationFailure(snapshot, candidateText)) return 'lost_source_fact';
   if (hasUnsupportedSourceInconsistency(snapshot)
     || hasInjectedManifestFact(snapshot, candidateText)
     || hasUnsupportedAuthorityOrSeniority(snapshot, candidateText)
@@ -1752,6 +2050,17 @@ function sourceRetainingSafeNoOpAllowed(
   evaluatorRoleIdentityResolution?: SummaryV3StyleRoleIdentityResolution,
 ): boolean {
   return sourceRetainingSafeNoOpEligibilityReason(snapshot, evaluatorRoleIdentityResolution) === 'eligible';
+}
+
+function sourceRetainingSafeNoOpAllowedForCandidate(
+  snapshot: SummaryV3StyleOperationSnapshot,
+  candidateText: string,
+  evaluatorRoleIdentityResolution?: SummaryV3StyleRoleIdentityResolution,
+): boolean {
+  // A source-retaining no-op may preserve an unchanged source, but it must
+  // never mask an explicit opposite employment state in the candidate.
+  return !hasEmploymentStateContradiction(snapshot, candidateText)
+    && sourceRetainingSafeNoOpAllowed(snapshot, evaluatorRoleIdentityResolution);
 }
 
 function sameOrderedFactIds(
@@ -2300,9 +2609,9 @@ export async function executeSummaryV3StyleServer(
       sourceFloorMismatchClass: category === 'source_floor_mismatch'
         ? sourceFloorMismatchClass(snapshot, parsedWriter.candidate.text)
         : null,
-      safeNoOpConsidered: sourceRetainingSafeNoOpAllowed(snapshot),
+      safeNoOpConsidered: sourceRetainingSafeNoOpAllowedForCandidate(snapshot, parsedWriter.candidate.text),
     });
-    return sourceRetainingSafeNoOpAllowed(snapshot)
+    return sourceRetainingSafeNoOpAllowedForCandidate(snapshot, parsedWriter.candidate.text)
       ? safeNoOpResult(snapshot, evidence, category)
       : createSummaryV3StyleHandledFailure(snapshot, 'unsupported_claim', evidence);
   }
@@ -2349,10 +2658,11 @@ export async function executeSummaryV3StyleServer(
       : null,
     evaluatorNoOpClaimed: parsedEvaluator.evaluation.styleEvidence.noOpDetected,
     safeNoOpConsidered: initialTerminalFailure === 'unsupported_claim'
-      && sourceRetainingSafeNoOpAllowed(snapshot),
+      && sourceRetainingSafeNoOpAllowedForCandidate(snapshot, parsedWriter.candidate.text),
   });
   if (initialHardRejection) {
-    return sourceRetainingSafeNoOpAllowed(snapshot)
+    return initialHardRejection === 'unsupported_claim'
+      && sourceRetainingSafeNoOpAllowedForCandidate(snapshot, parsedWriter.candidate.text)
       ? safeNoOpResult(snapshot, initialEvidence, initialUnsupportedCategory)
       : createSummaryV3StyleHandledFailure(snapshot, initialHardRejection, initialEvidence);
   }
@@ -2360,7 +2670,11 @@ export async function executeSummaryV3StyleServer(
     if (snapshot.mode === 'enhance_existing_content' && parsedEvaluator.evaluation.styleEvidence.noOpDetected) {
       const evaluatorRoleIdentityResolution = parsedEvaluator.evaluation.roleIdentityResolution;
       const sourceRetainingAllowed = snapshot.style !== 'stronger'
-        || sourceRetainingSafeNoOpAllowed(snapshot, evaluatorRoleIdentityResolution);
+        || sourceRetainingSafeNoOpAllowedForCandidate(
+          snapshot,
+          parsedWriter.candidate.text,
+          evaluatorRoleIdentityResolution,
+        );
       const effectiveEligibilityReason = sourceRetainingSafeNoOpEligibilityReason(
         snapshot,
         evaluatorRoleIdentityResolution,
@@ -2399,7 +2713,8 @@ export async function executeSummaryV3StyleServer(
   if (snapshot.mode === 'enhance_existing_content' && parsedEvaluator.evaluation.styleEvidence.noOpDetected) {
     return createSummaryV3StyleHandledFailure(snapshot, initialTerminalFailure || 'evaluator_rejected', initialEvidence);
   }
-  if (initialTerminalFailure === 'unsupported_claim' && sourceRetainingSafeNoOpAllowed(snapshot)) {
+  if (initialTerminalFailure === 'unsupported_claim'
+    && sourceRetainingSafeNoOpAllowedForCandidate(snapshot, parsedWriter.candidate.text)) {
     return safeNoOpResult(snapshot, initialEvidence, initialUnsupportedCategory);
   }
   if (!canRepair(parsedEvaluator.evaluation) || !dependencies.repairWrite || !dependencies.repairEvaluate) {
