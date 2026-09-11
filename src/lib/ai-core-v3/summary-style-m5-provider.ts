@@ -139,6 +139,15 @@ function providerPrompt(input: SummaryV3StyleProviderInput): string {
       'If no meaningful grounded strengthening is possible, submit sourceText unchanged as the single safe-no-op candidate.',
     ].join('\n')
     : null;
+  const evaluatorReferenceDomainInstruction = !isWriterInput(input)
+    ? [
+      'IMMUTABLE EVALUATOR REFERENCE DOMAIN: representedFactIdHashes and missingFactIdHashes may contain only allowedFactHashes. Every violation factIdHashes may contain only allowedFactHashes. Every violation unitHashes may contain only allowedUnitHashes. Select from these exact values; do not invent identifiers.',
+      JSON.stringify({
+        allowedFactHashes: input.requiredFacts.map((fact) => fact.hash),
+        allowedUnitHashes: input.candidate.units.map(summaryV3StyleCandidateUnitHash),
+      }),
+    ].join('\n')
+    : null;
   const unresolvedRoleIdentityInstruction = !isWriterInput(input) && input.roleIdentity.status === 'unresolved'
     ? [
       'UNRESOLVED ROLE IDENTITY OBLIGATION: semantically compare the selected Experience structuredRole with the role expressed in sourceText and candidate for the same employer and selectedEntryId.',
@@ -151,6 +160,7 @@ function providerPrompt(input: SummaryV3StyleProviderInput): string {
     'M5 SUMMARY STYLE OPERATION. Return only the required forced tool call.',
     'The tool input is the sole candidate/evidence transport. Do not return prose.',
     strongerWriterInstruction,
+    evaluatorReferenceDomainInstruction,
     unresolvedRoleIdentityInstruction,
     JSON.stringify(input),
   ].filter((value): value is string => value !== null).join('\n\n');
@@ -175,7 +185,10 @@ function invocationFor(
     allowedTextBlocks: 0,
     tool: role === 'writer'
       ? SUMMARY_V3_STYLE_M5_WRITER_PROVIDER_TOOL
-      : projectSummaryV3StyleEvaluatorToolForProvider(input.style),
+      : projectSummaryV3StyleEvaluatorToolForProvider(input.style, {
+        allowedFactHashes: (input as SummaryV3StyleEvaluatorInput).requiredFacts.map((fact) => fact.hash),
+        allowedUnitHashes: (input as SummaryV3StyleEvaluatorInput).candidate.units.map(summaryV3StyleCandidateUnitHash),
+      }),
     timeoutMs,
   };
 }
@@ -241,19 +254,29 @@ export function normalizeSummaryV3StyleEvaluatorProviderResponse(
   const envelope = normalizeSummaryV3StyleProviderResponse(value);
   if (!isRecord(envelope) || !isRecord(envelope.input)) return envelope;
   const raw = envelope.input;
+  // Anthropic's strict evaluator tool has physically omitted the empty
+  // style_fulfillmentViolations array while returning the corresponding
+  // status as "passed". Treat that one implied-empty case as a bounded C2
+  // transport normalization; every extra key and every other omission stays
+  // fail-closed at the exact-key gate below.
+  const normalizedRaw = !Object.prototype.hasOwnProperty.call(raw, 'style_fulfillmentViolations')
+    && raw.style_fulfillmentStatus === 'passed'
+    && hasExactKeys(raw, EVALUATOR_PROVIDER_KEYS.filter((key) => key !== 'style_fulfillmentViolations'))
+    ? { ...raw, style_fulfillmentViolations: [] }
+    : raw;
   // Synthetic/offline callers from the pre-minimization contract may still
   // provide the full local envelope. Keep that shape parser-compatible while
   // all real evaluator requests use the strict shallow provider projection.
   if (hasExactKeys(raw, LEGACY_EVALUATOR_KEYS)) return envelope;
-  if (!hasExactKeys(raw, EVALUATOR_PROVIDER_KEYS)) return envelope;
-  if (!isRecord(raw.styleEvidence)) return envelope;
+  if (!hasExactKeys(normalizedRaw, EVALUATOR_PROVIDER_KEYS)) return envelope;
+  if (!isRecord(normalizedRaw.styleEvidence)) return envelope;
 
-  const styleEvidence = { ...raw.styleEvidence, style: input.style };
+  const styleEvidence = { ...normalizedRaw.styleEvidence, style: input.style };
   const phases: Record<string, unknown> = {};
   for (const phase of ['structural', 'semantic_grounding', 'language_native_quality', 'style_fulfillment'] as const) {
     phases[phase] = {
-      status: raw[`${phase}Status`],
-      violations: raw[`${phase}Violations`],
+      status: normalizedRaw[`${phase}Status`],
+      violations: normalizedRaw[`${phase}Violations`],
     };
   }
   return {
@@ -267,9 +290,9 @@ export function normalizeSummaryV3StyleEvaluatorProviderResponse(
       candidateHash: input.candidate.hash,
       candidateUnitHashes: input.candidate.units.map(summaryV3StyleCandidateUnitHash),
       phases,
-      representedFactIdHashes: raw.representedFactIdHashes,
-      missingFactIdHashes: raw.missingFactIdHashes,
-      roleIdentityResolution: raw.roleIdentityResolution,
+      representedFactIdHashes: normalizedRaw.representedFactIdHashes,
+      missingFactIdHashes: normalizedRaw.missingFactIdHashes,
+      roleIdentityResolution: normalizedRaw.roleIdentityResolution,
       styleEvidence,
     },
   };

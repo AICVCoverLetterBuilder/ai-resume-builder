@@ -55,6 +55,7 @@ import {
   type SummaryV3StyleRoleIdentityResolution,
   type SummaryV3StyleSafeNoOpEligibilityReason,
   type SummaryV3StyleUnsupportedClaimCategory,
+  type SummaryV3StyleEvaluatorOutputContractFailureClass,
   type SummaryV3StyleWriterOutputContractFailureClass,
   type SummaryV3StyleViolation,
   type SummaryV3StyleViolationCode,
@@ -211,7 +212,12 @@ type WriterParseResult =
 
 type EvaluatorParseResult =
   | Readonly<{ ok: true; evaluation: ParsedEvaluation }>
-  | Readonly<{ ok: false; reason: 'evaluator_transport_malformed' | 'evaluator_rejected' }>;
+  | Readonly<{
+    ok: false;
+    reason: 'evaluator_transport_malformed';
+    evaluatorOutputContractFailureClass: SummaryV3StyleEvaluatorOutputContractFailureClass;
+  }>
+  | Readonly<{ ok: false; reason: 'evaluator_rejected' }>;
 
 function writerFailure(
   reason: Extract<WriterParseResult, { ok: false }>['reason'],
@@ -224,8 +230,14 @@ function writerFailure(
   }) as WriterParseResult;
 }
 
-function evaluatorFailure(reason: Extract<EvaluatorParseResult, { ok: false }>['reason']): EvaluatorParseResult {
-  return immutableCopy({ ok: false as const, reason }) as EvaluatorParseResult;
+function evaluatorFailure(
+  evaluatorOutputContractFailureClass: SummaryV3StyleEvaluatorOutputContractFailureClass,
+): EvaluatorParseResult {
+  return immutableCopy({
+    ok: false as const,
+    reason: 'evaluator_transport_malformed' as const,
+    evaluatorOutputContractFailureClass,
+  }) as EvaluatorParseResult;
 }
 
 const REQUIRED_PHASES: readonly SummaryV3StylePhase[] = [
@@ -1333,7 +1345,17 @@ function parseWriterOutput(value: unknown, snapshot: SummaryV3StyleOperationSnap
   return immutableCopy({ ok: true, candidate });
 }
 
-function parseViolation(value: unknown): SummaryV3StyleViolation | null {
+type EvaluatorParserValue<T> =
+  | Readonly<{ ok: true; value: T }>
+  | Readonly<{ ok: false; evaluatorOutputContractFailureClass: SummaryV3StyleEvaluatorOutputContractFailureClass }>;
+
+function evaluatorParserValueFailure(
+  evaluatorOutputContractFailureClass: SummaryV3StyleEvaluatorOutputContractFailureClass,
+): EvaluatorParserValue<never> {
+  return immutableCopy({ ok: false as const, evaluatorOutputContractFailureClass }) as EvaluatorParserValue<never>;
+}
+
+function parseViolation(value: unknown): EvaluatorParserValue<SummaryV3StyleViolation> {
   if (!isSummaryV3StyleRecord(value)
     || !summaryV3StyleHasExactKeys(value, ['code', 'factIdHashes', 'unitHashes', 'repairable'])
     || !isSummaryV3StyleViolationCode(value.code)
@@ -1344,37 +1366,57 @@ function parseViolation(value: unknown): SummaryV3StyleViolation | null {
     || (value.factIdHashes.length === 0 && value.unitHashes.length === 0)
     || value.factIdHashes.some((hash) => !summaryV3StyleIsNonBlank(hash) || hash.length > 80)
     || value.unitHashes.some((hash) => !summaryV3StyleIsNonBlank(hash) || hash.length > 80)
-    || new Set(value.factIdHashes).size !== value.factIdHashes.length
-    || new Set(value.unitHashes).size !== value.unitHashes.length
     || typeof value.repairable !== 'boolean') {
-    return null;
+    return evaluatorParserValueFailure('phase_violation_shape');
+  }
+  if (new Set(value.factIdHashes).size !== value.factIdHashes.length
+    || new Set(value.unitHashes).size !== value.unitHashes.length) {
+    return evaluatorParserValueFailure('phase_violation_duplicates');
   }
   return immutableCopy({
-    code: value.code,
-    factIdHashes: value.factIdHashes,
-    unitHashes: value.unitHashes,
-    repairable: value.repairable,
-  }) as SummaryV3StyleViolation;
+    ok: true as const,
+    value: immutableCopy({
+      code: value.code,
+      factIdHashes: value.factIdHashes,
+      unitHashes: value.unitHashes,
+      repairable: value.repairable,
+    }) as SummaryV3StyleViolation,
+  }) as EvaluatorParserValue<SummaryV3StyleViolation>;
 }
 
-function parsePhase(value: unknown): Readonly<{ status: SummaryV3StylePhaseStatus; violations: readonly SummaryV3StyleViolation[] }> | null {
+function parsePhase(
+  value: unknown,
+): EvaluatorParserValue<Readonly<{ status: SummaryV3StylePhaseStatus; violations: readonly SummaryV3StyleViolation[] }>> {
   if (!isSummaryV3StyleRecord(value) || !summaryV3StyleHasExactKeys(value, ['status', 'violations'])
-    || (value.status !== 'passed' && value.status !== 'failed') || !Array.isArray(value.violations) || value.violations.length > 32) return null;
+    || (value.status !== 'passed' && value.status !== 'failed') || !Array.isArray(value.violations) || value.violations.length > 32) {
+    return evaluatorParserValueFailure('phase_shape');
+  }
   const violations: SummaryV3StyleViolation[] = [];
   for (const violation of value.violations) {
     const parsed = parseViolation(violation);
-    if (!parsed) return null;
-    violations.push(parsed);
+    if (!parsed.ok) return parsed;
+    violations.push(parsed.value);
   }
-  if ((value.status === 'passed' && violations.length > 0) || (value.status === 'failed' && violations.length === 0)) return null;
-  return immutableCopy({ status: value.status, violations }) as Readonly<{ status: SummaryV3StylePhaseStatus; violations: readonly SummaryV3StyleViolation[] }>;
+  if ((value.status === 'passed' && violations.length > 0) || (value.status === 'failed' && violations.length === 0)) {
+    return evaluatorParserValueFailure('phase_status_consistency');
+  }
+  return immutableCopy({
+    ok: true as const,
+    value: immutableCopy({ status: value.status, violations }) as Readonly<{
+      status: SummaryV3StylePhaseStatus;
+      violations: readonly SummaryV3StyleViolation[];
+    }>,
+  }) as EvaluatorParserValue<Readonly<{ status: SummaryV3StylePhaseStatus; violations: readonly SummaryV3StyleViolation[] }>>;
 }
 
-function parseStyleEvidence(value: unknown, snapshot: SummaryV3StyleOperationSnapshot): ParsedStyleEvidence | null {
-  if (!isSummaryV3StyleRecord(value) || value.style !== snapshot.style) return null;
+function parseStyleEvidence(
+  value: unknown,
+  snapshot: SummaryV3StyleOperationSnapshot,
+): EvaluatorParserValue<ParsedStyleEvidence> {
+  if (!isSummaryV3StyleRecord(value) || value.style !== snapshot.style) return evaluatorParserValueFailure('style_evidence_shape');
   if (snapshot.style === 'shorter') {
     const keys = SUMMARY_V3_STYLE_STRATEGIES.shorter.requiredEvidenceKeys;
-    if (!summaryV3StyleHasExactKeys(value, keys)) return null;
+    if (!summaryV3StyleHasExactKeys(value, keys)) return evaluatorParserValueFailure('style_evidence_shape');
     const values = [
       count(value.semanticCompressionOperations), count(value.sourceNormalizedLength), count(value.candidateNormalizedLength), signedCount(value.lengthDelta, 12_000),
       count(value.sourceUnitCount), count(value.candidateUnitCount), count(value.sourceClauseCount), count(value.candidateClauseCount),
@@ -1384,16 +1426,19 @@ function parseStyleEvidence(value: unknown, snapshot: SummaryV3StyleOperationSna
     const factCoverage = bool(value.factCoverage);
     const shorterFulfilled = bool(value.shorterFulfilled);
     const noOpDetected = bool(value.noOpDetected);
-    if (values.some((item) => item === null) || lengthDeltaPercent === null || factCoverage === null || shorterFulfilled === null || noOpDetected === null) return null;
+    if (values.some((item) => item === null) || lengthDeltaPercent === null || factCoverage === null || shorterFulfilled === null || noOpDetected === null) return evaluatorParserValueFailure('style_evidence_shape');
     return immutableCopy({
-      style: 'shorter', semanticCompressionOperations: values[0]!, sourceNormalizedLength: values[1]!,
-      candidateNormalizedLength: values[2]!, lengthDelta: values[3]!, lengthDeltaPercent, sourceUnitCount: values[4]!, candidateUnitCount: values[5]!,
-      sourceClauseCount: values[6]!, candidateClauseCount: values[7]!, factCoverage, shorterFulfilled, noOpDetected,
-    }) as ParsedShorterEvidence;
+      ok: true as const,
+      value: immutableCopy({
+        style: 'shorter', semanticCompressionOperations: values[0]!, sourceNormalizedLength: values[1]!,
+        candidateNormalizedLength: values[2]!, lengthDelta: values[3]!, lengthDeltaPercent, sourceUnitCount: values[4]!, candidateUnitCount: values[5]!,
+        sourceClauseCount: values[6]!, candidateClauseCount: values[7]!, factCoverage, shorterFulfilled, noOpDetected,
+      }) as ParsedShorterEvidence,
+    }) as EvaluatorParserValue<ParsedStyleEvidence>;
   }
   if (snapshot.style === 'stronger') {
     const keys = SUMMARY_V3_STYLE_STRATEGIES.stronger.requiredEvidenceKeys;
-    if (!summaryV3StyleHasExactKeys(value, keys)) return null;
+    if (!summaryV3StyleHasExactKeys(value, keys)) return evaluatorParserValueFailure('style_evidence_shape');
     const transformationCount = count(value.strongerPredicateTransformations);
     const structuralCount = count(value.structuralStrengtheningCount);
     const repeatedCount = count(value.repeatedStyleModifierCount);
@@ -1402,26 +1447,32 @@ function parseStyleEvidence(value: unknown, snapshot: SummaryV3StyleOperationSna
     const unsupportedAuthority = bool(value.unsupportedAuthorityDetected);
     const fulfilled = bool(value.strongerFulfilled);
     const noOpDetected = bool(value.noOpDetected);
-    if ([transformationCount, structuralCount, repeatedCount, modifierOnly, stacked, unsupportedAuthority, fulfilled, noOpDetected].some((item) => item === null)) return null;
+    if ([transformationCount, structuralCount, repeatedCount, modifierOnly, stacked, unsupportedAuthority, fulfilled, noOpDetected].some((item) => item === null)) return evaluatorParserValueFailure('style_evidence_shape');
     return immutableCopy({
-      style: 'stronger', strongerPredicateTransformations: transformationCount!, structuralStrengtheningCount: structuralCount!,
-      modifierOnlyTransformationDetected: modifierOnly!, repeatedStyleModifierCount: repeatedCount!, stackedModifierDetected: stacked!,
-      unsupportedAuthorityDetected: unsupportedAuthority!, strongerFulfilled: fulfilled!, noOpDetected: noOpDetected!,
-    }) as ParsedStrongerEvidence;
+      ok: true as const,
+      value: immutableCopy({
+        style: 'stronger', strongerPredicateTransformations: transformationCount!, structuralStrengtheningCount: structuralCount!,
+        modifierOnlyTransformationDetected: modifierOnly!, repeatedStyleModifierCount: repeatedCount!, stackedModifierDetected: stacked!,
+        unsupportedAuthorityDetected: unsupportedAuthority!, strongerFulfilled: fulfilled!, noOpDetected: noOpDetected!,
+      }) as ParsedStrongerEvidence,
+    }) as EvaluatorParserValue<ParsedStyleEvidence>;
   }
   const keys = SUMMARY_V3_STYLE_STRATEGIES.professional.requiredEvidenceKeys;
-  if (!summaryV3StyleHasExactKeys(value, keys)) return null;
+  if (!summaryV3StyleHasExactKeys(value, keys)) return evaluatorParserValueFailure('style_evidence_shape');
   const framing = count(value.professionalFramingOperations);
   const cohesion = count(value.cohesionClarityOperations);
   const marker = bool(value.markerOnlyChangeDetected);
   const jargon = bool(value.jargonOrFillerDetected);
   const fulfilled = bool(value.professionalFulfilled);
   const noOpDetected = bool(value.noOpDetected);
-  if ([framing, cohesion, marker, jargon, fulfilled, noOpDetected].some((item) => item === null)) return null;
+  if ([framing, cohesion, marker, jargon, fulfilled, noOpDetected].some((item) => item === null)) return evaluatorParserValueFailure('style_evidence_shape');
   return immutableCopy({
-    style: 'professional', professionalFramingOperations: framing!, cohesionClarityOperations: cohesion!,
-    markerOnlyChangeDetected: marker!, jargonOrFillerDetected: jargon!, professionalFulfilled: fulfilled!, noOpDetected: noOpDetected!,
-  }) as ParsedProfessionalEvidence;
+    ok: true as const,
+    value: immutableCopy({
+      style: 'professional', professionalFramingOperations: framing!, cohesionClarityOperations: cohesion!,
+      markerOnlyChangeDetected: marker!, jargonOrFillerDetected: jargon!, professionalFulfilled: fulfilled!, noOpDetected: noOpDetected!,
+    }) as ParsedProfessionalEvidence,
+  }) as EvaluatorParserValue<ParsedStyleEvidence>;
 }
 
 function parseEvaluatorOutput(
@@ -1431,19 +1482,24 @@ function parseEvaluatorOutput(
 ): EvaluatorParseResult {
   if (!isSummaryV3StyleRecord(value)
     || !summaryV3StyleHasExactKeys(value, ['toolName', 'contentBlockCount', 'textBlockCount', 'toolBlockCount', 'input'])) {
-    return evaluatorFailure('evaluator_transport_malformed');
+    return evaluatorFailure('envelope_keyset');
   }
   if (value.toolName !== SUMMARY_V3_STYLE_M5_EVALUATOR_TOOL_NAME
     || value.contentBlockCount !== 1 || value.textBlockCount !== 0 || value.toolBlockCount !== 1
     || !isSummaryV3StyleRecord(value.input)) {
-    return evaluatorFailure('evaluator_transport_malformed');
+    return evaluatorFailure('envelope_metadata');
   }
   const payload = value.input;
   if (!summaryV3StyleHasExactKeys(payload, [
     'operationId', 'snapshotHash', 'manifestHash', 'style', 'locale', 'candidateHash', 'candidateUnitHashes', 'phases', 'representedFactIdHashes', 'missingFactIdHashes', 'roleIdentityResolution', 'styleEvidence',
-  ])
-    || !exactIdentity(payload, snapshot) || !isSummaryV3StyleRecord(payload.phases)) {
-    return evaluatorFailure('evaluator_transport_malformed');
+  ])) {
+    return evaluatorFailure('payload_keyset');
+  }
+  if (!exactIdentity(payload, snapshot)) {
+    return evaluatorFailure('immutable_identity');
+  }
+  if (!isSummaryV3StyleRecord(payload.phases)) {
+    return evaluatorFailure('phase_shape');
   }
   const candidateUnitHashes = payload.candidateUnitHashes;
   const expectedCandidateUnitHashes = candidate.units.map(summaryV3StyleCandidateUnitHash);
@@ -1451,7 +1507,7 @@ function parseEvaluatorOutput(
     || !Array.isArray(candidateUnitHashes)
     || candidateUnitHashes.length !== expectedCandidateUnitHashes.length
     || candidateUnitHashes.some((hash, index) => !summaryV3StyleIsNonBlank(hash) || hash.length > 80 || hash !== expectedCandidateUnitHashes[index])) {
-    return evaluatorFailure('evaluator_transport_malformed');
+    return evaluatorFailure('candidate_identity');
   }
   const representedFactIdHashes = payload.representedFactIdHashes;
   const missingFactIdHashes = payload.missingFactIdHashes;
@@ -1459,34 +1515,42 @@ function parseEvaluatorOutput(
   if (!Array.isArray(representedFactIdHashes) || !Array.isArray(missingFactIdHashes)
     || representedFactIdHashes.length > 256 || missingFactIdHashes.length > 256
     || representedFactIdHashes.some((hash) => !summaryV3StyleIsNonBlank(hash) || hash.length > 80)
-    || missingFactIdHashes.some((hash) => !summaryV3StyleIsNonBlank(hash) || hash.length > 80)
-    || new Set(representedFactIdHashes).size !== representedFactIdHashes.length
-    || new Set(missingFactIdHashes).size !== missingFactIdHashes.length
-    || typeof roleIdentityResolution !== 'string'
+    || missingFactIdHashes.some((hash) => !summaryV3StyleIsNonBlank(hash) || hash.length > 80)) {
+    return evaluatorFailure('fact_reference_shape');
+  }
+  if (new Set(representedFactIdHashes).size !== representedFactIdHashes.length
+    || new Set(missingFactIdHashes).size !== missingFactIdHashes.length) {
+    return evaluatorFailure('fact_reference_duplicates');
+  }
+  if (typeof roleIdentityResolution !== 'string'
     || !(SUMMARY_V3_STYLE_M5_ROLE_IDENTITY_RESOLUTIONS as readonly string[]).includes(roleIdentityResolution)) {
-    return evaluatorFailure('evaluator_transport_malformed');
+    return evaluatorFailure('role_identity');
   }
   const allowedFactHashes = new Set(snapshot.requiredFacts.map((fact) => fact.hash));
   if (representedFactIdHashes.some((hash) => !allowedFactHashes.has(hash))
-    || missingFactIdHashes.some((hash) => !allowedFactHashes.has(hash))
-    || representedFactIdHashes.some((hash) => missingFactIdHashes.includes(hash))
-    || new Set([...representedFactIdHashes, ...missingFactIdHashes]).size !== allowedFactHashes.size) {
-    return evaluatorFailure('evaluator_transport_malformed');
+    || missingFactIdHashes.some((hash) => !allowedFactHashes.has(hash))) {
+    return evaluatorFailure('fact_reference_membership');
   }
-  if (!summaryV3StyleHasExactKeys(payload.phases, REQUIRED_PHASES)) return evaluatorFailure('evaluator_transport_malformed');
+  if (representedFactIdHashes.some((hash) => missingFactIdHashes.includes(hash))) {
+    return evaluatorFailure('fact_reference_overlap');
+  }
+  if (new Set([...representedFactIdHashes, ...missingFactIdHashes]).size !== allowedFactHashes.size) {
+    return evaluatorFailure('fact_reference_partition');
+  }
+  if (!summaryV3StyleHasExactKeys(payload.phases, REQUIRED_PHASES)) return evaluatorFailure('phase_keyset');
   const phases = {} as Record<SummaryV3StylePhase, Readonly<{ status: SummaryV3StylePhaseStatus; violations: readonly SummaryV3StyleViolation[] }>>;
   for (const name of REQUIRED_PHASES) {
     const phase = parsePhase(payload.phases[name]);
-    if (!phase) return evaluatorFailure('evaluator_transport_malformed');
+    if (!phase.ok) return evaluatorFailure(phase.evaluatorOutputContractFailureClass);
     const allowedUnitHashes = new Set(candidate.units.map(summaryV3StyleCandidateUnitHash));
-    if (phase.violations.some((violation) => violation.factIdHashes.some((hash) => !allowedFactHashes.has(hash))
+    if (phase.value.violations.some((violation) => violation.factIdHashes.some((hash) => !allowedFactHashes.has(hash))
       || violation.unitHashes.some((hash) => !allowedUnitHashes.has(hash)))) {
-      return evaluatorFailure('evaluator_transport_malformed');
+      return evaluatorFailure('phase_violation_reference_membership');
     }
-    phases[name] = phase;
+    phases[name] = phase.value;
   }
   const styleEvidence = parseStyleEvidence(payload.styleEvidence, snapshot);
-  if (!styleEvidence) return evaluatorFailure('evaluator_transport_malformed');
+  if (!styleEvidence.ok) return evaluatorFailure(styleEvidence.evaluatorOutputContractFailureClass);
   const semanticPhase = phases.semantic_grounding;
   const completeCoverage = representedFactIdHashes.length === allowedFactHashes.size
     && representedFactIdHashes.every((hash) => allowedFactHashes.has(hash))
@@ -1496,8 +1560,11 @@ function parseEvaluatorOutput(
     .flatMap((violation) => violation.factIdHashes)));
   const missingPartitionMatchesViolations = missingFactViolationHashes.length === missingFactIdHashes.length
     && missingFactViolationHashes.every((hash) => missingFactIdHashes.includes(hash));
-  if (!missingPartitionMatchesViolations) return evaluatorFailure('evaluator_transport_malformed');
-  if (semanticPhase.status === 'passed' && !completeCoverage) return evaluatorFailure('evaluator_transport_malformed');
+  if (!missingPartitionMatchesViolations) return evaluatorFailure('semantic_missing_fact_partition');
+  // A parsed passed phase has no violations. Therefore any incomplete fact
+  // coverage necessarily failed the preceding missing-partition predicate;
+  // retain the defensive terminal with the same authoritative class.
+  if (semanticPhase.status === 'passed' && !completeCoverage) return evaluatorFailure('semantic_missing_fact_partition');
   return immutableCopy({
     ok: true,
     evaluation: {
@@ -1505,7 +1572,7 @@ function parseEvaluatorOutput(
       representedFactIdHashes,
       missingFactIdHashes,
       roleIdentityResolution: roleIdentityResolution as SummaryV3StyleRoleIdentityResolution,
-      styleEvidence,
+      styleEvidence: styleEvidence.value,
     },
   });
 }
@@ -1716,6 +1783,7 @@ interface EvidenceUpdate {
   readonly localFailureReason?: SummaryV3StyleFailureReason | null;
   readonly unsupportedClaimCategory?: SummaryV3StyleUnsupportedClaimCategory | null;
   readonly writerOutputContractFailureClass?: SummaryV3StyleWriterOutputContractFailureClass | null;
+  readonly evaluatorOutputContractFailureClass?: SummaryV3StyleEvaluatorOutputContractFailureClass | null;
   readonly safeNoOpConsidered?: boolean;
   readonly safeNoOpSelected?: boolean;
   readonly safeNoOpEligibilityReason?: SummaryV3StyleSafeNoOpEligibilityReason;
@@ -1808,6 +1876,7 @@ function makeEvidence(snapshot: SummaryV3StyleOperationSnapshot, update: Evidenc
       : evaluation ? !localViolation && styleNoOp(evaluation.styleEvidence) : false,
     unsupportedClaimCategory: update.unsupportedClaimCategory ?? null,
     writerOutputContractFailureClass: update.writerOutputContractFailureClass ?? null,
+    evaluatorOutputContractFailureClass: update.evaluatorOutputContractFailureClass ?? null,
     writerCandidateReachedValidation: Boolean(candidate && (update.writerAttempts ?? 0) > 0),
     evaluatorReached: (update.evaluatorAttempts ?? 0) > 0,
     safeNoOpConsidered: update.safeNoOpConsidered ?? false,
@@ -2107,7 +2176,14 @@ export async function executeSummaryV3StyleServer(
     }));
   }
   const parsedEvaluator = parseEvaluatorOutput(rawEvaluator, snapshot, parsedWriter.candidate);
-  if (!parsedEvaluator.ok) return createSummaryV3StyleHandledFailure(snapshot, parsedEvaluator.reason, makeEvidence(snapshot, { writerAttempts: 1, evaluatorAttempts: 1, candidate: parsedWriter.candidate }));
+  if (!parsedEvaluator.ok) return createSummaryV3StyleHandledFailure(snapshot, parsedEvaluator.reason, makeEvidence(snapshot, {
+    writerAttempts: 1,
+    evaluatorAttempts: 1,
+    candidate: parsedWriter.candidate,
+    evaluatorOutputContractFailureClass: parsedEvaluator.reason === 'evaluator_transport_malformed'
+      ? parsedEvaluator.evaluatorOutputContractFailureClass
+      : null,
+  }));
   const initialHardRejection = localHardRejection(snapshot, parsedWriter.candidate.text);
   const initialRoleIdentityFailure = roleIdentityResolutionFailure(snapshot, parsedEvaluator.evaluation);
   const initialStyleFailure = initialHardRejection || initialRoleIdentityFailure || (allPhasesPassed(parsedEvaluator.evaluation)
@@ -2208,6 +2284,9 @@ export async function executeSummaryV3StyleServer(
     return createSummaryV3StyleHandledFailure(snapshot, 'repair_evaluator_transport_malformed', makeEvidence(snapshot, {
       writerAttempts: 1, evaluatorAttempts: 1, repairWriterAttempts: 1, repairEvaluatorAttempts: 1,
       candidate: parsedRepairWriter.candidate,
+      evaluatorOutputContractFailureClass: parsedRepairEvaluator.reason === 'evaluator_transport_malformed'
+        ? parsedRepairEvaluator.evaluatorOutputContractFailureClass
+        : null,
     }));
   }
   const repairNoOpClaimed = snapshot.mode === 'enhance_existing_content' && parsedRepairEvaluator.evaluation.styleEvidence.noOpDetected;

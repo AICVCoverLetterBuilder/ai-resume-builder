@@ -119,6 +119,7 @@ type StoredSummaryDiagnostic = {
   readonly usageCountAfter?: number;
   readonly unsupportedClaimCategory?: string | null;
   readonly writerOutputContractFailureClass?: string | null;
+  readonly evaluatorOutputContractFailureClass?: string | null;
   readonly writerCandidateReachedValidation?: boolean;
   readonly evaluatorReached?: boolean;
   readonly safeNoOpConsidered?: boolean;
@@ -593,6 +594,7 @@ function candidateResponse(snapshot: ReturnType<typeof createSummaryV3StyleOpera
       snapshotHash: snapshot.snapshotHash, manifestHash: snapshot.manifestHash, candidateHash,
       retries: 0, fallbacks: 0, v2Fallthrough: 0,
       unsupportedClaimCategory: null, writerOutputContractFailureClass: null, writerCandidateReachedValidation: true, evaluatorReached: true,
+      evaluatorOutputContractFailureClass: null,
       safeNoOpConsidered: false, safeNoOpSelected: false, safeNoOpEligibilityReason: 'eligible',
       roleIdentityResolution: 'not_required',
     } };
@@ -609,6 +611,7 @@ function safeNoOpResponse(
       snapshotHash: snapshot.snapshotHash, manifestHash: snapshot.manifestHash,
       noOpDetected: true, meaningfulChangeDetected: false, retries: 0, fallbacks: 0, v2Fallthrough: 0,
       unsupportedClaimCategory, writerOutputContractFailureClass: null, writerCandidateReachedValidation: true, evaluatorReached,
+      evaluatorOutputContractFailureClass: null,
       safeNoOpConsidered: true, safeNoOpSelected: true, safeNoOpEligibilityReason: 'eligible',
       roleIdentityResolution: 'not_required',
   } };
@@ -1061,6 +1064,7 @@ describe('M5.3 Summary style client/page boundary', () => {
       usageCountAfter: 1,
       roleIdentityResolution: 'equivalent',
       writerOutputContractFailureClass: null,
+      evaluatorOutputContractFailureClass: null,
       diagnosticCompletenessPassed: true,
       diagnosticInvariantCheckPassed: true,
       missingRequiredDiagnosticFields: [],
@@ -1896,7 +1900,7 @@ describe('M5.3 Summary style client/page boundary', () => {
     expect(result.commitRequest).toBeNull();
   });
 
-  it('fails closed when the writer contract failure class is an unknown diagnostic enum', async () => {
+  it.each(['writerOutputContractFailureClass', 'evaluatorOutputContractFailureClass'] as const)('fails closed when %s is an unknown diagnostic enum', async (field) => {
     const result = await run({
       status: 200,
       responseFactory: (snapshot) => {
@@ -1905,7 +1909,7 @@ describe('M5.3 Summary style client/page boundary', () => {
           ...response,
           evidence: {
             ...(response.evidence as Record<string, unknown>),
-            writerOutputContractFailureClass: 'untrusted_provider_text',
+            [field]: 'untrusted_provider_text',
           },
         };
       },

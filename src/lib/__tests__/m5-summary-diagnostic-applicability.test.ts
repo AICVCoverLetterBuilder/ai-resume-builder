@@ -205,6 +205,7 @@ describe('M5 Summary typed diagnostic applicability', () => {
       m5Operation: 'summary_style',
       roleIdentityResolution: 'equivalent',
       writerOutputContractFailureClass: null,
+      evaluatorOutputContractFailureClass: null,
       providerHttpStatus: null,
       m5FailureStage: null,
       m5CanonicalFailureCause: null,
@@ -261,6 +262,8 @@ describe('M5 Summary typed diagnostic applicability', () => {
       evaluatorReached: true,
       roleIdentityResolution: 'equivalent',
       writerOutputContractFailureClass: null,
+      evaluatorOutputContractFailureClass: 'phase_violation_shape',
+      finalTypedFailureReason: 'evaluator_transport_malformed',
     } as Record<string, unknown>;
     expect(checkM5SummaryDiagnosticCompleteness(evaluatorLost).passed).toBe(true);
     expect(checkM5SummaryDiagnosticInvariants(evaluatorLost)).toMatchObject({ passed: true, failures: [] });
@@ -274,6 +277,19 @@ describe('M5 Summary typed diagnostic applicability', () => {
     } as unknown as Record<string, unknown>;
     expect(checkM5SummaryDiagnosticApplicability(unknown).unexpectedDiagnosticFieldTypes)
       .toContain('writerOutputContractFailureClass:invalid');
+    expect(isPersistedSummaryM5Diagnostic(unknown)).toBe(false);
+  });
+
+  it('rejects an unknown evaluator contract failure class at the diagnostic boundary', async () => {
+    const successful = await buildSuccessfulM5Trace();
+    const unknown = {
+      ...successful,
+      evaluatorOutputContractFailureClass: 'provider_raw_error',
+      finalTypedFailureReason: 'evaluator_transport_malformed',
+      evaluatorReached: true,
+    } as unknown as Record<string, unknown>;
+    expect(checkM5SummaryDiagnosticApplicability(unknown).unexpectedDiagnosticFieldTypes)
+      .toContain('evaluatorOutputContractFailureClass:invalid');
     expect(isPersistedSummaryM5Diagnostic(unknown)).toBe(false);
   });
 

@@ -377,6 +377,8 @@ export type SummaryV3StyleEvidence = Readonly<{
   readonly noOpDetected: boolean;
   readonly unsupportedClaimCategory: SummaryV3StyleUnsupportedClaimCategory | null;
   readonly writerOutputContractFailureClass: SummaryV3StyleWriterOutputContractFailureClass | null;
+  /** Finite full-evaluator parser class; never carries provider content. */
+  readonly evaluatorOutputContractFailureClass: SummaryV3StyleEvaluatorOutputContractFailureClass | null;
   readonly writerCandidateReachedValidation: boolean;
   readonly evaluatorReached: boolean;
   readonly safeNoOpConsidered: boolean;
@@ -521,6 +523,34 @@ export const SUMMARY_V3_STYLE_M5_WRITER_OUTPUT_CONTRACT_FAILURE_CLASSES = [
 ] as const;
 export type SummaryV3StyleWriterOutputContractFailureClass =
   (typeof SUMMARY_V3_STYLE_M5_WRITER_OUTPUT_CONTRACT_FAILURE_CLASSES)[number];
+
+/**
+ * Finite first-failure classes owned only by the full local evaluator parser.
+ * They retain no provider prose, hashes, prompts, or request content.
+ */
+export const SUMMARY_V3_STYLE_M5_EVALUATOR_OUTPUT_CONTRACT_FAILURE_CLASSES = [
+  'envelope_keyset',
+  'envelope_metadata',
+  'payload_keyset',
+  'immutable_identity',
+  'candidate_identity',
+  'fact_reference_shape',
+  'fact_reference_duplicates',
+  'role_identity',
+  'fact_reference_membership',
+  'fact_reference_overlap',
+  'fact_reference_partition',
+  'phase_keyset',
+  'phase_shape',
+  'phase_violation_shape',
+  'phase_violation_duplicates',
+  'phase_violation_reference_membership',
+  'phase_status_consistency',
+  'style_evidence_shape',
+  'semantic_missing_fact_partition',
+] as const;
+export type SummaryV3StyleEvaluatorOutputContractFailureClass =
+  (typeof SUMMARY_V3_STYLE_M5_EVALUATOR_OUTPUT_CONTRACT_FAILURE_CLASSES)[number];
 
 const SUMMARY_V3_STYLE_M5_VIOLATION_SCHEMA = {
   type: 'object' as const,
@@ -685,6 +715,16 @@ export type SummaryV3StyleProviderTool = Readonly<{
   }>;
 }>;
 
+/**
+ * The server owns this immutable invocation-scoped identifier domain. The
+ * evaluator still chooses which members to report; it cannot invent a new
+ * identifier namespace at the provider boundary.
+ */
+export interface SummaryV3StyleEvaluatorReferenceDomain {
+  readonly allowedFactHashes: readonly string[];
+  readonly allowedUnitHashes: readonly string[];
+}
+
 const SUMMARY_V3_STYLE_PROVIDER_UNSUPPORTED_KEYS = new Set([
   'minimum',
   'maximum',
@@ -711,6 +751,46 @@ function stringArray(value: unknown): string[] | null {
   return Array.isArray(value) && value.every((entry): entry is string => typeof entry === 'string')
     ? value
     : null;
+}
+
+function assertReferenceDomain(values: readonly string[], label: string): readonly string[] {
+  if (!Array.isArray(values) || values.length === 0
+    || values.some((value) => typeof value !== 'string' || value.trim().length === 0)
+    || new Set(values).size !== values.length) {
+    throw new Error(`M5 evaluator ${label} reference domain must be a non-empty unique immutable list`);
+  }
+  return [...values];
+}
+
+function bindReferenceDomain(
+  schema: Record<string, unknown>,
+  field: string,
+  values: readonly string[],
+): void {
+  const properties = schemaRecord(schema.properties);
+  const property = schemaRecord(properties?.[field]);
+  const items = schemaRecord(property?.items);
+  if (!items) throw new Error(`M5 evaluator provider ${field} schema is malformed`);
+  items.enum = [...values];
+}
+
+function bindPhaseViolationReferenceDomains(
+  schema: Record<string, unknown>,
+  phase: string,
+  allowedFactHashes: readonly string[],
+  allowedUnitHashes: readonly string[],
+): void {
+  const properties = schemaRecord(schema.properties);
+  const violations = schemaRecord(properties?.[`${phase}Violations`]);
+  const violationItems = schemaRecord(violations?.items);
+  const violationProperties = schemaRecord(violationItems?.properties);
+  const factHashes = schemaRecord(violationProperties?.factIdHashes);
+  const unitHashes = schemaRecord(violationProperties?.unitHashes);
+  const factItems = schemaRecord(factHashes?.items);
+  const unitItems = schemaRecord(unitHashes?.items);
+  if (!factItems || !unitItems) throw new Error(`M5 evaluator provider ${phase} violation schema is malformed`);
+  factItems.enum = [...allowedFactHashes];
+  unitItems.enum = [...allowedUnitHashes];
 }
 
 /**
@@ -823,6 +903,7 @@ const SUMMARY_V3_STYLE_M5_EVALUATOR_PHASES = [
 
 export function projectSummaryV3StyleEvaluatorToolForProvider(
   activeStyle: SummaryV3Style,
+  referenceDomain?: SummaryV3StyleEvaluatorReferenceDomain,
 ): SummaryV3StyleProviderTool {
   const projected = projectSummaryV3StyleToolForProvider(SUMMARY_V3_STYLE_M5_EVALUATOR_TOOL, activeStyle);
   const schema = JSON.parse(JSON.stringify(projected.input_schema)) as Record<string, unknown>;
@@ -858,6 +939,16 @@ export function projectSummaryV3StyleEvaluatorToolForProvider(
     properties[statusField] = phaseSchemaProperties.status;
     properties[violationsField] = phaseSchemaProperties.violations;
     evaluatorRequired.push(statusField, violationsField);
+  }
+
+  if (referenceDomain) {
+    const allowedFactHashes = assertReferenceDomain(referenceDomain.allowedFactHashes, 'fact');
+    const allowedUnitHashes = assertReferenceDomain(referenceDomain.allowedUnitHashes, 'unit');
+    bindReferenceDomain(schema, 'representedFactIdHashes', allowedFactHashes);
+    bindReferenceDomain(schema, 'missingFactIdHashes', allowedFactHashes);
+    for (const phase of SUMMARY_V3_STYLE_M5_EVALUATOR_PHASES) {
+      bindPhaseViolationReferenceDomains(schema, phase, allowedFactHashes, allowedUnitHashes);
+    }
   }
 
   return immutableCopy({
@@ -2652,6 +2743,7 @@ export function createSummaryV3StyleInitialEvidence(snapshot: SummaryV3StyleOper
     noOpDetected: false,
     unsupportedClaimCategory: null,
     writerOutputContractFailureClass: null,
+    evaluatorOutputContractFailureClass: null,
     writerCandidateReachedValidation: false,
     evaluatorReached: false,
     safeNoOpConsidered: false,

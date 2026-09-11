@@ -16,7 +16,9 @@ import {
   SUMMARY_CURRENT_ROLE_RESOLVER_REVISION,
 } from './cv-summary-current-role';
 import {
+  SUMMARY_V3_STYLE_M5_EVALUATOR_OUTPUT_CONTRACT_FAILURE_CLASSES,
   SUMMARY_V3_STYLE_M5_WRITER_OUTPUT_CONTRACT_FAILURE_CLASSES,
+  type SummaryV3StyleEvaluatorOutputContractFailureClass,
   type SummaryV3StyleWriterOutputContractFailureClass,
 } from './ai-core-v3/summary-style-m5';
 
@@ -408,6 +410,7 @@ const M5_AUTHORITATIVE_FIELDS = Object.freeze([
   'summaryFinalCandidateDiagnosticsRevision',
   'unsupportedClaimCategory',
   'writerOutputContractFailureClass',
+  'evaluatorOutputContractFailureClass',
   'writerCandidateReachedValidation',
   'evaluatorReached',
   'safeNoOpConsidered',
@@ -532,6 +535,9 @@ export function checkM5SummaryDiagnosticApplicability(
   const writerOutputContractFailureClasses = new Set(
     SUMMARY_V3_STYLE_M5_WRITER_OUTPUT_CONTRACT_FAILURE_CLASSES,
   );
+  const evaluatorOutputContractFailureClasses = new Set(
+    SUMMARY_V3_STYLE_M5_EVALUATOR_OUTPUT_CONTRACT_FAILURE_CLASSES,
+  );
   const failureStages = new Set<SummaryV3ProviderFailureStage>([
     'request_construction', 'sdk_request', 'response_extraction',
     'tool_validation', 'orchestration', 'unknown',
@@ -551,6 +557,13 @@ export function checkM5SummaryDiagnosticApplicability(
         trace.writerOutputContractFailureClass as SummaryV3StyleWriterOutputContractFailureClass,
       ))) {
     unexpectedDiagnosticFieldTypes.push('writerOutputContractFailureClass:invalid');
+  }
+  if (trace.evaluatorOutputContractFailureClass !== null
+    && (typeof trace.evaluatorOutputContractFailureClass !== 'string'
+      || !evaluatorOutputContractFailureClasses.has(
+        trace.evaluatorOutputContractFailureClass as SummaryV3StyleEvaluatorOutputContractFailureClass,
+      ))) {
+    unexpectedDiagnosticFieldTypes.push('evaluatorOutputContractFailureClass:invalid');
   }
   for (const field of [
     'writerCandidateReachedValidation', 'evaluatorReached', 'safeNoOpConsidered', 'safeNoOpSelected',
@@ -605,7 +618,7 @@ const M5_DIAGNOSTIC_APPLICABILITY = Object.freeze({
     'diagnosticContractRevision', 'apiBaseUrlConfigured', 'capacitorServerUrlConfigured',
     'apiHostClassificationContractRevision', 'sourceCommitStatus', 'm5Operation',
     'unsupportedClaimCategory', 'writerCandidateReachedValidation', 'evaluatorReached',
-    'writerOutputContractFailureClass',
+    'writerOutputContractFailureClass', 'evaluatorOutputContractFailureClass',
     'safeNoOpConsidered', 'safeNoOpSelected', 'safeNoOpEligibilityReason', 'roleIdentityResolution',
     'm5FailureStage', 'm5CanonicalFailureCause',
   ] as const),
@@ -627,7 +640,7 @@ export function checkM5SummaryDiagnosticCompleteness(
   const nullableWhenUnavailable = new Set([
     'appVersionCode', 'appVersionName', 'nextBuildId', 'buildChannel',
     'storedContentLocale', 'finalTypedFailureReason', 'rejectionStage', 'unsupportedClaimCategory',
-    'writerOutputContractFailureClass',
+    'writerOutputContractFailureClass', 'evaluatorOutputContractFailureClass',
     'm5FailureStage', 'm5CanonicalFailureCause',
   ]);
   for (const key of M5_DIAGNOSTIC_APPLICABILITY.required) {
@@ -749,6 +762,41 @@ export function checkM5SummaryDiagnosticInvariants(
       evaluatorReached: trace.evaluatorReached === true,
       writerOutputContractFailureClass: typeof trace.writerOutputContractFailureClass === 'string'
         ? trace.writerOutputContractFailureClass : null,
+    });
+  }
+  const evaluatorParserMalformed = (trace.finalTypedFailureReason === 'evaluator_transport_malformed'
+    || trace.finalTypedFailureReason === 'repair_evaluator_transport_malformed')
+    && trace.evaluatorReached === true;
+  if (evaluatorParserMalformed
+    && (typeof trace.evaluatorOutputContractFailureClass !== 'string'
+      || !SUMMARY_V3_STYLE_M5_EVALUATOR_OUTPUT_CONTRACT_FAILURE_CLASSES.includes(
+        trace.evaluatorOutputContractFailureClass as SummaryV3StyleEvaluatorOutputContractFailureClass,
+      ))) {
+    push('m5_evaluator_transport_malformed_requires_contract_failure_class', {
+      finalTypedFailureReason: typeof trace.finalTypedFailureReason === 'string'
+        ? trace.finalTypedFailureReason : null,
+      evaluatorOutputContractFailureClass: typeof trace.evaluatorOutputContractFailureClass === 'string'
+        ? trace.evaluatorOutputContractFailureClass : null,
+    });
+  }
+  if ((success || applied) && trace.evaluatorOutputContractFailureClass !== null
+    && trace.evaluatorOutputContractFailureClass !== undefined) {
+    push('m5_success_forbids_evaluator_contract_failure_class', {
+      countedAsSuccess: success,
+      visibleApplySucceeded: applied,
+      evaluatorOutputContractFailureClass: typeof trace.evaluatorOutputContractFailureClass === 'string'
+        ? trace.evaluatorOutputContractFailureClass : null,
+    });
+  }
+  if (trace.evaluatorOutputContractFailureClass !== null
+    && trace.evaluatorOutputContractFailureClass !== undefined
+    && !evaluatorParserMalformed) {
+    push('m5_evaluator_contract_failure_class_requires_parser_rejection', {
+      finalTypedFailureReason: typeof trace.finalTypedFailureReason === 'string'
+        ? trace.finalTypedFailureReason : null,
+      evaluatorReached: trace.evaluatorReached === true,
+      evaluatorOutputContractFailureClass: typeof trace.evaluatorOutputContractFailureClass === 'string'
+        ? trace.evaluatorOutputContractFailureClass : null,
     });
   }
   if ((trace.roleIdentityResolution === 'contradiction' || trace.roleIdentityResolution === 'unresolved')
@@ -1617,6 +1665,7 @@ export type SummaryAiDiagnosticDraft = {
     | 'unsupported_achievement' | 'unsupported_authority' | 'source_floor_mismatch'
     | 'manifest_ceiling_mismatch' | 'other_typed_category' | null;
   writerOutputContractFailureClass?: SummaryV3StyleWriterOutputContractFailureClass | null;
+  evaluatorOutputContractFailureClass?: SummaryV3StyleEvaluatorOutputContractFailureClass | null;
   writerCandidateReachedValidation?: boolean;
   evaluatorReached?: boolean;
   safeNoOpConsidered?: boolean;
@@ -1890,7 +1939,8 @@ export type SummaryV2ExternalDiagnostic = Readonly<
 >;
 
 type SummaryM5OnlyField = 'm5Operation' | 'summaryFinalCandidateDiagnosticsRevision'
-  | 'unsupportedClaimCategory' | 'writerOutputContractFailureClass' | 'writerCandidateReachedValidation' | 'evaluatorReached'
+  | 'unsupportedClaimCategory' | 'writerOutputContractFailureClass' | 'evaluatorOutputContractFailureClass'
+  | 'writerCandidateReachedValidation' | 'evaluatorReached'
   | 'safeNoOpConsidered' | 'safeNoOpSelected' | 'safeNoOpEligibilityReason' | 'roleIdentityResolution'
   | 'm5FailureStage' | 'm5CanonicalFailureCause';
 type SummaryM5ForbiddenField = Exclude<
@@ -2032,6 +2082,7 @@ export class SummaryAiDiagnosticSession {
         m5Operation: input.m5Operation,
         unsupportedClaimCategory: null,
         writerOutputContractFailureClass: null,
+        evaluatorOutputContractFailureClass: null,
         writerCandidateReachedValidation: false,
         evaluatorReached: false,
         safeNoOpConsidered: false,
