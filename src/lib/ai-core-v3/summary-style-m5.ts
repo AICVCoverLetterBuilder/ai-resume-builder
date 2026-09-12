@@ -513,7 +513,7 @@ export const SUMMARY_V3_STYLE_STRATEGIES: Readonly<Record<SummaryV3Style, Summar
     style: 'professional',
     requiresExistingSourceMateriality: true,
     requiresGroundedPredicateTransformation: false,
-    minimumExistingSourceLengthRatio: 0.97,
+    minimumExistingSourceLengthRatio: 0,
     writerContract: ['improve formal clarity and cohesion', 'preserve material fact topology'],
     requiredEvidenceKeys: [
       'style', 'professionalFramingOperations', 'cohesionClarityOperations', 'markerOnlyChangeDetected',
@@ -1161,6 +1161,14 @@ export function summaryV3StyleCandidatePreservesExactMaterialSurfaces(
   candidateText: string,
 ): boolean {
   if (snapshot.mode !== 'enhance_existing_content') return true;
+  // The existing narrow named-tool relation owner is stronger than the
+  // generic `semanticKind=duty` annotation.  A duty may contain an immutable
+  // tool identifier (`uses SAP`); preserve that identifier even when the
+  // surrounding duty prose is explicitly evaluator-owned.  Ordinary cased
+  // duty nouns remain paraphrasable because they are not relation-attested
+  // technical surfaces.
+  const namedToolSurfaceSet = new Set(Array.from(snapshot.sourceSummary.matchAll(NARROW_NAMED_TOOL_SOURCE_PATTERN))
+    .flatMap((match) => rawFactTokens(match[1] || '')));
   const surfaces = rawFactTokens(snapshot.sourceSummary)
     .filter((token) => /\p{Lu}/u.test(token))
     .filter((token) => {
@@ -1171,19 +1179,41 @@ export function summaryV3StyleCandidatePreservesExactMaterialSurfaces(
         // guard; it is not a literal identity surface that should mask that
         // more precise terminal behind a generic source-floor failure.
         && !CASED_MULTI_TOKEN_NONIDENTITY_PREFIXES.has(folded);
-    });
+    })
+    // A Professional rewrite may change cased ordinary duty wording.  Keep
+    // true identity/technical surfaces in this local floor, but exclude only
+    // cased tokens that are wholly contained by an explicitly visible duty
+    // fact; those remain semantic-evaluator authority.
+    .filter((token) => snapshot.style !== 'professional'
+      || !snapshot.requiredFacts.some((fact) => fact.semanticKind === 'duty'
+        && summaryV3StyleContainsExactSurface(fact.text, token, true))
+      || namedToolSurfaceSet.has(token));
   // Individual token locks protect casing, while an exact cased phrase
   // anywhere in the source closes insertion/reordering (`Ava Priya Patel`
   // and `Patel Ava`) without assuming every title-cased word is a person.
+  const casedMultiTokenSurfaces = casedMultiTokenExactSurfaces(snapshot.sourceSummary)
+    .filter((surface) => snapshot.style !== 'professional'
+      || !snapshot.requiredFacts.some((fact) => fact.semanticKind === 'duty'
+        && summaryV3StyleContainsExactSurface(fact.text, surface, true))
+      || namedToolSurfaceSet.has(surface));
   const protectedSurfaces = [
     ...surfaces,
-    ...casedMultiTokenExactSurfaces(snapshot.sourceSummary),
+    // Professional may rephrase ordinary lowercase duty language, while
+    // multi-token cased identities (for example `Ava Patel`) remain exact.
+    // The matcher only captures adjacent cased lexical tokens, so a normal
+    // predicate such as `builds reliable APIs` is unaffected.
+    ...casedMultiTokenSurfaces,
     ...casedConnectorIdentityExactSurfaces(snapshot.sourceSummary),
     ...japaneseSubjectIdentitySurfaces(snapshot.sourceSummary),
   ];
   if (!Array.from(new Set(protectedSurfaces))
     .every((surface) => summaryV3StyleContainsExactSurface(candidateText, surface, true))) return false;
+  const roleSurfaceSet = new Set(snapshot.selectedEntries
+    .map((entry) => snapshot.manifestFacts.find((fact) => fact.id === `${entry.stableId}:role`)?.text)
+    .filter((role): role is string => !!role)
+    .map((role) => normalizeSummaryV3StyleText(role).toLocaleLowerCase()));
   if (!casedSingleTokenSubjectIdentitySurfaces(snapshot)
+    .filter((surface) => !roleSurfaceSet.has(normalizeSummaryV3StyleText(surface).toLocaleLowerCase()))
     .every((surface) => candidatePreservesUnexpandedCasedIdentitySurface(
       candidateText,
       surface,
@@ -1601,7 +1631,13 @@ function roleAttestedUncasedIdentityFrames(
   const validatedIdentities = new Set(sourceSegments
     .flatMap((segment) => {
       const identity = /^([\p{Script=Arabic}\p{Script=Devanagari}]{2,})\s+/u.exec(segment)?.[1];
-      return identity && roles.some((role) => summaryV3StyleContainsExactSurface(segment, role, true)) ? [identity] : [];
+      // A clause-leading role is not an unannotated person identity. Treating
+      // `مهندسة`/`इंजीनियर` itself as the identity would lock the following
+      // duty predicate lexically and reject a legitimate Professional
+      // paraphrase before the semantic evaluator can judge it.
+      return identity && roles.some((role) => summaryV3StyleContainsExactSurface(segment, role, true)
+        && normalizeSummaryV3StyleText(role).toLocaleLowerCase() !== normalizeSummaryV3StyleText(identity).toLocaleLowerCase())
+        ? [identity] : [];
     }));
   const frames: RoleAttestedUncasedIdentityFrame[] = [];
   for (const segment of sourceSegments) {
@@ -2042,12 +2078,14 @@ function candidateTextRepresentsFact(
 export type SummaryV3StyleLocalSemanticDecision = 'represented' | 'invalid' | 'unresolved';
 
 /**
- * Shorter has no local morphology, edit-distance, prefix, or synonym
- * authority. Exact/structured evidence is conclusive; immutable numeric
- * omissions are definitely invalid; every other material predicate is
- * unresolved and must be judged by the existing strict evaluator.
+ * Visible-summary styles have no local morphology, edit-distance, prefix, or
+ * synonym authority. Exact/structured evidence is conclusive; immutable
+ * numeric omissions are definitely invalid; every other material predicate is
+ * unresolved and must be judged by the existing strict evaluator. Professional
+ * shares this boundary with Shorter so a legitimate polished paraphrase is
+ * never rejected by a binary style-specific source-floor matcher.
  */
-function shorterFactLocalSemanticDecision(
+function visibleSummaryFactLocalSemanticDecision(
   snapshot: SummaryV3StyleOperationSnapshot,
   fact: SummaryV3StyleFact,
   candidateText: string,
@@ -2066,8 +2104,9 @@ function candidateFactLocalSemanticDecision(
   fact: SummaryV3StyleFact,
   candidateText: string,
 ): SummaryV3StyleLocalSemanticDecision {
-  if (snapshot.style === 'shorter' && snapshot.mode === 'enhance_existing_content') {
-    return shorterFactLocalSemanticDecision(snapshot, fact, candidateText);
+  if ((snapshot.style === 'shorter' || snapshot.style === 'professional')
+    && snapshot.mode === 'enhance_existing_content') {
+    return visibleSummaryFactLocalSemanticDecision(snapshot, fact, candidateText);
   }
   return candidateTextRepresentsFact(snapshot, fact, candidateText) ? 'represented' : 'invalid';
 }
@@ -2082,7 +2121,7 @@ export function summaryV3StyleLocalSemanticDecision(
   candidateText: string,
 ): SummaryV3StyleLocalSemanticDecision {
   if (snapshot.mode === 'generate_from_context') return 'represented';
-  if (snapshot.style !== 'shorter') {
+  if (snapshot.style === 'stronger') {
     return snapshot.requiredFacts.every((fact) => candidateTextRepresentsFact(snapshot, fact, candidateText))
       ? 'represented'
       : 'invalid';
@@ -2155,7 +2194,7 @@ function candidateRelationSegments(
   allEntityValues: readonly string[],
 ): readonly string[] {
   const otherEntities = allEntityValues.filter((value) => normalizedRelationText(value) !== normalizedRelationText(entityValue));
-  return sourceUnitTexts(candidateText).flatMap((unit) => relationOccurrences(unit, entityValue).map((entityStart) => {
+  return sourceMaterialFactTexts(candidateText).flatMap((unit) => relationOccurrences(unit, entityValue).map((entityStart) => {
     const otherOccurrences = otherEntities.flatMap((other) => relationOccurrences(unit, other)
       .map((start) => ({ start, end: start + other.length })));
     const previous = otherOccurrences.filter((other) => other.end <= entityStart)
@@ -2180,14 +2219,54 @@ export function summaryV3StyleCandidatePreservesEntityFactBindings(
   const entities = snapshot.entityLocks.filter((lock) => lock.kind === 'entity');
   const entityValues = entities.map((entity) => entity.value);
   const factsByHash = new Map(snapshot.requiredFacts.map((fact) => [fact.hash, fact] as const));
+  const hasExplicitVisibleDuty = snapshot.requiredFacts.some((fact) =>
+    fact.origin === 'visible_summary' && fact.semanticKind === 'duty');
   return snapshot.entityRelationBindings.every((binding) => {
     const entity = entities.find((item) => item.hash === binding.entityHash);
     if (!entity) return false;
     const segments = candidateRelationSegments(candidateText, entity.value, entityValues);
-    return segments.some((segment) => binding.sourceFactHashes.every((factHash) => {
-      const fact = factsByHash.get(factHash);
-      return !!fact && candidateFactLocalSemanticDecision(snapshot, fact, segment) !== 'invalid';
-    }));
+    const sourceFacts = binding.sourceFactHashes
+      .map((factHash) => factsByHash.get(factHash))
+      .filter((fact): fact is SummaryV3StyleFact => !!fact);
+    if (sourceFacts.length !== binding.sourceFactHashes.length) return false;
+    const otherBindingFacts = snapshot.entityRelationBindings
+      .filter((other) => other !== binding && other.entityHash !== binding.entityHash)
+      .flatMap((other) => other.sourceFactHashes.map((factHash) => factsByHash.get(factHash)))
+      .filter((fact): fact is SummaryV3StyleFact => !!fact);
+    const relationIdentityAnchors = new Set([
+      ...entities.flatMap((item) => summaryV3StyleFactAnchorTokens(item.value)),
+      ...snapshot.manifestFacts
+        .filter((fact) => /:(?:role|employer|duration)$/u.test(fact.id))
+        .flatMap((fact) => summaryV3StyleFactAnchorTokens(fact.text)),
+    ]);
+    return segments.some((segment) => {
+      // Exact source-duty language belonging to a different protected entity
+      // is a deterministic reattribution contradiction. This is deliberately
+      // one-way: absence of the source duty's own lexical anchors remains
+      // unresolved and is passed to the existing semantic evaluator.
+      if (!hasExplicitVisibleDuty && otherBindingFacts.some((fact) => fact.semanticKind === 'duty'
+        && summaryV3StyleContainsExactSurface(segment, fact.text))) return false;
+      // Auto-derived visible facts have semanticKind `other`, so the same
+      // contradiction check must also cover their residual duty anchors. We
+      // remove every known entity/role/employer/duration anchor first; only a
+      // complete exact match of another entry's remaining duty phrase is
+      // treated as reattribution. This is a one-way structural contradiction,
+      // not a synonym or semantic-equivalence matcher.
+      if (!hasExplicitVisibleDuty && otherBindingFacts.some((fact) => {
+        const dutyAnchors = summaryV3StyleFactAnchorTokens(fact.text)
+          .filter((anchor) => !relationIdentityAnchors.has(anchor));
+        const candidateAnchors = new Set(summaryV3StyleFactAnchorTokens(segment));
+        return dutyAnchors.length > 0 && dutyAnchors.every((anchor) => candidateAnchors.has(anchor));
+      })) return false;
+      return sourceFacts.every((fact) => {
+        const decision = candidateFactLocalSemanticDecision(snapshot, fact, segment);
+        if (decision === 'invalid' || decision === 'represented') return decision !== 'invalid';
+        // Semantic equivalence is evaluator-owned: lexical overlap with the
+        // source duty is never required. Unresolved cases reach the existing
+        // evaluator rather than a synonym matcher.
+        return true;
+      });
+    });
   });
 }
 
@@ -2224,14 +2303,14 @@ export function summaryV3StyleCandidateUnitsRepresentDeclaredFacts(
 ): boolean {
   if (snapshot.mode === 'generate_from_context') return true;
   const factsById = new Map(snapshot.requiredFacts.map((fact) => [fact.id, fact] as const));
-  if (snapshot.style === 'shorter'
+  if ((snapshot.style === 'shorter' || snapshot.style === 'professional')
     && summaryV3StyleLocalSemanticDecision(snapshot, candidate.text) === 'invalid') return false;
-  if (snapshot.style !== 'shorter' && !summaryV3StyleCandidateRepresentsRequiredFacts(snapshot, candidate.text)) return false;
+  if (snapshot.style === 'stronger' && !summaryV3StyleCandidateRepresentsRequiredFacts(snapshot, candidate.text)) return false;
   return candidate.units.every((unit) => {
     const declaredFacts = unit.factIds.map((factId) => factsById.get(factId));
     if (declaredFacts.some((fact) => !fact)) return false;
     const boundedFacts = declaredFacts as readonly SummaryV3StyleFact[];
-    if (snapshot.style === 'shorter') {
+    if (snapshot.style === 'shorter' || snapshot.style === 'professional') {
       return boundedFacts.every((fact) => candidateFactLocalSemanticDecision(snapshot, fact, unit.text) !== 'invalid');
     }
     return boundedFacts.every((fact) => candidateTextRepresentsFact(snapshot, fact, unit.text))
@@ -3080,6 +3159,15 @@ export function summaryV3StyleCandidatePreservesLocks(
     // retains the immediately source-attested lexical shape, so `Li Wei`,
     // `مهندسة أولى`, and `シニア エンジニア` cannot pass by retaining only a
     // shorter exact substring.
+    if (lock.kind === 'role') {
+      const rolePresentation = snapshot.selectedEntries
+        .find((entry) => snapshot.manifestFacts.some((fact) =>
+          fact.id === `${entry.stableId}:role`
+          && normalizeSummaryV3StyleText(fact.text) === normalizedLock))
+        ?.rolePresentation?.text;
+      if (rolePresentation
+        && summaryV3StyleContainsExactSurface(candidateText, rolePresentation, true)) return true;
+    }
     return lock.kind === 'entity' || lock.kind === 'role' || lock.kind === 'employer'
       ? candidatePreservesUnexpandedIdentityLock(
         snapshot,

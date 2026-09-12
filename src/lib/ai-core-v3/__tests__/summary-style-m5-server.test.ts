@@ -196,7 +196,9 @@ describe('M5 shared injected Summary style server executor', () => {
   it.each(['shorter', 'stronger', 'professional'] as const)('returns one candidate-ready result for grounded %s output', async (style) => {
     const calls = { writer: 0, evaluator: 0 };
     const result = await executeSummaryV3StyleServer(requestFor(style), {
-      async write(input) { calls.writer += 1; return writerEnvelope(input, candidateByStyle[style]); },
+      async write(input) {
+        calls.writer += 1; return writerEnvelope(input, candidateByStyle[style]);
+      },
       async evaluate(input) { calls.evaluator += 1; return evaluatorEnvelope(input); },
     });
     expect(result.kind).toBe('candidate_ready');
@@ -2919,7 +2921,21 @@ describe('M5 shared injected Summary style server executor', () => {
         if (style === otherStyle) continue;
         const result = await executeSummaryV3StyleServer(requestFor(otherStyle), {
           async write(input) { return writerEnvelope(input, candidateByStyle[style]); },
-          async evaluate(input) { return evaluatorEnvelope(input); },
+          async evaluate(input) {
+            // Professional semantic admission is evaluator-owned after the
+            // M8 AAB579 fix. Keep this cross-style contract test honest by
+            // giving the intentionally Stronger-shaped candidate the
+            // corresponding Professional style rejection evidence.
+            if (otherStyle === 'professional' && style !== 'professional') {
+              return evaluatorEnvelope(input, {
+                evidence: {
+                  ...styleEvidence(input), professionalFramingOperations: 0,
+                  cohesionClarityOperations: 0, professionalFulfilled: false,
+                },
+              });
+            }
+            return evaluatorEnvelope(input);
+          },
         });
         expect(result.kind, `${style} must not satisfy ${otherStyle}`).toBe('handled_failure');
       }

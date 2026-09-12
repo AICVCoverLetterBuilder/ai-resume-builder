@@ -1611,7 +1611,11 @@ function hasOnlyRoleIntroductionChange(snapshot: SummaryV3StyleOperationSnapshot
   return sourceBody.length > 0 && normalizeSummaryV3StyleText(candidateText).toLocaleLowerCase().includes(sourceBody);
 }
 
-function isSingleDecorativeLexicalSwap(source: string, candidate: string): boolean {
+function isSingleDecorativeLexicalSwap(
+  snapshot: SummaryV3StyleOperationSnapshot,
+  source: string,
+  candidate: string,
+): boolean {
   if (countSummaryV3StyleUnits(source) !== countSummaryV3StyleUnits(candidate)
     || countSummaryV3StyleClauses(source) !== countSummaryV3StyleClauses(candidate)) return false;
   const tokens = (value: string) => new Set((normalizeSummaryV3StyleText(value).toLocaleLowerCase().match(/[\p{L}\p{N}]+/gu) || []));
@@ -1619,7 +1623,20 @@ function isSingleDecorativeLexicalSwap(source: string, candidate: string): boole
   const candidateTokens = tokens(candidate);
   const removed = Array.from(sourceTokens).filter((token) => !candidateTokens.has(token));
   const added = Array.from(candidateTokens).filter((token) => !sourceTokens.has(token));
-  return removed.length <= 1 && added.length <= 1 && removed.length + added.length > 0;
+  if (removed.length > 1 || added.length > 1 || removed.length + added.length === 0) return false;
+  // Professional may replace a duty predicate, but a one-token modifier
+  // inserted before the immutable role/employer frame is still a decorative
+  // no-op. This bounded positional check preserves that existing guard
+  // without becoming a semantic synonym matcher.
+  if (snapshot.style !== 'professional' || added.length !== 1) return true;
+  const normalizedCandidate = normalizeSummaryV3StyleText(candidate).toLocaleLowerCase();
+  const identityIndexes = snapshot.entityLocks
+    .filter((lock) => lock.kind === 'role' || lock.kind === 'employer')
+    .map((lock) => normalizedCandidate.indexOf(normalizeSummaryV3StyleText(lock.value).toLocaleLowerCase()))
+    .filter((index) => index >= 0);
+  const addedIndex = normalizedCandidate.indexOf(added[0]!);
+  const firstIdentity = identityIndexes.length > 0 ? Math.min(...identityIndexes) : Number.POSITIVE_INFINITY;
+  return addedIndex >= 0 && addedIndex < firstIdentity;
 }
 
 function safeNoOpEvidenceIsConsistent(
@@ -1690,17 +1707,20 @@ function classifyWriterOutputContractFailure(
   if (!summaryV3StyleCandidatePreservesLocks(snapshot, candidate.text)) return 'source_lock_preservation';
   if (!summaryV3StyleCandidatePreservesCalendarDateSurfaces(snapshot, candidate.text)) return 'calendar_date_source_floor';
   // Title-cased duty nouns (for example German `Systeme`) are not immutable
-  // identity locks.  In Shorter they may be paraphrased and must reach the
-  // single evaluator; role/employer/duration/date and explicit contradictions
-  // remain deterministic checks above and below.  Other styles retain the
-  // established exact material-surface floor.
-  if (snapshot.style !== 'shorter'
+  // identity locks.  In Shorter and Professional they may be paraphrased and
+  // must reach the single evaluator; role/employer/duration/date and explicit
+  // contradictions remain deterministic checks above and below. The exact
+  // material helper itself excludes ordinary duty surfaces for Professional,
+  // so this gate retains only true identity/technical hard-lock ownership.
+  if ((snapshot.style === 'stronger' || snapshot.style === 'professional')
     && !summaryV3StyleCandidatePreservesExactMaterialSurfaces(snapshot, candidate.text)) return 'exact_material_source_floor';
   if (!summaryV3StyleCandidatePreservesEntityFactBindings(snapshot, candidate.text)) return 'entity_fact_binding_preservation';
-  // Shorter predicate paraphrase is intentionally tri-state. Only a
-  // deterministic local invalid decision may fail at the writer boundary;
-  // unresolved equivalence must reach the single strict evaluator.
-  if (snapshot.style === 'shorter') {
+  // Shorter and Professional predicate paraphrase are intentionally
+  // tri-state. Only a deterministic local invalid decision may fail at the
+  // writer boundary; unresolved equivalence must reach the single strict
+  // evaluator. Stronger retains its established bounded local admission
+  // contract because its explicit predicate transformation is style-owned.
+  if (snapshot.style === 'shorter' || snapshot.style === 'professional') {
     if (summaryV3StyleLocalSemanticDecision(snapshot, candidate.text) === 'invalid') return 'candidate_source_floor';
   } else if (!summaryV3StyleCandidateRepresentsRequiredFacts(snapshot, candidate.text)) {
     return 'candidate_source_floor';
@@ -2215,9 +2235,12 @@ function localStyleFailure(snapshot: SummaryV3StyleOperationSnapshot, candidate:
   }
   if (evidence.markerOnlyChangeDetected || evidence.jargonOrFillerDetected
     || evidence.professionalFramingOperations < 1 || evidence.cohesionClarityOperations < 1
-    || JARGON_PATTERN.test(candidate.text) || isSingleDecorativeLexicalSwap(source, candidate.text)
-    || (strategy.minimumExistingSourceLengthRatio > 0 && candidate.normalizedLength < normalizedSummaryV3StyleLength(source) * strategy.minimumExistingSourceLengthRatio)
-    || hasGroundedPredicateTransformation(snapshot, candidate.text)) return 'style_not_fulfilled';
+    || JARGON_PATTERN.test(candidate.text)
+    || isSingleDecorativeLexicalSwap(snapshot, source, candidate.text)
+    || (strategy.minimumExistingSourceLengthRatio > 0
+      && candidate.normalizedLength < normalizedSummaryV3StyleLength(source) * strategy.minimumExistingSourceLengthRatio
+      && candidate.unitCount < countSummaryV3StyleUnits(source))
+  ) return 'style_not_fulfilled';
   return null;
 }
 
