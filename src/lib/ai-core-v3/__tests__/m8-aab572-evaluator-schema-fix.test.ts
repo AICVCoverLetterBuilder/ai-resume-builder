@@ -7,6 +7,7 @@ import {
   SUMMARY_V3_STYLE_M5_WRITER_PROVIDER_TOOL,
   SUMMARY_V3_STYLE_M5_WRITER_TOOL_NAME,
   SUMMARY_V3_STYLE_M5_EVALUATOR_TOOL_NAME,
+  SUMMARY_V3_STYLE_M5_SHORTER_SERVER_DERIVED_EVIDENCE_FIELDS,
   countSummaryV3StyleClauses,
   countSummaryV3StyleUnits,
   normalizedSummaryV3StyleLength,
@@ -134,6 +135,11 @@ function providerMessage(invocation: SummaryV3StyleProviderInvocation): unknown 
   if (!('candidate' in input)) throw new Error('expected evaluator input');
   const evidence = styleEvidence(input.style) as Record<string, unknown>;
   delete evidence.style;
+  if (input.style === 'shorter') {
+    for (const field of SUMMARY_V3_STYLE_M5_SHORTER_SERVER_DERIVED_EVIDENCE_FIELDS) {
+      delete evidence[field];
+    }
+  }
   return {
     stop_reason: 'tool_use',
     content: [{

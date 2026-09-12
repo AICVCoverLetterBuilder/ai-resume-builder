@@ -1,8 +1,12 @@
 import {
   SUMMARY_V3_STYLE_M5_EVALUATOR_TOOL_NAME,
+  SUMMARY_V3_STYLE_M5_SHORTER_SERVER_DERIVED_EVIDENCE_FIELDS,
+  SUMMARY_V3_STYLE_STRATEGIES,
   SUMMARY_V3_STYLE_M5_WRITER_TOOL_NAME,
-  SUMMARY_V3_STYLE_M5_WRITER_TOOL,
   SUMMARY_V3_STYLE_M5_WRITER_PROVIDER_TOOL,
+  countSummaryV3StyleClauses,
+  countSummaryV3StyleUnits,
+  normalizedSummaryV3StyleLength,
   projectSummaryV3StyleEvaluatorToolForProvider,
   summaryV3StyleCandidateUnitHash,
   type SummaryV3StyleProviderTool,
@@ -271,7 +275,35 @@ export function normalizeSummaryV3StyleEvaluatorProviderResponse(
   if (!hasExactKeys(normalizedRaw, EVALUATOR_PROVIDER_KEYS)) return envelope;
   if (!isRecord(normalizedRaw.styleEvidence)) return envelope;
 
-  const styleEvidence = { ...normalizedRaw.styleEvidence, style: input.style };
+  let styleEvidence: Record<string, unknown>;
+  if (input.style === 'shorter') {
+    const providerKeys = SUMMARY_V3_STYLE_STRATEGIES.shorter.requiredEvidenceKeys.filter(
+      (key) => key !== 'style'
+        && !SUMMARY_V3_STYLE_M5_SHORTER_SERVER_DERIVED_EVIDENCE_FIELDS.includes(
+          key as typeof SUMMARY_V3_STYLE_M5_SHORTER_SERVER_DERIVED_EVIDENCE_FIELDS[number],
+        ),
+    );
+    if (!hasExactKeys(normalizedRaw.styleEvidence, providerKeys)) return envelope;
+    const sourceNormalizedLength = normalizedSummaryV3StyleLength(input.sourceText);
+    const candidateNormalizedLength = input.candidate.normalizedLength;
+    const lengthDelta = sourceNormalizedLength - candidateNormalizedLength;
+    styleEvidence = {
+      ...normalizedRaw.styleEvidence,
+      style: input.style,
+      sourceNormalizedLength,
+      candidateNormalizedLength,
+      lengthDelta,
+      lengthDeltaPercent: sourceNormalizedLength > 0 ? lengthDelta / sourceNormalizedLength : 0,
+      sourceUnitCount: countSummaryV3StyleUnits(input.sourceText),
+      candidateUnitCount: input.candidate.unitCount,
+      sourceClauseCount: countSummaryV3StyleClauses(input.sourceText),
+      candidateClauseCount: input.candidate.clauseCount,
+      factCoverage: Array.isArray(normalizedRaw.missingFactIdHashes)
+        && normalizedRaw.missingFactIdHashes.length === 0,
+    };
+  } else {
+    styleEvidence = { ...normalizedRaw.styleEvidence, style: input.style };
+  }
   const phases: Record<string, unknown> = {};
   for (const phase of ['structural', 'semantic_grounding', 'language_native_quality', 'style_fulfillment'] as const) {
     phases[phase] = {

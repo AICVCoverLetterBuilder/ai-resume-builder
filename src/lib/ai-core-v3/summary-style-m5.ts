@@ -759,6 +759,24 @@ export interface SummaryV3StyleEvaluatorReferenceDomain {
   readonly allowedUnitHashes: readonly string[];
 }
 
+/**
+ * These Shorter measurements are deterministic functions of the immutable
+ * evaluator input and its provider-owned missing-fact partition. Omitting
+ * them from the strict Anthropic grammar keeps the active wire bounded; the
+ * single response adapter rehydrates them before the full local parser runs.
+ */
+export const SUMMARY_V3_STYLE_M5_SHORTER_SERVER_DERIVED_EVIDENCE_FIELDS = [
+  'sourceNormalizedLength',
+  'candidateNormalizedLength',
+  'lengthDelta',
+  'lengthDeltaPercent',
+  'sourceUnitCount',
+  'candidateUnitCount',
+  'sourceClauseCount',
+  'candidateClauseCount',
+  'factCoverage',
+] as const;
+
 const SUMMARY_V3_STYLE_PROVIDER_UNSUPPORTED_KEYS = new Set([
   'minimum',
   'maximum',
@@ -955,7 +973,15 @@ export function projectSummaryV3StyleEvaluatorToolForProvider(
   const styleEvidenceRequired = stringArray(styleEvidence?.required);
   if (styleEvidence && styleEvidenceProperties && styleEvidenceRequired) {
     delete styleEvidenceProperties.style;
-    styleEvidence.required = styleEvidenceRequired.filter((field) => field !== 'style');
+    const serverDerived = activeStyle === 'shorter'
+      ? new Set<string>(SUMMARY_V3_STYLE_M5_SHORTER_SERVER_DERIVED_EVIDENCE_FIELDS)
+      : null;
+    if (serverDerived) {
+      for (const field of serverDerived) delete styleEvidenceProperties[field];
+    }
+    styleEvidence.required = styleEvidenceRequired.filter(
+      (field) => field !== 'style' && !serverDerived?.has(field),
+    );
   }
 
   const phases = schemaRecord(properties.phases);
