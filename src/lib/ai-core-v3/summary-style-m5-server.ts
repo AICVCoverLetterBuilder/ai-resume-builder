@@ -30,6 +30,7 @@ import {
   summaryV3StyleCalendarDateRanges,
   summaryV3StyleCandidateRepresentsRequiredFacts,
   summaryV3StyleCandidateUnitsRepresentDeclaredFacts,
+  summaryV3StyleLocalSemanticDecision,
   summaryV3StyleCandidatePreservesLocks,
   summaryV3StyleDurationMonthsFromSemanticSpan,
   summaryV3StyleFactAnchorTokens,
@@ -1514,12 +1515,18 @@ function hasUnsupportedCandidateSemanticMaterial(
       const sourceRelationAnchors = new Set(summaryV3StyleFactAnchorTokens(sourceRelation));
       const unmatchedKeywords = relationKeywords.filter((keyword) => !sourceRelationAnchors.has(keyword));
       return relationSpans.every((span) => semanticSpanHasEquivalentSourceAuthority(span, sourceRelationSpans))
-        && (unmatchedKeywords.length === 0 || candidateRelationUsesMarkedPredicateReplacement(
-          snapshot,
-          sourceRelation,
-          candidateRelation,
-          unmatchedKeywords,
-        ));
+        && (unmatchedKeywords.length === 0
+          // Shorter predicate wording is deliberately evaluator-owned once
+          // immutable numeric/duration authority is intact. Numeric result
+          // nouns remain a deterministic local ceiling.
+          || (snapshot.style === 'shorter'
+            && !unmatchedKeywords.some((keyword) => MATERIAL_NUMERIC_RELATION_TERMS.has(keyword)))
+          || candidateRelationUsesMarkedPredicateReplacement(
+            snapshot,
+            sourceRelation,
+            candidateRelation,
+            unmatchedKeywords,
+          ));
     });
     if (!relationIsGrounded) return true;
   }
@@ -1682,9 +1689,22 @@ function classifyWriterOutputContractFailure(
   if (coverage.missingFactCount > 0) return 'required_fact_coverage';
   if (!summaryV3StyleCandidatePreservesLocks(snapshot, candidate.text)) return 'source_lock_preservation';
   if (!summaryV3StyleCandidatePreservesCalendarDateSurfaces(snapshot, candidate.text)) return 'calendar_date_source_floor';
-  if (!summaryV3StyleCandidatePreservesExactMaterialSurfaces(snapshot, candidate.text)) return 'exact_material_source_floor';
+  // Title-cased duty nouns (for example German `Systeme`) are not immutable
+  // identity locks.  In Shorter they may be paraphrased and must reach the
+  // single evaluator; role/employer/duration/date and explicit contradictions
+  // remain deterministic checks above and below.  Other styles retain the
+  // established exact material-surface floor.
+  if (snapshot.style !== 'shorter'
+    && !summaryV3StyleCandidatePreservesExactMaterialSurfaces(snapshot, candidate.text)) return 'exact_material_source_floor';
   if (!summaryV3StyleCandidatePreservesEntityFactBindings(snapshot, candidate.text)) return 'entity_fact_binding_preservation';
-  if (!summaryV3StyleCandidateRepresentsRequiredFacts(snapshot, candidate.text)) return 'candidate_source_floor';
+  // Shorter predicate paraphrase is intentionally tri-state. Only a
+  // deterministic local invalid decision may fail at the writer boundary;
+  // unresolved equivalence must reach the single strict evaluator.
+  if (snapshot.style === 'shorter') {
+    if (summaryV3StyleLocalSemanticDecision(snapshot, candidate.text) === 'invalid') return 'candidate_source_floor';
+  } else if (!summaryV3StyleCandidateRepresentsRequiredFacts(snapshot, candidate.text)) {
+    return 'candidate_source_floor';
+  }
   if (!summaryV3StyleCandidateUnitsRepresentDeclaredFacts(snapshot, candidate)) return 'unit_declared_fact_binding';
   return null;
 }

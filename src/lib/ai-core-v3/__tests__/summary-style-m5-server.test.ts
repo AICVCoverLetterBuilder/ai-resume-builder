@@ -1507,13 +1507,28 @@ describe('M5 shared injected Summary style server executor', () => {
   });
 
   it('keeps the automatic source-unit floor strict when optional page annotations are absent', async () => {
+    let evaluatorCalls = 0;
     const result = await executeSummaryV3StyleServer({ ...requestFor('shorter'), visibleSummaryFacts: undefined }, {
       async write(input) {
         return writerEnvelope(input, 'Ava Patel, Product Engineer at Atlas, builds reliable APIs and improved delivery by 20% over 24 months.');
       },
-      async evaluate() { return {}; },
+      async evaluate(input) {
+        evaluatorCalls += 1;
+        const missing = input.requiredFacts[input.requiredFacts.length - 1]!;
+        const phases = passingPhases();
+        phases.semantic_grounding = {
+          status: 'failed',
+          violations: [{ code: 'missing_fact', factIdHashes: [missing.hash], unitHashes: input.candidate.units.map(summaryV3StyleCandidateUnitHash), repairable: false }],
+        };
+        return evaluatorEnvelope(input, {
+          representedFactIdHashes: input.requiredFacts.filter((fact) => fact.hash !== missing.hash).map((fact) => fact.hash),
+          missingFactIdHashes: [missing.hash],
+          phases,
+        });
+      },
     });
-    expect(result).toMatchObject({ kind: 'handled_failure', typedReason: 'lost_source_fact' });
+    expect(result).toMatchObject({ kind: 'handled_failure', typedReason: 'lost_source_fact', evidence: { evaluatorReached: true } });
+    expect(evaluatorCalls).toBe(1);
   });
 
   it('rejects loss of every automatic visible anchor even when writer fact labels claim complete coverage', async () => {
@@ -3511,10 +3526,23 @@ describe('M5 shared injected Summary style server executor', () => {
       },
     }, {
       async write(input) { return writerEnvelope(input, '現在、森はアトラスのソフトウェアエンジニアです。また、さらに森田は信頼性の高いAPIを構築しています。'); },
-      async evaluate() { evaluatorCalls += 1; return {}; },
+      async evaluate(input) {
+        evaluatorCalls += 1;
+        const missing = input.requiredFacts[input.requiredFacts.length - 1]!;
+        const phases = passingPhases();
+        phases.semantic_grounding = {
+          status: 'failed',
+          violations: [{ code: 'missing_fact', factIdHashes: [missing.hash], unitHashes: input.candidate.units.map(summaryV3StyleCandidateUnitHash), repairable: false }],
+        };
+        return evaluatorEnvelope(input, {
+          representedFactIdHashes: input.requiredFacts.filter((fact) => fact.hash !== missing.hash).map((fact) => fact.hash),
+          missingFactIdHashes: [missing.hash],
+          phases,
+        });
+      },
     });
-    expect(result).toMatchObject({ kind: 'handled_failure', typedReason: 'lost_source_fact' });
-    expect(evaluatorCalls).toBe(0);
+    expect(result).toMatchObject({ kind: 'handled_failure', typedReason: 'lost_source_fact', evidence: { evaluatorReached: true } });
+    expect(evaluatorCalls).toBe(1);
   });
 
   it('preserves an unannotated leading one-character Japanese subject identity before evaluator authority', async () => {

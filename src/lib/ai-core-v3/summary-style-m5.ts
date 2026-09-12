@@ -480,7 +480,12 @@ export const SUMMARY_V3_STYLE_STRATEGIES: Readonly<Record<SummaryV3Style, Summar
     requiresExistingSourceMateriality: true,
     requiresGroundedPredicateTransformation: false,
     minimumExistingSourceLengthRatio: 0,
-    writerContract: ['preserve every required fact', 'compress structurally', 'do not remove material facts'],
+    writerContract: [
+      'preserve every required fact',
+      'compress wording and sentence structure only; shorter never permits material fact deletion',
+      'retain every role, employer, duration, employment state, and duty predicate, including when combining duties into one concise clause',
+      'do not remove material facts',
+    ],
     requiredEvidenceKeys: [
       'style', 'semanticCompressionOperations', 'sourceNormalizedLength', 'candidateNormalizedLength', 'lengthDelta', 'lengthDeltaPercent',
       'sourceUnitCount', 'candidateUnitCount', 'sourceClauseCount', 'candidateClauseCount', 'factCoverage', 'shorterFulfilled', 'noOpDetected',
@@ -2008,6 +2013,60 @@ function candidateTextRepresentsFact(
   return hasGroundedReplacement;
 }
 
+export type SummaryV3StyleLocalSemanticDecision = 'represented' | 'invalid' | 'unresolved';
+
+/**
+ * Shorter has no local morphology, edit-distance, prefix, or synonym
+ * authority. Exact/structured evidence is conclusive; immutable numeric
+ * omissions are definitely invalid; every other material predicate is
+ * unresolved and must be judged by the existing strict evaluator.
+ */
+function shorterFactLocalSemanticDecision(
+  snapshot: SummaryV3StyleOperationSnapshot,
+  fact: SummaryV3StyleFact,
+  candidateText: string,
+): SummaryV3StyleLocalSemanticDecision {
+  if (summaryV3StyleContainsExactSurface(candidateText, fact.text)
+    || candidateTextPreservesEquivalentStructuredDurationFact(snapshot, fact.text, candidateText)) return 'represented';
+  const sourceAnchors = summaryV3StyleFactAnchorTokens(fact.text);
+  const candidateAnchors = new Set(summaryV3StyleFactAnchorTokens(candidateText));
+  const immutableNumericAnchors = sourceAnchors.filter((anchor) => /\p{N}/u.test(anchor) || anchor.startsWith('span:'));
+  if (immutableNumericAnchors.some((anchor) => !candidateAnchors.has(anchor))) return 'invalid';
+  return 'unresolved';
+}
+
+function candidateFactLocalSemanticDecision(
+  snapshot: SummaryV3StyleOperationSnapshot,
+  fact: SummaryV3StyleFact,
+  candidateText: string,
+): SummaryV3StyleLocalSemanticDecision {
+  if (snapshot.style === 'shorter' && snapshot.mode === 'enhance_existing_content') {
+    return shorterFactLocalSemanticDecision(snapshot, fact, candidateText);
+  }
+  return candidateTextRepresentsFact(snapshot, fact, candidateText) ? 'represented' : 'invalid';
+}
+
+/**
+ * Exposes only the bounded tri-state decision needed by diagnostics/tests.
+ * `unresolved` is intentionally not acceptance: it is the hand-off point to
+ * the one existing semantic evaluator.
+ */
+export function summaryV3StyleLocalSemanticDecision(
+  snapshot: SummaryV3StyleOperationSnapshot,
+  candidateText: string,
+): SummaryV3StyleLocalSemanticDecision {
+  if (snapshot.mode === 'generate_from_context') return 'represented';
+  if (snapshot.style !== 'shorter') {
+    return snapshot.requiredFacts.every((fact) => candidateTextRepresentsFact(snapshot, fact, candidateText))
+      ? 'represented'
+      : 'invalid';
+  }
+  const decisions = snapshot.requiredFacts.map((fact) => candidateFactLocalSemanticDecision(snapshot, fact, candidateText));
+  if (decisions.some((decision) => decision === 'invalid')) return 'invalid';
+  if (decisions.some((decision) => decision === 'unresolved')) return 'unresolved';
+  return 'represented';
+}
+
 /**
  * Bounded lexical fallback over a caller-supplied Stronger fact scope. The
  * whole-candidate caller requires at least two changed facts; the per-unit
@@ -2101,15 +2160,15 @@ export function summaryV3StyleCandidatePreservesEntityFactBindings(
     const segments = candidateRelationSegments(candidateText, entity.value, entityValues);
     return segments.some((segment) => binding.sourceFactHashes.every((factHash) => {
       const fact = factsByHash.get(factHash);
-      return !!fact && candidateTextRepresentsFact(snapshot, fact, segment);
+      return !!fact && candidateFactLocalSemanticDecision(snapshot, fact, segment) !== 'invalid';
     }));
   });
 }
 
 /**
- * Writer fact labels are transport metadata, never preservation proof.  This
- * conservative lexical floor independently catches material source omissions;
- * the injected evaluator receives the raw authority for semantic validation.
+ * Writer fact labels are transport metadata, never preservation proof. Exact
+ * immutable locks are checked locally, while unresolved Shorter predicate
+ * equivalence is passed to the single evaluator.
  */
 export function summaryV3StyleCandidateRepresentsRequiredFacts(
   snapshot: SummaryV3StyleOperationSnapshot,
@@ -2121,6 +2180,9 @@ export function summaryV3StyleCandidateRepresentsRequiredFacts(
   // multilingual representation authority. The literal preservation floor is
   // intentionally limited to visible-summary transformation mode.
   if (snapshot.mode === 'generate_from_context') return true;
+  if (snapshot.style === 'shorter') {
+    return summaryV3StyleLocalSemanticDecision(snapshot, candidateText) === 'represented';
+  }
   return snapshot.requiredFacts.every((fact) => candidateTextRepresentsFact(snapshot, fact, candidateText))
     || candidateRepresentsUnmarkedMultiFactStrongerParaphrase(snapshot, candidateText);
 }
@@ -2136,11 +2198,16 @@ export function summaryV3StyleCandidateUnitsRepresentDeclaredFacts(
 ): boolean {
   if (snapshot.mode === 'generate_from_context') return true;
   const factsById = new Map(snapshot.requiredFacts.map((fact) => [fact.id, fact] as const));
-  if (!summaryV3StyleCandidateRepresentsRequiredFacts(snapshot, candidate.text)) return false;
+  if (snapshot.style === 'shorter'
+    && summaryV3StyleLocalSemanticDecision(snapshot, candidate.text) === 'invalid') return false;
+  if (snapshot.style !== 'shorter' && !summaryV3StyleCandidateRepresentsRequiredFacts(snapshot, candidate.text)) return false;
   return candidate.units.every((unit) => {
     const declaredFacts = unit.factIds.map((factId) => factsById.get(factId));
     if (declaredFacts.some((fact) => !fact)) return false;
     const boundedFacts = declaredFacts as readonly SummaryV3StyleFact[];
+    if (snapshot.style === 'shorter') {
+      return boundedFacts.every((fact) => candidateFactLocalSemanticDecision(snapshot, fact, unit.text) !== 'invalid');
+    }
     return boundedFacts.every((fact) => candidateTextRepresentsFact(snapshot, fact, unit.text))
       || candidateRepresentsBoundedStrongerParaphrase(snapshot, boundedFacts, unit.text, 1);
   });
