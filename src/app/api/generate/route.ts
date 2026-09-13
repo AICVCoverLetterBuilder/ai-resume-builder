@@ -104,9 +104,9 @@ import type {
   ExperienceV3EnhanceWriterResponse,
 } from '@/lib/ai-core-v3/experience-enhance-server';
 import {
-  SUMMARY_V3_INITIAL_EVALUATOR_TIMEOUT_MS,
   SUMMARY_V3_INITIAL_WRITER_TIMEOUT_MS,
   classifySummaryV3ProviderFailure,
+  computeSummaryV3InitialEvaluatorTimeoutMs,
   computeSummaryV3ServerDeadline,
   type SummaryV3WriterResponse,
 } from '@/lib/ai-core-v3/summary-generate-server';
@@ -2307,8 +2307,11 @@ Rules:
           let response: Anthropic.Messages.Message;
           try {
             const timeoutMs = phase === 'initial_evaluator'
-              ? SUMMARY_V3_INITIAL_EVALUATOR_TIMEOUT_MS
+              ? computeSummaryV3InitialEvaluatorTimeoutMs(deadlineAt)
               : AI_PROVIDER_CALL_TIMEOUT_MS;
+            if (timeoutMs === null) {
+              throw new Error('M4 initial evaluator has no safe dispatch window');
+            }
             response = await callWithRetry(request, deadlineAt, undefined, timeoutMs, 'verifier', undefined, false);
           } catch (error) {
             throw createSummaryV3ProviderTransportError(error, phase, 'sdk_request');

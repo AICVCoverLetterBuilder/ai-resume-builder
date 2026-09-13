@@ -47,9 +47,11 @@ export const SUMMARY_V3_WRITER_UNIT_CONTRACT = [
  * Summary M4 has a dedicated deadline authority. The former 11_500ms value
  * was an accidental alias of the unrelated Experience-localization verifier
  * timeout and was physically reached by AAB581 during initial-writer transport.
- * Keep one explicit reserve after the writer, evaluator, and terminal work:
- * 38_000 - 20_000 - 4_000 - 1_000 = 13_000ms.
+ * Keep one explicit reserve after evaluator and terminal work. The writer
+ * retains its proven 13_000ms hard maximum; an evaluator that starts early
+ * may consume the unused writer slack, but never the post-evaluator reserve.
  */
+/** Historical fixed evaluator slice retained for frozen evidence and controls. */
 export const SUMMARY_V3_INITIAL_EVALUATOR_TIMEOUT_MS = 20_000;
 export const SUMMARY_V3_POST_PROCESSING_HEADROOM_MS = 4_000;
 export const SUMMARY_V3_SERVER_BUDGET_MS = 38_000;
@@ -59,6 +61,33 @@ export const SUMMARY_V3_INITIAL_WRITER_TIMEOUT_MS =
   - SUMMARY_V3_INITIAL_EVALUATOR_TIMEOUT_MS
   - SUMMARY_V3_POST_PROCESSING_HEADROOM_MS
   - SUMMARY_V3_INITIAL_WRITER_RESERVE_MS;
+/** Explicit terminal reserve that must remain after the evaluator response. */
+export const SUMMARY_V3_POST_EVALUATOR_RESERVE_MS = SUMMARY_V3_POST_PROCESSING_HEADROOM_MS;
+/** One millisecond dispatch cushion prevents an exact-boundary timer race. */
+export const SUMMARY_V3_EVALUATOR_DISPATCH_SAFETY_MS = 1;
+/** Maximum evaluator transport slice when all writer slack is available. */
+export const SUMMARY_V3_INITIAL_EVALUATOR_HARD_MAX_MS =
+  SUMMARY_V3_SERVER_BUDGET_MS
+  - SUMMARY_V3_POST_EVALUATOR_RESERVE_MS
+  - SUMMARY_V3_EVALUATOR_DISPATCH_SAFETY_MS;
+export const SUMMARY_V3_MIN_PROVIDER_DISPATCH_MS = 1_000;
+
+/**
+ * Resolve the active M4 initial-evaluator slice from the remaining outer
+ * deadline. A null result fails closed when there is no safe dispatch window.
+ */
+export function computeSummaryV3InitialEvaluatorTimeoutMs(
+  deadlineAt: number | null | undefined,
+  now = Date.now(),
+): number | null {
+  if (deadlineAt == null) return SUMMARY_V3_INITIAL_EVALUATOR_HARD_MAX_MS;
+  const remaining = Math.max(0, deadlineAt - now);
+  const available = remaining
+    - SUMMARY_V3_POST_EVALUATOR_RESERVE_MS
+    - SUMMARY_V3_EVALUATOR_DISPATCH_SAFETY_MS;
+  if (available < SUMMARY_V3_MIN_PROVIDER_DISPATCH_MS) return null;
+  return Math.min(SUMMARY_V3_INITIAL_EVALUATOR_HARD_MAX_MS, available);
+}
 /** Must stay synchronized with the static Next route export. */
 export const SUMMARY_V3_ROUTE_MAX_DURATION_S = 45;
 export const SUMMARY_V3_PLATFORM_HEADROOM_MS =

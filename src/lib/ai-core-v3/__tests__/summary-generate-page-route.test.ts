@@ -20,6 +20,7 @@ import {
   SUMMARY_V3_WRITER_TOOL_NAME,
   SUMMARY_V3_WRITER_UNIT_CONTRACT,
   SUMMARY_V3_INITIAL_EVALUATOR_TIMEOUT_MS,
+  SUMMARY_V3_INITIAL_EVALUATOR_HARD_MAX_MS,
   SUMMARY_V3_INITIAL_WRITER_RESERVE_MS,
   SUMMARY_V3_INITIAL_WRITER_TIMEOUT_MS,
   SUMMARY_V3_POST_PROCESSING_HEADROOM_MS,
@@ -690,7 +691,7 @@ describe('M4 Summary timeout budget closure', () => {
         expect(run.response.status).toBe(200);
         expect(run.requests).toHaveLength(2);
         expect(run.requests[0].requestOptions).toMatchObject({ timeout: 13_000, maxRetries: 0 });
-        expect(run.requests[1].requestOptions).toMatchObject({ timeout: 20_000, maxRetries: 0 });
+        expect(run.requests[1].requestOptions).toMatchObject({ timeout: SUMMARY_V3_INITIAL_EVALUATOR_HARD_MAX_MS, maxRetries: 0 });
         expect(run.body.providerOutput).toBeDefined();
         expect(run.body.candidate).toBeDefined();
         expect(run.body.validation).toMatchObject({ decision: 'accept', phases: {
@@ -705,7 +706,7 @@ describe('M4 Summary timeout budget closure', () => {
     }
   });
 
-  it('fails closed when the initial evaluator exceeds 20000ms without repair, retry, or candidate authority', async () => {
+  it('accepts a delayed initial evaluator beyond the former 20000ms slice without repair or retry', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
     try {
@@ -715,18 +716,12 @@ describe('M4 Summary timeout budget closure', () => {
       await evaluatorStarted;
       await vi.advanceTimersByTimeAsync(20_001);
       const run = await pending;
-      expect(run.response.status).toBe(502);
+      expect(run.response.status).toBe(200);
       expect(run.requests).toHaveLength(2);
-      expect(run.requests.map((request) => request.requestOptions?.timeout)).toEqual([13_000, 20_000]);
-      expect(run.body).toMatchObject({ ok: false, typedReason: 'validator_exception', repairAttempted: false,
-        m4ProviderFailure: { phase: 'initial_evaluator', failureStage: 'sdk_request',
-          providerErrorType: 'timeout', providerRetryable: false, providerHttpStatus: null,
-          providerHttpResponseReceived: null } });
-      expect(run.body.candidate).toBeUndefined();
-      expect(run.body.providerOutput).toBeUndefined();
-      expect(run.body.apply).toBeUndefined();
-      expect(run.body.persistence).toBeUndefined();
-      expect(run.body.incrementUsage).toBeUndefined();
+      expect(run.requests.map((request) => request.requestOptions?.timeout)).toEqual([13_000, SUMMARY_V3_INITIAL_EVALUATOR_HARD_MAX_MS]);
+      expect(run.body).toMatchObject({ ok: true, repairAttempted: false });
+      expect(run.body.candidate).toBeDefined();
+      expect(run.body.providerOutput).toBeDefined();
     } finally {
       vi.useRealTimers();
     }
@@ -739,7 +734,7 @@ describe('M4 Summary timeout budget closure', () => {
       const run = await forcedToolDirectRoute({ forceRepair: true });
       expect(run.response.status).toBe(200);
       expect(run.requests).toHaveLength(4);
-      expect(run.requests.map((request) => request.requestOptions?.timeout)).toEqual([13_000, 20_000, 8_000, 8_000]);
+      expect(run.requests.map((request) => request.requestOptions?.timeout)).toEqual([13_000, SUMMARY_V3_INITIAL_EVALUATOR_HARD_MAX_MS, 8_000, 8_000]);
       expect(run.requests.every((request) => request.requestOptions?.maxRetries === 0)).toBe(true);
     } finally {
       vi.useRealTimers();
@@ -757,18 +752,18 @@ describe('M4 Summary timeout budget closure', () => {
       const pending = forcedToolDirectRoute({
         routeEntryElapsedMs: 6_000,
         initialWriterDelayMs: 8_001,
-        initialEvaluatorDelayMs: 19_999,
+        initialEvaluatorDelayMs: 19_997,
         onInitialWriterStarted: writerStartedResolve,
         onInitialEvaluatorStarted: evaluatorStartedResolve,
       });
       await writerStarted;
       await vi.advanceTimersByTimeAsync(8_001);
       await evaluatorStarted;
-      await vi.advanceTimersByTimeAsync(19_999);
+      await vi.advanceTimersByTimeAsync(19_997);
       const run = await pending;
       expect(run.response.status).toBe(200);
-      expect(Date.now()).toBe(34_000);
-      expect(run.requests.map((request) => request.requestOptions?.timeout)).toEqual([13_000, 20_000]);
+      expect(Date.now()).toBe(33_998);
+      expect(run.requests.map((request) => request.requestOptions?.timeout)).toEqual([13_000, 19_998]);
     } finally {
       vi.useRealTimers();
     }
@@ -785,7 +780,7 @@ describe('M4 Summary timeout budget closure', () => {
       await vi.advanceTimersByTimeAsync(11_499);
       const run = await pending;
       expect(run.response.status).toBe(200);
-      expect(run.requests.map((request) => request.requestOptions?.timeout)).toEqual([13_000, 20_000]);
+      expect(run.requests.map((request) => request.requestOptions?.timeout)).toEqual([13_000, 22_500]);
       expect(run.body.candidate).toBeDefined();
     } finally {
       vi.useRealTimers();
