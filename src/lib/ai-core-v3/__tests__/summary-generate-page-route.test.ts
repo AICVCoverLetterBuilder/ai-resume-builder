@@ -727,14 +727,14 @@ describe('M4 Summary timeout budget closure', () => {
     }
   });
 
-  it('changes only the initial evaluator while repair phases remain on their 8000ms authorities', async () => {
+  it('uses one dynamic evaluator authority for initial and post-repair phases while repair writer stays at 8000ms', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
     try {
       const run = await forcedToolDirectRoute({ forceRepair: true });
       expect(run.response.status).toBe(200);
       expect(run.requests).toHaveLength(4);
-      expect(run.requests.map((request) => request.requestOptions?.timeout)).toEqual([13_000, SUMMARY_V3_INITIAL_EVALUATOR_HARD_MAX_MS, 8_000, 8_000]);
+      expect(run.requests.map((request) => request.requestOptions?.timeout)).toEqual([13_000, SUMMARY_V3_INITIAL_EVALUATOR_HARD_MAX_MS, 8_000, SUMMARY_V3_INITIAL_EVALUATOR_HARD_MAX_MS]);
       expect(run.requests.every((request) => request.requestOptions?.maxRetries === 0)).toBe(true);
     } finally {
       vi.useRealTimers();

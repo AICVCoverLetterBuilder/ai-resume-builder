@@ -73,10 +73,12 @@ export const SUMMARY_V3_INITIAL_EVALUATOR_HARD_MAX_MS =
 export const SUMMARY_V3_MIN_PROVIDER_DISPATCH_MS = 1_000;
 
 /**
- * Resolve the active M4 initial-evaluator slice from the remaining outer
- * deadline. A null result fails closed when there is no safe dispatch window.
+ * Resolve the active M4 evaluator slice from the remaining outer deadline.
+ * Both initial and post-repair evaluation use this authority because they are
+ * the same independent verifier class. A null result fails closed when there
+ * is no safe dispatch window after the terminal reserve.
  */
-export function computeSummaryV3InitialEvaluatorTimeoutMs(
+export function computeSummaryV3EvaluatorTimeoutMs(
   deadlineAt: number | null | undefined,
   now = Date.now(),
 ): number | null {
@@ -88,6 +90,7 @@ export function computeSummaryV3InitialEvaluatorTimeoutMs(
   if (available < SUMMARY_V3_MIN_PROVIDER_DISPATCH_MS) return null;
   return Math.min(SUMMARY_V3_INITIAL_EVALUATOR_HARD_MAX_MS, available);
 }
+
 /** Must stay synchronized with the static Next route export. */
 export const SUMMARY_V3_ROUTE_MAX_DURATION_S = 45;
 export const SUMMARY_V3_PLATFORM_HEADROOM_MS =

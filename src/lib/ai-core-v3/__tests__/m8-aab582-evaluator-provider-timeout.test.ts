@@ -13,7 +13,7 @@ import {
   SUMMARY_V3_POST_PROCESSING_HEADROOM_MS,
   SUMMARY_V3_ROUTE_MAX_DURATION_S,
   SUMMARY_V3_SERVER_BUDGET_MS,
-  computeSummaryV3InitialEvaluatorTimeoutMs,
+  computeSummaryV3EvaluatorTimeoutMs,
 } from '../summary-generate-server';
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -29,7 +29,7 @@ async function runEvaluator(
 }> {
   const deadlineAt = SUMMARY_V3_SERVER_BUDGET_MS;
   vi.setSystemTime(writerElapsedMs);
-  const timeoutMs = computeSummaryV3InitialEvaluatorTimeoutMs(deadlineAt);
+  const timeoutMs = computeSummaryV3EvaluatorTimeoutMs(deadlineAt);
   const create = vi.fn(async (_options: ProviderCallOptions) => {
     await delay(evaluatorDelayMs);
     return 'evaluator-ok';
@@ -61,11 +61,11 @@ describe('M8 AAB582 initial-evaluator provider timeout repair', () => {
   });
 
   it('reuses early-writer slack while leaving the explicit post-evaluator reserve', () => {
-    expect(computeSummaryV3InitialEvaluatorTimeoutMs(SUMMARY_V3_SERVER_BUDGET_MS, 0)).toBe(33_999);
-    expect(computeSummaryV3InitialEvaluatorTimeoutMs(SUMMARY_V3_SERVER_BUDGET_MS, 5_489)).toBe(28_510);
-    expect(computeSummaryV3InitialEvaluatorTimeoutMs(SUMMARY_V3_SERVER_BUDGET_MS, 12_999)).toBe(21_000);
-    expect(computeSummaryV3InitialEvaluatorTimeoutMs(SUMMARY_V3_SERVER_BUDGET_MS, 13_000)).toBe(20_999);
-    expect(computeSummaryV3InitialEvaluatorTimeoutMs(SUMMARY_V3_SERVER_BUDGET_MS, 34_001)).toBeNull();
+    expect(computeSummaryV3EvaluatorTimeoutMs(SUMMARY_V3_SERVER_BUDGET_MS, 0)).toBe(33_999);
+    expect(computeSummaryV3EvaluatorTimeoutMs(SUMMARY_V3_SERVER_BUDGET_MS, 5_489)).toBe(28_510);
+    expect(computeSummaryV3EvaluatorTimeoutMs(SUMMARY_V3_SERVER_BUDGET_MS, 12_999)).toBe(21_000);
+    expect(computeSummaryV3EvaluatorTimeoutMs(SUMMARY_V3_SERVER_BUDGET_MS, 13_000)).toBe(20_999);
+    expect(computeSummaryV3EvaluatorTimeoutMs(SUMMARY_V3_SERVER_BUDGET_MS, 34_001)).toBeNull();
   });
 
   it('accepts the physical-like evaluator at 19,999ms and the repaired 20,001ms case', async () => {
@@ -125,7 +125,7 @@ describe('M8 AAB582 initial-evaluator provider timeout repair', () => {
   });
 
   it('fails closed without dispatch when the explicit reserve leaves no provider window', () => {
-    expect(computeSummaryV3InitialEvaluatorTimeoutMs(38_000, 37_001)).toBeNull();
-    expect(computeSummaryV3InitialEvaluatorTimeoutMs(38_000, 37_000)).toBeNull();
+    expect(computeSummaryV3EvaluatorTimeoutMs(38_000, 37_001)).toBeNull();
+    expect(computeSummaryV3EvaluatorTimeoutMs(38_000, 37_000)).toBeNull();
   });
 });
