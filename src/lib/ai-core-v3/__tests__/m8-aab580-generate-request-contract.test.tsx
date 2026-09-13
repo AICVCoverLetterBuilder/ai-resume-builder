@@ -77,7 +77,7 @@ function requireMutableManifest(body: MutableWire): MutableWireManifest {
 // (store/auth/provider/fetch transport) are injected; the wire body is never repaired.
 async function physicalFlow(options: {
   locale?: Locale; fingerprint?: unknown; mutate?: (body: MutableWire) => void;
-  providerFailure?: 'writer' | 'evaluator'; missingDuty?: number;
+  providerFailure?: 'writer' | 'evaluator'; missingDuty?: number; repairMissingDuty?: boolean;
 } = {}) {
   cleanup(); localStorage.clear(); sessionStorage.clear();
   const locale = options.locale ?? 'en';
@@ -88,6 +88,7 @@ async function physicalFlow(options: {
   let responseBody: Record<string, unknown> = {};
   let writerCalls = 0;
   let evaluatorCalls = 0;
+  let repairTargetReceived = false;
   const success = vi.fn();
   const error = vi.fn();
   const fixedDate = new Date('2026-09-12T20:38:02.718Z');
@@ -135,19 +136,32 @@ async function physicalFlow(options: {
         if (evaluator) evaluatorCalls += 1; else writerCalls += 1;
         if (options.providerFailure === (evaluator ? 'evaluator' : 'writer')) throw new Error('controlled provider failure');
         const manifest = (JSON.parse(wire) as Wire).manifest;
-        const text = options.missingDuty === undefined ? candidate
+        if (!evaluator && writerCalls === 2 && options.repairMissingDuty) {
+          const repair = JSON.parse(params.messages[0].content.split('\n').at(-1)!);
+          expect(repair.repairEvidence.failedCheckIds).toEqual(['factRetention']);
+          expect(repair.violations[0].factIds).toEqual([manifest.selectedEntries[0].facts[options.missingDuty!].factId]);
+          expect(repair.violations[0].entryIds).toEqual([manifest.currentRoleEntryId]);
+          repairTargetReceived = true;
+        }
+        const text = options.missingDuty === undefined || repairTargetReceived ? candidate
           : candidate.replace([
             'carry out maintenance work on electrical systems, ',
             'locate and resolve faults in electrical systems, ',
             'as well as support the installation of electrical components',
           ][options.missingDuty], '');
-        const rejected = options.missingDuty !== undefined;
+        // Human-labelled fixture surfaces model the external semantic judge.
+        // Inspect the actual evaluator request so acceptance cannot depend only
+        // on call number or a canned second-pass success response.
+        const evaluatedText = evaluator ? JSON.parse(params.messages[0].content.split('\n').at(-1)!).candidate.text : '';
+        const rejected = options.missingDuty !== undefined && evaluatedText !== candidate;
         const input = evaluator ? {
           operationId: manifest.operationId, snapshotHash: manifest.sourceSnapshotHash, locale: manifest.targetLocale,
           phases: {
             semantic: rejected ? { status: 'failed', violations: [{
               code: 'missing_fact', category: 'semantic',
-              detail: manifest.selectedEntries[0].facts[options.missingDuty!].factId,
+              detail: 'Restore the missing material duty from its bound source fact.',
+              factIds: [manifest.selectedEntries[0].facts[options.missingDuty!].factId],
+              entryIds: [manifest.currentRoleEntryId],
             }] } : { status: 'passed', violations: [] },
             language_quality: { status: 'passed', violations: [] },
           },
@@ -188,7 +202,7 @@ async function physicalFlow(options: {
   await waitFor(() => expect(success.mock.calls.length + error.mock.calls.length).toBeGreaterThan(0), { timeout: 15000 });
   const editor = document.querySelector('[data-summary-v3-editor]') as HTMLTextAreaElement;
   return { wire, responseStatus, responseBody, writerCalls, evaluatorCalls,
-    usage, visible: editor.value, success: success.mock.calls.length };
+    usage, visible: editor.value, success: success.mock.calls.length, repairTargetReceived };
 }
 
 afterEach(() => {
@@ -199,6 +213,20 @@ afterEach(() => {
 });
 
 describe('AAB580 real page / serialized M4 / actual route request contract', () => {
+  it.each([['maintenance', 0], ['fault diagnosis/resolution', 1], ['installation support', 2]] as const)(
+    'AAB584 restores missing %s through actual route, rendered apply and usage', async (_name, missingDuty) => {
+      const run = await physicalFlow({ missingDuty, repairMissingDuty: true });
+      expect(run.repairTargetReceived).toBe(true);
+      expect(run.writerCalls).toBe(2);
+      expect(run.evaluatorCalls).toBe(2);
+      expect(run.responseStatus).toBe(200);
+      expect(run.responseBody).toMatchObject({ ok: true, repairAttempted: true,
+        validation: { decision: 'accept', phases: { structural: { status: 'passed' },
+          semantic: { status: 'passed' }, language_quality: { status: 'passed' } } } });
+      expect(run.usage).toBe(7);
+      expect(run.visible).toBe(candidate);
+      expect(run.success).toBe(1);
+    }, 30000);
   it('accepts the physical empty Summary request including internal fingerprint metadata', async () => {
     const run = await physicalFlow();
     const body = JSON.parse(run.wire) as Wire;

@@ -113,12 +113,15 @@ interface EvaluatorPayload {
   readonly checks: Readonly<Record<SummaryEvaluatorCheck, boolean>>;
 }
 
+const SUMMARY_EVALUATOR_CHECKS_BY_PHASE = {
+  semantic: ['factRetention', 'entryOwnership', 'currentPriorSeparation', 'unsupportedClaimsAbsent',
+    'roleEmployerStateAccurate', 'durationMeaningAndScope', 'optionalAuthorityRespected'],
+  language_quality: ['targetLanguageAndScript', 'firstPersonPerspective', 'currentRoleTense', 'priorRoleTense',
+    'grammarAndClarity', 'duplicationAndDegradationAbsent', 'completeSummaryUsable'],
+} as const;
 const SUMMARY_EVALUATOR_CHECKS = [
-  'factRetention', 'entryOwnership', 'currentPriorSeparation', 'unsupportedClaimsAbsent',
-  'roleEmployerStateAccurate', 'durationMeaningAndScope', 'optionalAuthorityRespected',
-  'targetLanguageAndScript', 'firstPersonPerspective', 'currentRoleTense', 'priorRoleTense',
-  'grammarAndClarity', 'duplicationAndDegradationAbsent', 'completeSummaryUsable',
-] as const;
+  ...SUMMARY_EVALUATOR_CHECKS_BY_PHASE.semantic, ...SUMMARY_EVALUATOR_CHECKS_BY_PHASE.language_quality,
+];
 type SummaryEvaluatorCheck = (typeof SUMMARY_EVALUATOR_CHECKS)[number];
 
 const SAFE_PROVIDER_ERROR_CODES = new Set([
@@ -832,12 +835,41 @@ export function parseSummaryV3EvaluatorToolResponse(
 }
 
 function aggregate(manifest: SummaryV3Manifest, candidate: AiCoreV3CandidateEnvelope,
-  structural: ValidationPhaseResult, evaluator: EvaluatorPayload): AggregateValidationResult {
+  structural: ValidationPhaseResult, evaluator: EvaluatorPayload,
+  evidence: ReturnType<typeof buildSummaryV3RepairEvidence>): AggregateValidationResult {
   return runAiCoreV3Validation({ manifest, candidate }, {
     structural: () => structural,
-    semantic: () => ({ category: 'semantic', ...evaluator.phases.semantic }),
-    languageQuality: () => ({ category: 'language_quality', ...evaluator.phases.language_quality }),
+    semantic: () => ({ category: 'semantic', ...evaluator.phases.semantic,
+      violations: evidence.violations.filter((item) => item.category === 'semantic') }),
+    languageQuality: () => ({ category: 'language_quality', ...evaluator.phases.language_quality,
+      violations: evidence.violations.filter((item) => item.category === 'language_quality') }),
   });
+}
+
+/** Guidance from the existing evaluator, never a second validation decision. */
+function buildSummaryV3RepairEvidence(evaluator: EvaluatorPayload) {
+  const failedCheckIds = SUMMARY_EVALUATOR_CHECKS.filter((check) => !evaluator.checks[check]);
+  const violations = (['semantic', 'language_quality'] as const).flatMap((category) => {
+    const phase = evaluator.phases[category];
+    if (phase.status !== 'failed') return [...phase.violations];
+    // Keep provider evidence and bindings intact for repair. The supplemental code
+    // is finite and independent of provider prose, so existing safe diagnostics
+    // can retain a failure even when the provider code is not a safe enum token.
+    const checkViolations = SUMMARY_EVALUATOR_CHECKS_BY_PHASE[category]
+      .filter((check) => !evaluator.checks[check])
+      .map((check) => ({ category,
+        code: `evaluator_check_${check.replace(/[A-Z]/gu, (letter) => `_${letter.toLowerCase()}`)}`,
+        detail: `Existing evaluator check ${check} is false.`,
+      }));
+    return [...phase.violations, ...(checkViolations.length ? checkViolations : [{
+      category, code: `evaluator_${category}_rejected`,
+      detail: 'The existing evaluator rejected this phase; consult its violations and failedCheckIds.',
+    }])];
+  });
+  return immutableCopy({ failedCheckIds, violations }) as Readonly<{
+    failedCheckIds: readonly SummaryEvaluatorCheck[];
+    violations: readonly AiCoreV3Violation[];
+  }>;
 }
 
 export function buildSummaryV3WriterPrompt(manifest: SummaryV3Manifest): string {
@@ -869,18 +901,22 @@ export function buildSummaryV3EvaluatorPrompt(manifest: SummaryV3Manifest, candi
 }
 
 export function buildSummaryV3RepairPrompt(manifest: SummaryV3Manifest, candidate: AiCoreV3CandidateEnvelope,
-  violations: readonly AiCoreV3Violation[]): string {
+  violations: readonly AiCoreV3Violation[], failedCheckIds: readonly SummaryEvaluatorCheck[] = []): string {
   return [
     'Repair the candidate once using only the unchanged manifest and finite violations. Add no facts.',
+    'Use repairEvidence.failedCheckIds and each violation with its factIds/entryIds to target the correction. Bind supplied IDs to the unchanged manifest; never invent IDs or specifics.',
+    'For factRetention restore every missing material meaning, not merely its factId. Preserve unaffected duties, role, employer, employment state, and structured duration meaning.',
+    'Source and target languages may differ. Preserve meaning in the target locale; literal source-language wording is not required.',
+    'This evidence is guidance only. The existing post-repair evaluator must independently accept the repaired candidate.',
     `Invoke only the ${SUMMARY_V3_WRITER_TOOL_NAME} tool with the identical strict writer schema and identities. Do not emit text, Markdown, code fences, commentary, diagnostics, authority, or fallback prose.`,
     SUMMARY_V3_WRITER_UNIT_CONTRACT,
     JSON.stringify({ operationId: manifest.operationId, snapshotHash: manifest.sourceSnapshotHash,
-      locale: manifest.targetLocale, manifest, candidate, violations }),
+      locale: manifest.targetLocale, manifest, candidate, violations, repairEvidence: { failedCheckIds } }),
   ].join('\n');
 }
 
 type EvaluateCandidateResult =
-  | { readonly ok: true; readonly candidate: AiCoreV3CandidateEnvelope; readonly validation: AggregateValidationResult; readonly evaluatorMetadata: SummaryV3DiagnosticAttempt }
+  | { readonly ok: true; readonly candidate: AiCoreV3CandidateEnvelope; readonly validation: AggregateValidationResult; readonly evaluatorMetadata: SummaryV3DiagnosticAttempt; readonly failedCheckIds: readonly SummaryEvaluatorCheck[] }
   | { readonly ok: false; readonly typedReason: string; readonly evaluatorMetadata: SummaryV3DiagnosticAttempt; readonly m4ProviderFailure?: SummaryV3ProviderFailureEnvelope | null };
 
 async function evaluateCandidate(manifest: SummaryV3Manifest, output: SummaryV3WriterOutput,
@@ -909,7 +945,10 @@ async function evaluateCandidate(manifest: SummaryV3Manifest, output: SummaryV3W
   const evaluator = parseSummaryV3EvaluatorToolResponse(response, manifest);
   if (!evaluator.ok) return { ok: false, typedReason: evaluator.typedReason, evaluatorMetadata: evaluator.diagnosticMetadata,
     m4ProviderFailure: toolValidationFailure(phase, evaluator.typedReason) };
-  return { ok: true, candidate, validation: aggregate(manifest, candidate, structural, evaluator.value), evaluatorMetadata: evaluator.diagnosticMetadata };
+  const evidence = buildSummaryV3RepairEvidence(evaluator.value);
+  return { ok: true, candidate, validation: aggregate(manifest, candidate, structural, evaluator.value, evidence),
+    failedCheckIds: evidence.failedCheckIds,
+    evaluatorMetadata: evaluator.diagnosticMetadata };
 }
 
 export async function executeSummaryV3GenerateServer(
@@ -950,7 +989,7 @@ export async function executeSummaryV3GenerateServer(
   let repairResponse: SummaryV3WriterResponse;
   let repairPrompt: string;
   try {
-    repairPrompt = buildSummaryV3RepairPrompt(manifest, primary.candidate, violations);
+    repairPrompt = buildSummaryV3RepairPrompt(manifest, primary.candidate, violations, primary.failedCheckIds);
   } catch (error) {
     return failure('repair_provider_failed', primary.validation, true, primary.candidate, failedTransportEvidence(transportEvidence, 'writer'),
       classifySummaryV3ProviderFailure(error, 'repair_writer', 'request_construction'));
