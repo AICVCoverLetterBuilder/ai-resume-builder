@@ -2252,7 +2252,13 @@ Rules:
           typedReason: 'v3_feature_disabled',
         }, { status: 409 });
       }
-      const result = await executeSummaryV3GenerateServer(params, {
+      // authTokenFingerprintAtClick belongs to the authenticated request
+      // envelope and is consumed above for bounded internal diagnostics. It is
+      // not part of the strict M4 domain contract. Preserve every other key so
+      // parseSummaryV3GenerateRequest still rejects unknown domain material.
+      const summaryV3DomainRequest = { ...params };
+      Reflect.deleteProperty(summaryV3DomainRequest, 'authTokenFingerprintAtClick');
+      const result = await executeSummaryV3GenerateServer(summaryV3DomainRequest, {
         write: async (prompt, phase: SummaryV3ProviderPhase = 'initial_writer') => {
           let request: Parameters<Anthropic['messages']['create']>[0];
           try {
