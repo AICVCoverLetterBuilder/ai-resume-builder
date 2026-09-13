@@ -20,6 +20,7 @@ import {
   SUMMARY_V3_WRITER_TOOL_NAME,
   SUMMARY_V3_WRITER_UNIT_CONTRACT,
   SUMMARY_V3_INITIAL_EVALUATOR_TIMEOUT_MS,
+  SUMMARY_V3_INITIAL_WRITER_RESERVE_MS,
   SUMMARY_V3_INITIAL_WRITER_TIMEOUT_MS,
   SUMMARY_V3_POST_PROCESSING_HEADROOM_MS,
   SUMMARY_V3_ROUTE_MAX_DURATION_S,
@@ -328,7 +329,6 @@ async function actualStyleFlow(style: 'shorter' | 'stronger' | 'professional') {
   vi.resetModules(); installMocks();
   const Page = (await import('@/app/cv-builder/page')).default; render(React.createElement(Page));
   fireEvent.click(screen.getByRole('button', { name: translations.en.cv.summary }));
-  const label = style === 'shorter' ? translations.en.cv.short : style === 'stronger' ? translations.en.cv.strong : translations.en.cv.professional;
   const subtitle = style === 'shorter' ? translations.en.cv.shorterSubtext
     : style === 'stronger' ? translations.en.cv.strongerSubtext : translations.en.cv.professionalSubtext;
   const styleButton = screen.getAllByRole('button').find((button) => button.textContent?.includes(subtitle));
@@ -631,7 +631,11 @@ describe('M4 actual page routing and direct server gate', () => {
 
 describe('M4 Summary timeout budget closure', () => {
   it('proves the approved authorities and complete deadline ordering arithmetically', () => {
-    expect(SUMMARY_V3_INITIAL_WRITER_TIMEOUT_MS).toBe(11_500);
+    expect(SUMMARY_V3_INITIAL_WRITER_TIMEOUT_MS).toBe(13_000);
+    expect(SUMMARY_V3_INITIAL_WRITER_TIMEOUT_MS).toBe(
+      SUMMARY_V3_SERVER_BUDGET_MS - SUMMARY_V3_INITIAL_EVALUATOR_TIMEOUT_MS
+      - SUMMARY_V3_POST_PROCESSING_HEADROOM_MS - SUMMARY_V3_INITIAL_WRITER_RESERVE_MS,
+    );
     expect(SUMMARY_V3_INITIAL_EVALUATOR_TIMEOUT_MS).toBe(20_000);
     expect(AI_PROVIDER_CALL_TIMEOUT_MS).toBe(8_000);
     expect(SUMMARY_V3_SERVER_BUDGET_MS).toBe(38_000);
@@ -639,8 +643,8 @@ describe('M4 Summary timeout budget closure', () => {
     expect(SUMMARY_V3_ROUTE_MAX_DURATION_S).toBe(45);
     expect(computeSummaryV3ServerDeadline(1_000)).toBe(39_000);
     expect(SUMMARY_V3_INITIAL_WRITER_TIMEOUT_MS + SUMMARY_V3_INITIAL_EVALUATOR_TIMEOUT_MS
-      + SUMMARY_V3_POST_PROCESSING_HEADROOM_MS).toBe(35_500);
-    expect(35_500).toBeLessThan(SUMMARY_V3_SERVER_BUDGET_MS);
+      + SUMMARY_V3_POST_PROCESSING_HEADROOM_MS).toBe(37_000);
+    expect(37_000).toBeLessThan(SUMMARY_V3_SERVER_BUDGET_MS);
     expect(SUMMARY_V3_ROUTE_MAX_DURATION_S * 1_000 - SUMMARY_V3_SERVER_BUDGET_MS).toBeGreaterThanOrEqual(5_000);
     expect(SUMMARY_V3_M4_CLIENT_TIMEOUT_MS - SUMMARY_V3_ROUTE_MAX_DURATION_S * 1_000).toBeGreaterThanOrEqual(10_000);
     expect(AI_PLATFORM_MAX_DURATION_S).toBe(30);
@@ -685,7 +689,7 @@ describe('M4 Summary timeout budget closure', () => {
         const run = await pending;
         expect(run.response.status).toBe(200);
         expect(run.requests).toHaveLength(2);
-        expect(run.requests[0].requestOptions).toMatchObject({ timeout: 11_500, maxRetries: 0 });
+        expect(run.requests[0].requestOptions).toMatchObject({ timeout: 13_000, maxRetries: 0 });
         expect(run.requests[1].requestOptions).toMatchObject({ timeout: 20_000, maxRetries: 0 });
         expect(run.body.providerOutput).toBeDefined();
         expect(run.body.candidate).toBeDefined();
@@ -713,7 +717,7 @@ describe('M4 Summary timeout budget closure', () => {
       const run = await pending;
       expect(run.response.status).toBe(502);
       expect(run.requests).toHaveLength(2);
-      expect(run.requests.map((request) => request.requestOptions?.timeout)).toEqual([11_500, 20_000]);
+      expect(run.requests.map((request) => request.requestOptions?.timeout)).toEqual([13_000, 20_000]);
       expect(run.body).toMatchObject({ ok: false, typedReason: 'validator_exception', repairAttempted: false,
         m4ProviderFailure: { phase: 'initial_evaluator', failureStage: 'sdk_request',
           providerErrorType: 'timeout', providerRetryable: false, providerHttpStatus: null,
@@ -735,7 +739,7 @@ describe('M4 Summary timeout budget closure', () => {
       const run = await forcedToolDirectRoute({ forceRepair: true });
       expect(run.response.status).toBe(200);
       expect(run.requests).toHaveLength(4);
-      expect(run.requests.map((request) => request.requestOptions?.timeout)).toEqual([11_500, 20_000, 8_000, 8_000]);
+      expect(run.requests.map((request) => request.requestOptions?.timeout)).toEqual([13_000, 20_000, 8_000, 8_000]);
       expect(run.requests.every((request) => request.requestOptions?.maxRetries === 0)).toBe(true);
     } finally {
       vi.useRealTimers();
@@ -764,7 +768,106 @@ describe('M4 Summary timeout budget closure', () => {
       const run = await pending;
       expect(run.response.status).toBe(200);
       expect(Date.now()).toBe(34_000);
-      expect(run.requests.map((request) => request.requestOptions?.timeout)).toEqual([11_500, 20_000]);
+      expect(run.requests.map((request) => request.requestOptions?.timeout)).toEqual([13_000, 20_000]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('accepts an initial writer that resolves just below the former 11500ms boundary', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      let started!: () => void;
+      const writerStarted = new Promise<void>((resolve) => { started = resolve; });
+      const pending = forcedToolDirectRoute({ initialWriterDelayMs: 11_499, onInitialWriterStarted: started });
+      await writerStarted;
+      await vi.advanceTimersByTimeAsync(11_499);
+      const run = await pending;
+      expect(run.response.status).toBe(200);
+      expect(run.requests.map((request) => request.requestOptions?.timeout)).toEqual([13_000, 20_000]);
+      expect(run.body.candidate).toBeDefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('accepts a writer just above the former 11500ms limit while below the repaired 13000ms budget', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      let started!: () => void;
+      const writerStarted = new Promise<void>((resolve) => { started = resolve; });
+      const pending = forcedToolDirectRoute({ initialWriterDelayMs: 12_999, onInitialWriterStarted: started });
+      await writerStarted;
+      await vi.advanceTimersByTimeAsync(12_999);
+      const run = await pending;
+      expect(run.response.status).toBe(200);
+      expect(run.requests).toHaveLength(2);
+      expect(run.requests[0].requestOptions).toMatchObject({ timeout: 13_000, maxRetries: 0 });
+      expect(run.body.providerOutput).toBeDefined();
+      expect(run.body.candidate).toBeDefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('fails closed when the writer exceeds the repaired budget without evaluator or side effects', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      let started!: () => void;
+      const writerStarted = new Promise<void>((resolve) => { started = resolve; });
+      const pending = forcedToolDirectRoute({ initialWriterDelayMs: 13_001, onInitialWriterStarted: started });
+      await writerStarted;
+      await vi.advanceTimersByTimeAsync(13_001);
+      const run = await pending;
+      expect(run.response.status).toBe(502);
+      expect(run.requests).toHaveLength(1);
+      expect(run.requests[0].requestOptions).toMatchObject({ timeout: 13_000, maxRetries: 0 });
+      expect(run.body).toMatchObject({ ok: false, typedReason: 'provider_request_failed',
+        m4ProviderFailure: { phase: 'initial_writer', failureStage: 'sdk_request',
+          providerErrorType: 'timeout', providerHttpStatus: null, providerRetryable: false,
+          providerConfiguredTimeoutMs: 13_000, providerEffectiveTimeoutMs: 13_000,
+          providerDeadlineOwner: 'provider_transport' } });
+      expect(run.body.candidate).toBeUndefined();
+      expect(run.body.evaluator).toBeUndefined();
+      expect(run.body.repairAttempted).toBe(false);
+      expect(run.body.apply).toBeUndefined();
+      expect(run.body.incrementUsage).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('fails closed on an immediate writer error with one provider call and no evaluator', async () => {
+    const run = await forcedToolDirectRoute({ transportFailure: true });
+    expect(run.response.status).toBe(502);
+    expect(run.requests).toHaveLength(1);
+    expect(run.body).toMatchObject({ ok: false, typedReason: 'provider_request_failed',
+      m4ProviderFailure: { phase: 'initial_writer' } });
+  });
+
+  it('clamps the real M4 writer owner to remaining outer budget and fails insufficient budgets closed', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      const tightCreate = vi.fn(() => new Promise<never>(() => undefined));
+      const tight = callProviderWithDeadline(tightCreate, 12_000, SUMMARY_V3_INITIAL_WRITER_TIMEOUT_MS, 'provider')
+        .catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(10_000);
+      const tightError = await tight;
+      expect(tightCreate).toHaveBeenCalledTimes(1);
+      expect(tightError).toMatchObject({ deadlineOwner: 'route_deadline', configuredTimeoutMs: 13_000,
+        effectiveTimeoutMs: 10_000 });
+
+      const insufficientCreate = vi.fn(() => new Promise<never>(() => undefined));
+      const insufficient = callProviderWithDeadline(insufficientCreate, 7_999,
+        SUMMARY_V3_INITIAL_WRITER_TIMEOUT_MS, 'provider').catch((error: unknown) => error);
+      const insufficientError = await insufficient;
+      expect(insufficientCreate).not.toHaveBeenCalled();
+      expect(insufficientError).toMatchObject({ deadlineOwner: 'route_deadline', configuredTimeoutMs: 13_000 });
+      expect(Number((insufficientError as { effectiveTimeoutMs?: number }).effectiveTimeoutMs)).toBeGreaterThanOrEqual(0);
     } finally {
       vi.useRealTimers();
     }

@@ -4,7 +4,6 @@ import type { AiCoreV3CandidateEnvelope } from './contracts';
 import { immutableCopy } from './immutability';
 import { INTERNAL_AI_RESET_ENABLED } from '../build-channel';
 import {
-  EXPERIENCE_LOCALIZATION_VERIFIER_TIMEOUT_MS,
   readProviderTimingEvidence,
 } from '../ai-request-timing';
 import {
@@ -44,11 +43,22 @@ export const SUMMARY_V3_WRITER_UNIT_CONTRACT = [
   'Then emit one Experience unit per selected entry in manifest order with slot=experience, the supplied entryId, and exactly the supplied factIds in their supplied order.',
 ].join(' ');
 
-/** Summary M4 uses the existing writer slice and a dedicated, physical-evidence-driven evaluator slice. */
-export const SUMMARY_V3_INITIAL_WRITER_TIMEOUT_MS = EXPERIENCE_LOCALIZATION_VERIFIER_TIMEOUT_MS;
+/**
+ * Summary M4 has a dedicated deadline authority. The former 11_500ms value
+ * was an accidental alias of the unrelated Experience-localization verifier
+ * timeout and was physically reached by AAB581 during initial-writer transport.
+ * Keep one explicit reserve after the writer, evaluator, and terminal work:
+ * 38_000 - 20_000 - 4_000 - 1_000 = 13_000ms.
+ */
 export const SUMMARY_V3_INITIAL_EVALUATOR_TIMEOUT_MS = 20_000;
 export const SUMMARY_V3_POST_PROCESSING_HEADROOM_MS = 4_000;
 export const SUMMARY_V3_SERVER_BUDGET_MS = 38_000;
+export const SUMMARY_V3_INITIAL_WRITER_RESERVE_MS = 1_000;
+export const SUMMARY_V3_INITIAL_WRITER_TIMEOUT_MS =
+  SUMMARY_V3_SERVER_BUDGET_MS
+  - SUMMARY_V3_INITIAL_EVALUATOR_TIMEOUT_MS
+  - SUMMARY_V3_POST_PROCESSING_HEADROOM_MS
+  - SUMMARY_V3_INITIAL_WRITER_RESERVE_MS;
 /** Must stay synchronized with the static Next route export. */
 export const SUMMARY_V3_ROUTE_MAX_DURATION_S = 45;
 export const SUMMARY_V3_PLATFORM_HEADROOM_MS =
