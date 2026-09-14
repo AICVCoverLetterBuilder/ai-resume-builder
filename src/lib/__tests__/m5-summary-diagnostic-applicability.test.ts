@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from 'vitest';
 import type { SummaryV3GenerateTerminalEvent } from '@/lib/ai-core-v3/summary-generate';
 import { createEmptyCv } from '@/lib/cv-defaults';
+import { resolveSummaryDiagnosticInvariantApplicability } from '@/lib/cv-ai-diagnostics-contract';
 import {
   assertM5SummaryFieldAuthorityCoverage,
   checkM5SummaryDiagnosticApplicability,
@@ -87,16 +88,18 @@ function committedM4Terminal(): SummaryV3GenerateTerminalEvent {
   } as unknown as SummaryV3GenerateTerminalEvent;
 }
 
-async function buildSuccessfulM5Trace(): Promise<SummaryAiDiagnosticTrace> {
+async function buildSuccessfulM5Trace(
+  rewriteStyle: 'shorter' | 'stronger' | 'professional' = 'shorter',
+): Promise<SummaryAiDiagnosticTrace> {
   const session = new SummaryAiDiagnosticSession({
     uiLocale: 'en',
     requestedLocale: 'en',
     contentLocale: 'en',
     templateId: 'm5-contract-test',
-    requestId: 'm5-contract-success',
+    requestId: `m5-contract-success-${rewriteStyle}`,
     usageCountBefore: 0,
     operationMode: 'enhance_existing_content',
-    rewriteStyle: 'shorter',
+    rewriteStyle,
     m5Operation: 'summary_style',
   });
   const cv = createEmptyCv('en');
@@ -236,6 +239,19 @@ describe('M5 Summary typed diagnostic applicability', () => {
       unexpectedDiagnosticFieldTypes: [],
     });
   });
+
+  it.each(['shorter', 'stronger', 'professional'] as const)(
+    'keeps the M5 %s control in the M5 style group',
+    async (rewriteStyle) => {
+      const trace = await buildSuccessfulM5Trace(rewriteStyle);
+      expect(resolveSummaryDiagnosticInvariantApplicability(trace)).toMatchObject({
+        operationFamily: 'm5', shared: true, legacyV2: false, m4Transaction: false, m5Style: true,
+      });
+      expect(trace.rewriteStyle).toBe(rewriteStyle);
+      expect(checkM5SummaryDiagnosticInvariants(trace)).toMatchObject({ passed: true, failures: [] });
+      expect(checkM5SummaryDiagnosticCompleteness(trace).passed).toBe(true);
+    },
+  );
 
   it('requires a finite parser class for initial writer lost_source_fact and permits evaluator-origin loss without one', async () => {
     const successful = await buildSuccessfulM5Trace();

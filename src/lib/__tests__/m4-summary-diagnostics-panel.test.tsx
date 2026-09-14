@@ -32,8 +32,10 @@ import {
   type SummaryV2ExternalDiagnostic,
 } from '@/lib/cv-summary-ai-diagnostics';
 import {
+  checkSummaryDiagnosticInvariants,
   clearCvAiDiagnosticHistory,
   getCvAiDiagnosticHistory,
+  resolveSummaryDiagnosticInvariantApplicability,
 } from '@/lib/cv-ai-diagnostics-contract';
 
 type M4Scenario = Readonly<{
@@ -45,6 +47,10 @@ type M4Scenario = Readonly<{
   usageAttempted: boolean;
   reason: string | null;
   snapshotAvailable?: boolean;
+  locale?: string;
+  durationMonths?: number;
+  repairAttempted?: boolean;
+  providerResponseKind?: 'provider' | 'repair' | 'none' | 'unknown';
 }>;
 
 function baseCv() {
@@ -84,7 +90,9 @@ function terminalEvent(scenario: M4Scenario): SummaryV3GenerateTerminalEvent {
     usageForwardWriteResult: scenario.success ? 'succeeded' : (scenario.usageAttempted ? 'succeeded' : 'not_attempted'),
     usageVerificationResult: scenario.success ? 'passed' : (scenario.actualAfter === null ? 'unknown' : 'failed'),
     usageRollbackAttempted: scenario.usageAttempted && !scenario.success,
-    usageRollbackResult: scenario.actualAfter === null
+    usageRollbackResult: scenario.success
+      ? 'not_required'
+      : scenario.actualAfter === null
       ? 'unknown'
       : scenario.actualDelta === 0
         ? 'succeeded'
@@ -106,7 +114,7 @@ function terminalEvent(scenario: M4Scenario): SummaryV3GenerateTerminalEvent {
       ? undefined
       : {
           rawSummarySourceHash: 'm4-panel-source',
-          structuredTotalDurationMonths: 24,
+          structuredTotalDurationMonths: scenario.durationMonths ?? 24,
           manifest: { selectedEntries: [{ facts: [{ id: 'm4-panel-fact' }] }] },
         },
     kind: scenario.success ? 'handled_success' : 'handled_failure',
@@ -143,8 +151,9 @@ function terminalEvent(scenario: M4Scenario): SummaryV3GenerateTerminalEvent {
       violationFactIdHashesByCode: {},
       violationEntryIdHashesByCode: {},
       primaryValidationRejectionCode: null,
-      repairAttempted: false,
-      providerResponseKind: scenario.success ? 'provider' : 'none',
+      repairAttempted: scenario.repairAttempted ?? false,
+      providerResponseKind: scenario.providerResponseKind
+        ?? (scenario.repairAttempted ? 'repair' : scenario.success ? 'provider' : 'none'),
     },
     commitReceipt: receipt,
     applyCommitted: scenario.success,
@@ -154,16 +163,17 @@ function terminalEvent(scenario: M4Scenario): SummaryV3GenerateTerminalEvent {
 }
 
 function createM4Session(scenario: M4Scenario) {
+  const locale = scenario.locale ?? 'ja';
   const session = new SummaryAiDiagnosticSession({
-    uiLocale: 'ja',
-    requestedLocale: 'ja',
-    contentLocale: 'ja',
+    uiLocale: locale,
+    requestedLocale: locale,
+    contentLocale: locale,
     templateId: 'panel-test',
     requestId: 'm4-panel-request',
     usageCountBefore: scenario.requestBefore,
-    operationMode: 'summary_generate',
+    operationMode: 'generate_from_context',
   });
-  session.recordCvSnapshot({ ...baseCv(), contentLocale: 'ja' } as never, '');
+  session.recordCvSnapshot({ ...baseCv(), contentLocale: locale } as never, '');
   session.recordM4Terminal(terminalEvent(scenario));
   return session;
 }
@@ -302,6 +312,180 @@ describe('M4 Summary diagnostics panel usage truth', () => {
     expect(JSON.parse(copied[0])).not.toHaveProperty('durationValidationPassed');
   });
 
+  it('keeps the physical AAB585 M4 receipt in its transaction group and rejects contradictory M4 successes', () => {
+    const physical = commitM4({
+      requestBefore: 6,
+      actualBefore: 6,
+      actualAfter: 7,
+      actualDelta: 1,
+      success: true,
+      usageAttempted: true,
+      reason: null,
+      locale: 'en',
+      durationMonths: 37,
+      repairAttempted: true,
+    });
+
+    expect(resolveSummaryDiagnosticInvariantApplicability(physical)).toMatchObject({
+      operationFamily: 'm4', shared: true, legacyV2: false, m4Transaction: true, m5Style: false,
+    });
+    expect(physical).toMatchObject({
+      requestedLocale: 'en',
+      operationMode: 'generate_from_context',
+      m4StructuredDurationMonths: 37,
+      m4RepairAttempted: true,
+      providerResponseKind: 'repair',
+      apiResponseKind: 'repair',
+      m4V2FallthroughCount: 0,
+      m4ActualUsageBefore: 6,
+      m4ActualUsageAfter: 7,
+      m4ActualUsageDelta: 1,
+      countedAsSuccess: true,
+      visibleApplySucceeded: true,
+      diagnosticInvariantCheckPassed: true,
+      diagnosticCompletenessPassed: true,
+      privacyCheckPassed: true,
+      serverFallbackUsed: false,
+      clientFallbackUsed: false,
+    });
+    expect(physical.diagnosticInvariantFailures).toEqual([]);
+    expect(physical).not.toHaveProperty('finalUnitRoleSlots');
+    expect(physical).not.toHaveProperty('finalUnitSemanticRolesByUnit');
+
+    const assertInvariantFailure = (
+      change: Record<string, unknown>,
+      expectedCode: string,
+    ) => {
+      const result = checkSummaryDiagnosticInvariants({
+        ...physical,
+        ...change,
+      } as never);
+      expect(result.passed).toBe(false);
+      expect(result.failures.map((failure) => failure.invariantCode)).toContain(expectedCode);
+    };
+
+    // M4 transaction truth remains fail-closed; only legacy V2 semantic slots are not applicable.
+    assertInvariantFailure({
+      visibleApplySucceeded: false,
+      m4ApplyCommitted: false,
+      m4CanonicalApplyResult: 'failed',
+    }, 'm4_success_with_apply_or_persistence_failure');
+    assertInvariantFailure({ m4ActualUsageAfter: 6, m4ActualUsageDelta: 0 }, 'usage_increment_mismatch_success');
+    assertInvariantFailure({ m4ActualUsageAfter: 8, m4ActualUsageDelta: 2 }, 'usage_increment_mismatch_success');
+    assertInvariantFailure({ m4V2FallthroughCount: 1 }, 'm4_success_with_v2_fallthrough');
+    assertInvariantFailure({
+      m4Phases: { structural: 'passed', semantic: 'failed', language_quality: 'passed' },
+    }, 'm4_success_with_failed_validation_phase');
+    assertInvariantFailure({
+      m4ProviderFailure: { providerFailureClass: 'timeout' },
+      apiResponseKind: 'error',
+    }, 'm4_success_with_provider_consistency_failure');
+    assertInvariantFailure({
+      m4RepairAttempted: true,
+      m4PrimaryValidationRejectionCode: 'unsupported_claim',
+    }, 'm4_success_with_validation_rejection');
+    assertInvariantFailure({ m4PersistenceResult: 'failed' }, 'm4_success_with_apply_or_persistence_failure');
+    assertInvariantFailure({ m4CandidatePresent: false }, 'm4_success_without_candidate_evidence');
+  });
+
+  it('accepts only source-proven M4 success response-kind pairs and rejects contradictions', () => {
+    const nonRepair = commitM4({
+      requestBefore: 6, actualBefore: 6, actualAfter: 7, actualDelta: 1,
+      success: true, usageAttempted: true, reason: null, repairAttempted: false,
+    });
+    const repair = commitM4({
+      requestBefore: 6, actualBefore: 6, actualAfter: 7, actualDelta: 1,
+      success: true, usageAttempted: true, reason: null, repairAttempted: true,
+    });
+
+    expect(nonRepair).toMatchObject({
+      m4RepairAttempted: false,
+      providerResponseKind: 'provider',
+      apiResponseKind: 'provider',
+      diagnosticInvariantCheckPassed: true,
+    });
+    expect(repair).toMatchObject({
+      m4RepairAttempted: true,
+      providerResponseKind: 'repair',
+      apiResponseKind: 'repair',
+      diagnosticInvariantCheckPassed: true,
+    });
+
+    const expectKindFailure = (change: Record<string, unknown>) => {
+      const result = checkSummaryDiagnosticInvariants({ ...repair, ...change } as never);
+      expect(result.passed).toBe(false);
+      expect(result.failures.map((failure) => failure.invariantCode))
+        .toContain('m4_success_with_provider_consistency_failure');
+    };
+
+    expectKindFailure({ providerResponseKind: 'provider', apiResponseKind: 'provider' });
+    expectKindFailure({ m4RepairAttempted: false, providerResponseKind: 'repair', apiResponseKind: 'repair' });
+    expectKindFailure({ providerResponseKind: 'repair', apiResponseKind: 'provider' });
+    expectKindFailure({ providerResponseKind: 'provider', apiResponseKind: 'repair' });
+    expectKindFailure({ providerResponseKind: 'none', apiResponseKind: 'repair' });
+    expectKindFailure({ providerResponseKind: 'repair', apiResponseKind: 'error' });
+    expectKindFailure({ m4ProviderFailure: { providerFailureClass: 'timeout' } });
+    expectKindFailure({ serverFallbackUsed: true });
+    expectKindFailure({ clientFallbackUsed: true });
+  });
+
+  it('accepts the same complete M4 transaction receipt across the 12-locale matrix', () => {
+    for (const locale of ['sr', 'en', 'hi', 'ar', 'ja', 'de', 'fr', 'es', 'it', 'hr', 'pt-BR', 'ru']) {
+      const trace = commitM4({
+        requestBefore: 6,
+        actualBefore: 6,
+        actualAfter: 7,
+        actualDelta: 1,
+        success: true,
+        usageAttempted: true,
+        reason: null,
+        locale,
+        durationMonths: 37,
+        repairAttempted: true,
+      });
+      expect(trace.diagnosticInvariantCheckPassed, locale).toBe(true);
+      expect(trace.diagnosticCompletenessPassed, locale).toBe(true);
+      expect(trace.m4LegacyV2DiagnosticFieldsApplicable, locale).toBe(false);
+      expect(trace.m4V2FallthroughCount, locale).toBe(0);
+      expect(trace.providerResponseKind, locale).toBe('repair');
+      expect(trace.apiResponseKind, locale).toBe('repair');
+    }
+  });
+
+  it('keeps legacy English decision fields required when the legacy V2 group applies', () => {
+    const legacy = {
+      requestedLocale: 'en',
+      m4LegacyV2DiagnosticFieldsApplicable: true,
+      countedAsSuccess: true,
+      visibleApplySucceeded: true,
+      usageCountBefore: 6,
+      usageCountAfter: 7,
+      finalUnitRoleSlots: [],
+      currentRoleConcreteFactCoverage: null,
+      priorRoleGroundingPassed: null,
+      currentRoleTitlePresent: null,
+      finalUnitSemanticRolesByUnit: null,
+      finalCurrentEmployerPresent: null,
+      finalPriorEmployerPresent: null,
+      finalCurrentDutyCoveragePassed: null,
+      finalPriorDutyCoveragePassed: null,
+      finalSlotValidationPassed: null,
+      structuredRoleLocaleValidationPassed: null,
+      finalUnsupportedCompetencyCount: null,
+      finalDurationOwnerDetected: null,
+      finalDurationScopeValidationPassed: null,
+    };
+    expect(resolveSummaryDiagnosticInvariantApplicability(legacy)).toMatchObject({
+      operationFamily: 'v2', legacyV2: true, m4Transaction: false,
+    });
+    const result = checkSummaryDiagnosticInvariants(legacy as never);
+    expect(result.passed).toBe(false);
+    expect(result.failures.map((failure) => failure.invariantCode)).toEqual(expect.arrayContaining([
+      'english_success_missing_current_intro_slot',
+      'english_success_with_null_decision_fields',
+    ]));
+  });
+
   it('exhaustively projects a real M4 success without V2 default sentinels', () => {
     const constructorFields = constructorFieldNames();
     expect([...SUMMARY_AI_DIAGNOSTIC_CONSTRUCTOR_FIELDS].sort()).toEqual(constructorFields);
@@ -403,7 +587,9 @@ describe('M4 Summary diagnostics panel usage truth', () => {
       requestId: 'v2-type-request', usageCountBefore: 0, operationMode: 'summary_generate',
     });
     const v2 = v2Session.commit();
-    if (v2.m4Operation === 'summary_v3_generate') throw new Error('expected V2 trace');
+    if (v2.m4Operation === 'summary_v3_generate' || v2.m5Operation === 'summary_style') {
+      throw new Error('expected V2 trace');
+    }
     const typedV2: SummaryV2ExternalDiagnostic = v2;
     expectTypeOf(typedV2.durationValidationPassed).toEqualTypeOf<boolean | null>();
     // @ts-expect-error M4 terminal identity is forbidden by the V2 external contract.

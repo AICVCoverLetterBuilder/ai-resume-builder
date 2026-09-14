@@ -175,6 +175,8 @@ import {
   dedupeStableStrings,
   isGrammarRejectionCategory,
   maybeTruncateDiagnosticPayload,
+  resolveSummaryDiagnosticInvariantApplicability,
+  resolveSummaryDiagnosticOperationFamily,
   sanitizeCvAiDiagnosticMarkerPatch,
   SUMMARY_AI_DIAG_MARKER,
   clearCvAiDiagnosticHistory,
@@ -998,9 +1000,7 @@ export function assertM4SummaryFieldAuthorityCoverage(fields: readonly string[])
 }
 
 export function isM4LegacyV2DiagnosticFieldsApplicable(trace: Record<string, unknown>): boolean {
-  return trace.m5Operation !== 'summary_style'
-    && trace.m4Operation !== 'summary_v3_generate'
-    && trace.m4LegacyV2DiagnosticFieldsApplicable !== false;
+  return resolveSummaryDiagnosticOperationFamily(trace) === 'v2';
 }
 
 export type M4SummaryApplicabilityCheck = Readonly<{
@@ -4953,13 +4953,14 @@ export class SummaryAiDiagnosticSession {
     // Pre-apply completeness focuses on decision-critical fields. Full build
     // identity/marker completeness remains enforced at commit().
     const locale = String(this.draft.requestedLocale || '');
+    const invariantApplicability = resolveSummaryDiagnosticInvariantApplicability(this.draft);
     let completenessPassed = true;
     const nullDecision: string[] = [];
     if (this.draft.m5Operation === 'summary_style') {
       completenessPassed = checkM5SummaryDiagnosticCompleteness(
         withInvariants as Record<string, unknown>,
       ).passed;
-    } else if (locale === 'en') {
+    } else if (invariantApplicability.legacyV2 && locale === 'en') {
       const required = [
         'currentRoleConcreteFactCoverage',
         'priorRoleGroundingPassed',

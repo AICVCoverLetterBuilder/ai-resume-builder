@@ -359,6 +359,58 @@ export type CvAiDiagnosticInvariantFailure = {
   observed: Record<string, string | number | boolean | null>;
 };
 
+/**
+ * One diagnostic operation can expose only the invariant groups it owns.
+ * M4 emits an explicit transaction receipt, while V2 owns finalizer/slot
+ * semantics and M5 owns its typed style-operation contract.
+ */
+export type SummaryDiagnosticOperationFamily = 'v2' | 'm4' | 'm5';
+export type SummaryDiagnosticInvariantGroup =
+  | 'shared'
+  | 'legacy_v2'
+  | 'm4_transaction'
+  | 'm5_style';
+
+type SummaryDiagnosticOperationIdentity = Readonly<{
+  m4Operation?: unknown;
+  m4LegacyV2DiagnosticFieldsApplicable?: unknown;
+  m5Operation?: unknown;
+}>;
+
+export type SummaryDiagnosticInvariantApplicability = Readonly<{
+  operationFamily: SummaryDiagnosticOperationFamily;
+  shared: true;
+  legacyV2: boolean;
+  m4Transaction: boolean;
+  m5Style: boolean;
+}>;
+
+/** The sole operation-family resolver for Summary diagnostic applicability. */
+export function resolveSummaryDiagnosticOperationFamily(
+  trace: SummaryDiagnosticOperationIdentity,
+): SummaryDiagnosticOperationFamily {
+  if (trace.m5Operation === 'summary_style') return 'm5';
+  if (
+    trace.m4Operation === 'summary_v3_generate'
+    || trace.m4LegacyV2DiagnosticFieldsApplicable === false
+  ) return 'm4';
+  return 'v2';
+}
+
+/** Maps the resolved operation family to the invariant groups it may evaluate. */
+export function resolveSummaryDiagnosticInvariantApplicability(
+  trace: SummaryDiagnosticOperationIdentity,
+): SummaryDiagnosticInvariantApplicability {
+  const operationFamily = resolveSummaryDiagnosticOperationFamily(trace);
+  return Object.freeze({
+    operationFamily,
+    shared: true as const,
+    legacyV2: operationFamily === 'v2',
+    m4Transaction: operationFamily === 'm4',
+    m5Style: operationFamily === 'm5',
+  });
+}
+
 export type CvAiDiagnosticHistoryItem = {
   timestamp: string;
   requestIdHash: string;
@@ -556,6 +608,8 @@ export function buildHindiSentenceGrammarRecords(input: {
 type SummaryLike = {
   finalCandidateSource?: string | null;
   providerCandidatePresent?: boolean;
+  providerResponseKind?: string | null;
+  apiResponseKind?: string | null;
   deterministicCandidatePresent?: boolean;
   fallbackApplied?: boolean;
   visibleApplySucceeded?: boolean;
@@ -802,6 +856,48 @@ type SummaryLike = {
   localeAwareShorterThresholdPercent?: number | null;
 };
 
+type M4SummaryInvariantLike = {
+  m4Operation?: 'summary_v3_generate';
+  m4OwnershipResult?: string | null;
+  m4RouteHttpStatus?: number | null;
+  m4Writer?: { result?: string | null } | null;
+  m4Evaluator?: { result?: string | null } | null;
+  m4ProviderFailure?: unknown | null;
+  m4Phases?: {
+    structural?: string | null;
+    semantic?: string | null;
+    language_quality?: string | null;
+  } | null;
+  m4CandidatePresent?: boolean | null;
+  m4CandidateHash?: string | null;
+  m4CandidateLength?: number | null;
+  m4CandidateUnitCount?: number | null;
+  m4SemanticViolationCount?: number | null;
+  m4LanguageQualityViolationCount?: number | null;
+  m4PrimaryValidationRejectionCode?: string | null;
+  m4RepairAttempted?: boolean | null;
+  m4ApplyAuthorized?: boolean | null;
+  m4ApplyAttempted?: boolean | null;
+  m4ApplyCommitted?: boolean | null;
+  m4PersistenceAttempted?: boolean | null;
+  m4PersistenceResult?: string | null;
+  m4CanonicalApplyAttempted?: boolean | null;
+  m4CanonicalApplyResult?: string | null;
+  m4UsageAttempted?: boolean | null;
+  m4UsageFinalStateKnown?: boolean | null;
+  m4ActualUsageBefore?: number | null;
+  m4ActualUsageAfter?: number | null;
+  m4ActualUsageDelta?: number | null;
+  m4UsageResult?: string | null;
+  m4UsageForwardWriteResult?: string | null;
+  m4UsageVerificationResult?: string | null;
+  m4UsageRollbackAttempted?: boolean | null;
+  m4UsageRollbackResult?: string | null;
+  m4RollbackAttempted?: boolean | null;
+  m4RollbackResult?: string | null;
+  m4V2FallthroughCount?: number | null;
+};
+
 export function checkSummaryDiagnosticInvariants(
   trace: SummaryLike,
 ): { passed: boolean; failures: CvAiDiagnosticInvariantFailure[] } {
@@ -809,6 +905,145 @@ export function checkSummaryDiagnosticInvariants(
   const push = (code: string, observed: CvAiDiagnosticInvariantFailure['observed']) => {
     failures.push({ invariantCode: code, observed });
   };
+  const invariantApplicability = resolveSummaryDiagnosticInvariantApplicability(trace);
+  const m4 = trace as SummaryLike & M4SummaryInvariantLike;
+
+  // M4 owns one explicit terminal transaction receipt. Its success invariants
+  // remain active even though V2 finalizer/slot diagnostics are not applicable.
+  if (
+    invariantApplicability.m4Transaction
+    && (trace.countedAsSuccess === true || trace.visibleApplySucceeded === true)
+  ) {
+    const failedPhases = ['structural', 'semantic', 'language_quality'].filter(
+      (phase) => m4.m4Phases?.[phase as keyof NonNullable<typeof m4.m4Phases>] !== 'passed',
+    );
+    if (m4.m4OwnershipResult !== 'owned' || m4.m4RouteHttpStatus !== 200) {
+      push('m4_success_with_invalid_ownership_or_route', {
+        m4OwnershipResult: m4.m4OwnershipResult ?? null,
+        m4RouteHttpStatus: m4.m4RouteHttpStatus ?? null,
+      });
+    }
+    if (m4.m4Writer?.result !== 'succeeded' || m4.m4Evaluator?.result !== 'succeeded') {
+      push('m4_success_with_writer_or_evaluator_failure', {
+        m4WriterResult: m4.m4Writer?.result ?? null,
+        m4EvaluatorResult: m4.m4Evaluator?.result ?? null,
+      });
+    }
+    if (failedPhases.length > 0) {
+      push('m4_success_with_failed_validation_phase', {
+        failedPhases: failedPhases.join(','),
+      });
+    }
+    if (
+      m4.m4CandidatePresent !== true
+      || !m4.m4CandidateHash
+      || (m4.m4CandidateLength ?? 0) < 1
+      || (m4.m4CandidateUnitCount ?? 0) < 1
+    ) {
+      push('m4_success_without_candidate_evidence', {
+        m4CandidatePresent: m4.m4CandidatePresent ?? null,
+        m4CandidateHashPresent: Boolean(m4.m4CandidateHash),
+        m4CandidateLength: m4.m4CandidateLength ?? null,
+        m4CandidateUnitCount: m4.m4CandidateUnitCount ?? null,
+      });
+    }
+    if (
+      m4.m4PrimaryValidationRejectionCode != null
+      || (m4.m4SemanticViolationCount ?? 0) !== 0
+      || (m4.m4LanguageQualityViolationCount ?? 0) !== 0
+    ) {
+      push('m4_success_with_validation_rejection', {
+        m4PrimaryValidationRejectionCode: m4.m4PrimaryValidationRejectionCode ?? null,
+        m4SemanticViolationCount: m4.m4SemanticViolationCount ?? null,
+        m4LanguageQualityViolationCount: m4.m4LanguageQualityViolationCount ?? null,
+      });
+    }
+    const expectedSuccessResponseKind = m4.m4RepairAttempted === true
+      ? 'repair'
+      : m4.m4RepairAttempted === false
+        ? 'provider'
+        : null;
+    if (
+      m4.m4ProviderFailure != null
+      || expectedSuccessResponseKind === null
+      || trace.providerResponseKind !== expectedSuccessResponseKind
+      || trace.apiResponseKind !== expectedSuccessResponseKind
+      || trace.serverFallbackUsed === true
+      || trace.clientFallbackUsed === true
+    ) {
+      push('m4_success_with_provider_consistency_failure', {
+        m4ProviderFailurePresent: m4.m4ProviderFailure != null,
+        m4RepairAttempted: m4.m4RepairAttempted ?? null,
+        expectedSuccessResponseKind,
+        providerResponseKind: trace.providerResponseKind ?? null,
+        apiResponseKind: trace.apiResponseKind ?? null,
+        serverFallbackUsed: trace.serverFallbackUsed ?? null,
+        clientFallbackUsed: trace.clientFallbackUsed ?? null,
+      });
+    }
+    if (
+      m4.m4ApplyAuthorized !== true
+      || m4.m4ApplyAttempted !== true
+      || m4.m4ApplyCommitted !== true
+      || m4.m4PersistenceAttempted !== true
+      || m4.m4PersistenceResult !== 'passed'
+      || m4.m4CanonicalApplyAttempted !== true
+      || m4.m4CanonicalApplyResult !== 'passed'
+      || trace.visibleApplySucceeded !== true
+      || trace.countedAsSuccess !== true
+    ) {
+      push('m4_success_with_apply_or_persistence_failure', {
+        m4ApplyAuthorized: m4.m4ApplyAuthorized ?? null,
+        m4ApplyAttempted: m4.m4ApplyAttempted ?? null,
+        m4ApplyCommitted: m4.m4ApplyCommitted ?? null,
+        m4PersistenceResult: m4.m4PersistenceResult ?? null,
+        m4CanonicalApplyResult: m4.m4CanonicalApplyResult ?? null,
+        visibleApplySucceeded: trace.visibleApplySucceeded ?? null,
+        countedAsSuccess: trace.countedAsSuccess ?? null,
+      });
+    }
+    if (
+      m4.m4UsageAttempted !== true
+      || m4.m4UsageResult !== 'passed'
+      || m4.m4UsageForwardWriteResult !== 'succeeded'
+      || m4.m4UsageVerificationResult !== 'passed'
+      || m4.m4UsageRollbackAttempted === true
+      || m4.m4UsageRollbackResult !== 'not_required'
+      || m4.m4RollbackAttempted === true
+      || m4.m4RollbackResult !== 'not_required'
+    ) {
+      push('m4_success_with_usage_or_rollback_failure', {
+        m4UsageResult: m4.m4UsageResult ?? null,
+        m4UsageForwardWriteResult: m4.m4UsageForwardWriteResult ?? null,
+        m4UsageVerificationResult: m4.m4UsageVerificationResult ?? null,
+        m4UsageRollbackAttempted: m4.m4UsageRollbackAttempted ?? null,
+        m4UsageRollbackResult: m4.m4UsageRollbackResult ?? null,
+        m4RollbackResult: m4.m4RollbackResult ?? null,
+      });
+    }
+    if (
+      m4.m4UsageFinalStateKnown !== true
+      || m4.m4ActualUsageBefore == null
+      || m4.m4ActualUsageAfter == null
+      || m4.m4ActualUsageDelta !== 1
+      || m4.m4ActualUsageAfter !== m4.m4ActualUsageBefore + 1
+    ) {
+      push('usage_increment_mismatch_success', {
+        m4ActualUsageBefore: m4.m4ActualUsageBefore ?? null,
+        m4ActualUsageAfter: m4.m4ActualUsageAfter ?? null,
+        m4ActualUsageDelta: m4.m4ActualUsageDelta ?? null,
+        m4UsageFinalStateKnown: m4.m4UsageFinalStateKnown ?? null,
+      });
+    }
+    if (m4.m4V2FallthroughCount !== 0) {
+      push('m4_success_with_v2_fallthrough', {
+        m4V2FallthroughCount: m4.m4V2FallthroughCount ?? null,
+      });
+    }
+  }
+  if (invariantApplicability.m4Transaction) {
+    return { passed: failures.length === 0, failures };
+  }
 
   const src = trace.finalCandidateSource || '';
   if (src.includes('provider') || src === 'ai_generated') {
@@ -1765,7 +2000,11 @@ export function checkSummaryDiagnosticInvariants(
       wrongLocaleUnitCount: trace.wrongLocaleUnitCount ?? 0,
     });
   }
-  if (trace.countedAsSuccess && Array.isArray(trace.finalUnitRoleSlots)) {
+  if (
+    invariantApplicability.legacyV2
+    && trace.countedAsSuccess
+    && Array.isArray(trace.finalUnitRoleSlots)
+  ) {
     const slots = trace.finalUnitRoleSlots;
     const dutyOk = slots.includes('current_duty') || trace.currentDutySlotPresent === true;
     if (!slots.includes('current_intro') || !dutyOk) {
@@ -1919,7 +2158,10 @@ export function checkSummaryDiagnosticInvariants(
   }
 
   // AAB-325 — English Summary shared final-gate invariants.
-  if (String(trace.requestedLocale || '') === 'en') {
+  if (
+    invariantApplicability.legacyV2
+    && String(trace.requestedLocale || '') === 'en'
+  ) {
     const detected = Array.isArray(trace.detectedLocaleByUnit)
       ? (trace.detectedLocaleByUnit as unknown[])
       : [];
