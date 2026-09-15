@@ -211,6 +211,7 @@ describe('two-sided internal Pro capability gates', () => {
     vi.stubGlobal('fetch', transport);
     vi.resetModules();
     const { syncProEntitlement } = await import('../iap');
+    const { getInternalProBootstrapObservation } = await import('../pro-auth-diagnostics');
     const result = await syncProEntitlement();
     expect(result).toMatchObject({
       entitlementResult: 'active',
@@ -220,6 +221,13 @@ describe('two-sided internal Pro capability gates', () => {
       entitlementSource: 'internal_test',
     });
     expect(transport).toHaveBeenCalledTimes(1);
+    expect(getInternalProBootstrapObservation()).toMatchObject({
+      internalBootstrapEligible: true,
+      internalBootstrapAttempted: true,
+      internalBootstrapHttpStatus: 200,
+      internalBootstrapResult: 'success',
+      commercialSyncResult: 'skipped_internal',
+    });
   });
 
   test('signed internal token is rejected after crossing into production', async () => {

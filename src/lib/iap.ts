@@ -33,6 +33,10 @@ import {
   getInternalTestBootstrapCapability,
   isInternalTestClientCapabilityEnabled,
 } from './internal-test-pro-entitlement';
+import {
+  resetInternalProBootstrapObservation,
+  updateInternalProBootstrapObservation,
+} from './pro-auth-diagnostics';
 
 // --- Constants ------------------------------------------------------------------
 
@@ -520,6 +524,14 @@ async function verifyProWithServer(options: {
   internalTestProBootstrapCapability?: string;
 } = {}): Promise<IAPResult> {
   const appUserId = getAppUserId();
+  const isInternalBootstrap = options.internalTestProEntitlementRequested === true;
+  if (isInternalBootstrap) {
+    updateInternalProBootstrapObservation({
+      internalBootstrapAttempted: true,
+      internalBootstrapHttpStatus: null,
+      internalBootstrapResult: 'request_pending',
+    });
+  }
   diagLog('verifyProWithServer: calling /api/verify-pro');
   try {
     const body: Record<string, unknown> = { revenueCatAppUserId: appUserId };
@@ -535,6 +547,12 @@ async function verifyProWithServer(options: {
     );
 
     if (!res.ok || !data.token) {
+      if (isInternalBootstrap) {
+        updateInternalProBootstrapObservation({
+          internalBootstrapHttpStatus: res.status,
+          internalBootstrapResult: res.ok ? 'invalid_response' : 'rejected',
+        });
+      }
       diagError('verifyProWithServer: server returned', res.status, data?.error ?? 'no token');
       return { success: false, cancelled: false, message: data?.error || 'Server verification failed.' };
     }
@@ -542,6 +560,15 @@ async function verifyProWithServer(options: {
     diagLog('verifyProWithServer: token received');
     const isPro = isUsableProToken(data.token);
     const entitlementSource = isPro ? readProTokenEntitlementSource(data.token) : 'none';
+
+    if (isInternalBootstrap) {
+      updateInternalProBootstrapObservation({
+        internalBootstrapHttpStatus: res.status,
+        internalBootstrapResult: isPro && entitlementSource === 'internal_test'
+          ? 'success'
+          : 'invalid_response',
+      });
+    }
 
     if (isPro) {
       persistStoredProToken(data.token);
@@ -557,6 +584,12 @@ async function verifyProWithServer(options: {
       entitlementSource,
     };
   } catch (err) {
+    if (isInternalBootstrap) {
+      updateInternalProBootstrapObservation({
+        internalBootstrapHttpStatus: null,
+        internalBootstrapResult: 'request_failed',
+      });
+    }
     diagError('verifyProWithServer: fetch threw:', err);
     return { success: false, cancelled: false, message: err instanceof Error ? err.message : 'Verification failed.' };
   }
@@ -621,8 +654,12 @@ async function tryInternalTestProEntitlement(): Promise<ProEntitlementSyncResult
 }
 
 export async function syncProEntitlement(): Promise<ProEntitlementSyncResult> {
+  resetInternalProBootstrapObservation(isInternalTestClientCapabilityEnabled());
   const internalResult = await tryInternalTestProEntitlement();
-  if (internalResult) return internalResult;
+  if (internalResult) {
+    updateInternalProBootstrapObservation({ commercialSyncResult: 'skipped_internal' });
+    return internalResult;
+  }
 
   if (!isNative()) {
     const token = typeof window !== 'undefined' ? localStorage.getItem(PRO_TOKEN_KEY) : null;
@@ -651,13 +688,18 @@ export async function syncProEntitlement(): Promise<ProEntitlementSyncResult> {
     const Purchases = getPurchases();
     const { customerInfo } = await Purchases.getCustomerInfo();
     const hasEntitlement = customerInfo.entitlements.active[PRO_ENTITLEMENT] !== undefined;
-    return await syncTokenForEntitlement(hasEntitlement);
+    const result = await syncTokenForEntitlement(hasEntitlement);
+    updateInternalProBootstrapObservation({
+      commercialSyncResult: result.entitlementResult === 'active' ? 'active' : 'inactive',
+    });
+    return result;
   } catch (err) {
     const rawMessage = err instanceof Error ? err.message : 'Entitlement check failed.';
     const message = isPurchaseSystemConfigurationError(err)
       ? PURCHASE_SYSTEM_UNAVAILABLE_MESSAGE
       : rawMessage;
     diagError('syncProEntitlement: failed:', rawMessage);
+    updateInternalProBootstrapObservation({ commercialSyncResult: 'failed' });
     return {
       entitlementResult: 'failed',
       tokenSyncLastResult: 'not-run',

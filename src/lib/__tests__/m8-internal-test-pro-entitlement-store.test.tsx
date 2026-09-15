@@ -39,6 +39,31 @@ afterEach(() => {
 });
 
 describe('internal entitlement uses the canonical AppProvider gate', () => {
+  test('eligible upgrade-in-place QA startup is not blocked by RevenueCat initialization', async () => {
+    const token = await createProToken(true, { source: 'internal_test' });
+    localStorage.setItem('cvpro-plan', 'free');
+    localStorage.setItem('cvpro-pro-token', 'expired-upgrade-token');
+    mocks.initIAP.mockRejectedValue(new Error('RevenueCat initialization unavailable'));
+    mocks.syncProEntitlement.mockResolvedValue({
+      entitlementResult: 'active',
+      tokenSyncLastResult: 'success',
+      isPro: true,
+      token,
+      entitlementSource: 'internal_test',
+    });
+
+    render(<AppProvider><Probe /></AppProvider>);
+    const usageBefore = app.getProAiUsageCount();
+
+    await waitFor(() => expect(app.getAiGate()).toEqual({ status: 'ready', token }));
+    expect(mocks.initIAP).not.toHaveBeenCalled();
+    expect(mocks.syncProEntitlement).toHaveBeenCalledTimes(1);
+    expect(app.isPro).toBe(true);
+    expect(app.proEntitlementSource).toBe('internal_test');
+    expect(checkProAccess(app.isPro, app.getProAiUsageCount())).toBe('allowed');
+    expect(app.getProAiUsageCount()).toBe(usageBefore);
+  });
+
   test('server-issued internal token hydrates source diagnostics and checkProAccess', async () => {
     const token = await createProToken(true, { source: 'internal_test' });
     mocks.syncProEntitlement.mockResolvedValue({
@@ -62,5 +87,31 @@ describe('internal entitlement uses the canonical AppProvider gate', () => {
     const observation = await app.getProAuthObservation(token);
     expect(JSON.stringify(observation)).not.toContain(testBootstrapCapability);
     expect(localStorage.getItem(testBootstrapCapability)).toBeNull();
+  });
+
+  test('ordinary free and commercial Pro results keep the canonical paywall behavior', async () => {
+    vi.stubEnv('NEXT_PUBLIC_BUILD_CHANNEL', 'production');
+    vi.stubEnv('NEXT_PUBLIC_INTERNAL_TEST_PRO_ENTITLEMENT', 'false');
+    vi.stubEnv('NEXT_PUBLIC_INTERNAL_TEST_PRO_BOOTSTRAP_CAPABILITY', '');
+    mocks.syncProEntitlement.mockResolvedValueOnce({
+      entitlementResult: 'inactive', tokenSyncLastResult: 'not-run', isPro: false,
+    });
+
+    const free = render(<AppProvider><Probe /></AppProvider>);
+    await waitFor(() => expect(mocks.syncProEntitlement).toHaveBeenCalledTimes(1));
+    expect(app.getAiGate()).toEqual({ status: 'free' });
+    expect(checkProAccess(app.isPro, app.getProAiUsageCount())).toBe('upgrade');
+    free.unmount();
+
+    vi.clearAllMocks();
+    const token = await createProToken(true);
+    mocks.syncProEntitlement.mockResolvedValueOnce({
+      entitlementResult: 'active', tokenSyncLastResult: 'success', isPro: true,
+      token, entitlementSource: 'commercial',
+    });
+    render(<AppProvider><Probe /></AppProvider>);
+    await waitFor(() => expect(app.getAiGate()).toEqual({ status: 'ready', token }));
+    expect(app.proEntitlementSource).toBe('commercial');
+    expect(checkProAccess(app.isPro, app.getProAiUsageCount())).toBe('allowed');
   });
 });

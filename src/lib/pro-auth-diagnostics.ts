@@ -32,6 +32,60 @@ export interface ProAuthObservation {
   proEntitlementSource?: ProEntitlementSource;
 }
 
+export type InternalBootstrapResult =
+  | 'not_started'
+  | 'not_eligible'
+  | 'request_pending'
+  | 'success'
+  | 'rejected'
+  | 'invalid_response'
+  | 'request_failed';
+
+export type CommercialSyncResult = 'not_run' | 'skipped_internal' | 'active' | 'inactive' | 'failed';
+
+/** Safe, non-secret startup evidence for the internal diagnostics panel. */
+export interface InternalProBootstrapObservation {
+  internalBootstrapEligible: boolean | null;
+  internalBootstrapAttempted: boolean;
+  internalBootstrapHttpStatus: number | null;
+  internalBootstrapResult: InternalBootstrapResult;
+  proEntitlementSource: ProEntitlementSource;
+  canonicalIsPro: boolean;
+  commercialSyncResult: CommercialSyncResult;
+}
+
+let internalProBootstrapObservation: InternalProBootstrapObservation = {
+  internalBootstrapEligible: null,
+  internalBootstrapAttempted: false,
+  internalBootstrapHttpStatus: null,
+  internalBootstrapResult: 'not_started',
+  proEntitlementSource: 'none',
+  canonicalIsPro: false,
+  commercialSyncResult: 'not_run',
+};
+
+export function resetInternalProBootstrapObservation(eligible: boolean): void {
+  internalProBootstrapObservation = {
+    internalBootstrapEligible: eligible,
+    internalBootstrapAttempted: false,
+    internalBootstrapHttpStatus: null,
+    internalBootstrapResult: eligible ? 'not_started' : 'not_eligible',
+    proEntitlementSource: 'none',
+    canonicalIsPro: false,
+    commercialSyncResult: 'not_run',
+  };
+}
+
+export function updateInternalProBootstrapObservation(
+  patch: Partial<InternalProBootstrapObservation>,
+): void {
+  internalProBootstrapObservation = { ...internalProBootstrapObservation, ...patch };
+}
+
+export function getInternalProBootstrapObservation(): InternalProBootstrapObservation {
+  return { ...internalProBootstrapObservation };
+}
+
 export interface ProAuthServerObservation {
   serverReceivedTokenFingerprint: string | null;
   serverTokenFingerprintMatchesClient: boolean | null;

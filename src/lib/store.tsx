@@ -3,7 +3,6 @@
 import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
 import type { CVData, CoverLetterData } from './types';
 import {
-  initIAP,
   syncProEntitlement,
   type EntitlementSyncResult,
   type TokenSyncResult,
@@ -15,7 +14,13 @@ import {
   type ProEntitlementSource,
 } from './pro-token-client';
 import { Capacitor } from '@capacitor/core';
-import { fingerprintProToken, isInternalProAuthDiagnosticsEnabled, tokenLifetimeBucket, type ProAuthObservation } from './pro-auth-diagnostics';
+import {
+  fingerprintProToken,
+  isInternalProAuthDiagnosticsEnabled,
+  tokenLifetimeBucket,
+  updateInternalProBootstrapObservation,
+  type ProAuthObservation,
+} from './pro-auth-diagnostics';
 import {
   saveCvDraft,
   loadCvDraft,
@@ -288,6 +293,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setProToken(null);
         proEntitlementSourceRef.current = 'none';
         setProEntitlementSource('none');
+        updateInternalProBootstrapObservation({ canonicalIsPro: false, proEntitlementSource: 'none' });
         return;
       }
       const nextToken = token || loadProToken();
@@ -302,6 +308,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setTokenSyncLastResult('failed');
         proEntitlementSourceRef.current = 'none';
         setProEntitlementSource('none');
+        updateInternalProBootstrapObservation({ canonicalIsPro: false, proEntitlementSource: 'none' });
         return;
       }
       // Derive diagnostics from the signed token payload itself; caller-supplied
@@ -317,6 +324,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setProToken(nextToken);
       setProEntitlementSource(nextSource);
       setTokenSyncLastResult(options?.tokenSyncLastResult || 'success');
+      updateInternalProBootstrapObservation({ canonicalIsPro: true, proEntitlementSource: nextSource });
       return;
     }
 
@@ -328,14 +336,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setProToken(null);
     proEntitlementSourceRef.current = 'none';
     setProEntitlementSource('none');
+    updateInternalProBootstrapObservation({ canonicalIsPro: false, proEntitlementSource: 'none' });
   }, []);
 
-  // On mount: initialise RevenueCat SDK and sync Pro entitlement from the store.
-  // This ensures Pro status is always authoritative from Google Play / Apple IAP.
+  // On mount: run the canonical entitlement sync. Internal QA bootstrap is the
+  // first branch inside syncProEntitlement; commercial fallback owns RevenueCat
+  // initialization so an unavailable store cannot block the QA issuer request.
   useEffect(() => {
     (async () => {
       try {
-        await initIAP();
         // Capture at sync entry, not at the later AI click: platform bootstrap
         // drift must not disguise an earlier web-persistence branch as native.
         authPlatformAtSyncRef.current = observeAuthPlatform();
@@ -367,6 +376,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setProToken(null);
         setProEntitlementSource('none');
         setTokenSyncLastResult('failed');
+        updateInternalProBootstrapObservation({ canonicalIsPro: false, proEntitlementSource: 'none' });
       }
     })();
   }, [setIsPro]);

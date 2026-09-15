@@ -17,6 +17,7 @@ import {
   resetProAiTestUsageLedger,
   type ProAiUsageDiagnosticsSnapshot,
 } from '@/lib/ai-usage-policy';
+import { getInternalProBootstrapObservation } from '@/lib/pro-auth-diagnostics';
 
 export function InternalAiUsageResetPanel({
   refreshToken,
@@ -35,6 +36,7 @@ export function InternalAiUsageResetPanel({
   }, [refresh, refreshToken]);
 
   if (!snap) return null;
+  const proBootstrap = getInternalProBootstrapObservation();
 
   const confirmDialog = confirming && typeof document !== 'undefined'
     ? createPortal(
@@ -107,6 +109,15 @@ export function InternalAiUsageResetPanel({
         <li>window expires: {snap.windowExpiresIso ?? 'n/a'}</li>
         <li>blocked: {snap.blocked ? 'yes' : 'no'}</li>
       </ul>
+      <div className="border-t border-border pt-3">
+        <h3 className="text-xs font-semibold">Internal Pro bootstrap diagnostics</h3>
+        <pre
+          className="mt-2 max-h-48 overflow-auto rounded-lg bg-muted/40 p-3 text-[10px] leading-relaxed"
+          data-testid="internal-pro-bootstrap-diagnostics"
+        >
+          {JSON.stringify(proBootstrap, null, 2)}
+        </pre>
+      </div>
       <button
         type="button"
         data-testid="internal-ai-usage-reset-button"

@@ -131,6 +131,16 @@ describe('internal AI reset when compiled enabled', () => {
   it('reset UI exists with labels; confirmation; ledger cleared; CV/Pro survive', async () => {
     seedCapReached();
     const mod = await loadGateUiModules();
+    const proAuthDiagnostics = await import('@/lib/pro-auth-diagnostics');
+    proAuthDiagnostics.resetInternalProBootstrapObservation(true);
+    proAuthDiagnostics.updateInternalProBootstrapObservation({
+      internalBootstrapAttempted: true,
+      internalBootstrapHttpStatus: 200,
+      internalBootstrapResult: 'success',
+      proEntitlementSource: 'internal_test',
+      canonicalIsPro: true,
+      commercialSyncResult: 'skipped_internal',
+    });
     expect(mod.getProAiUsageCount()).toBe(50);
     expect(mod.canUseProAiSafety(true)).toBe(false);
 
@@ -140,6 +150,11 @@ describe('internal AI reset when compiled enabled', () => {
     expect(screen.getByText('AI test reset: enabled')).toBeTruthy();
     expect(screen.getByTestId('internal-ai-usage-count').textContent).toMatch(/count:\s*50/);
     expect(screen.getByTestId('internal-ai-usage-reset-button')).toBeTruthy();
+    const bootstrapDiagnostic = screen.getByTestId('internal-pro-bootstrap-diagnostics').textContent || '';
+    expect(bootstrapDiagnostic).toContain('"internalBootstrapResult": "success"');
+    expect(bootstrapDiagnostic).toContain('"canonicalIsPro": true');
+    expect(bootstrapDiagnostic).toContain('"commercialSyncResult": "skipped_internal"');
+    expect(bootstrapDiagnostic).not.toContain('internalTestProBootstrapCapability');
 
     // Reset panel appears before JSON toggle (no need to scroll past JSON).
     const body = screen.getByTestId('cv-export-diagnostics-body');
