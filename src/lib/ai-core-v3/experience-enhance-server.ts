@@ -5,6 +5,7 @@ import { createExperienceFactManifest } from './experience-manifest';
 import {
   EXPERIENCE_V3_ENHANCE_ACTION,
   EXPERIENCE_V3_ENHANCE_MATERIALITY_KINDS,
+  decideExperienceV3EnhanceCanonicalCandidate,
   hashExperienceV3EnhanceValue,
   type ExperienceV3EnhanceMaterialityEvidence,
   type ExperienceV3EnhanceMaterialityKind,
@@ -879,32 +880,6 @@ function aggregate(
   });
 }
 
-function comparableSource(value: string): string {
-  return value.normalize('NFKC')
-    .split(/\r?\n/u)
-    .map((line) => line.replace(/^\s*(?:[-*•▪◦‣⁃]|\d+[.)])\s*/u, '').trim())
-    .filter(Boolean)
-    .join(' ')
-    .replace(/\s+/gu, ' ')
-    .trim();
-}
-
-function materialityIsCosmeticOnly(
-  manifest: ExperienceFactManifest,
-  output: ExperienceV3EnhanceProviderOutput,
-  materiality: EvaluatorMaterialityPayload,
-): boolean {
-  const source = comparableSource(manifest.exactSourceText);
-  const candidate = comparableSource(output.units.map((unit) => unit.text).join('\n'));
-  if (source === candidate) return true;
-  const punctuationFree = (value: string) => value.replace(/[\p{P}\p{S}]/gu, '').replace(/\s+/gu, ' ').trim();
-  if (punctuationFree(source) === punctuationFree(candidate)) return true;
-  if (source.toLocaleLowerCase() === candidate.toLocaleLowerCase()) {
-    return materiality.kind !== 'grammar_correction';
-  }
-  return false;
-}
-
 export function buildExperienceV3EnhanceWriterPrompt(manifest: ExperienceFactManifest): string {
   const tense = manifest.employmentState === 'present' ? 'current/present CV form' : 'completed/past CV form';
   return [
@@ -1021,9 +996,14 @@ export async function executeExperienceV3EnhanceServer(
   if (evaluator.materiality.status === 'degraded' || evaluator.materiality.degradationDetected) {
     return failure('materiality_degraded', validation, evidence, audit);
   }
+  const canonicalDecision = decideExperienceV3EnhanceCanonicalCandidate({
+    sourceText: manifest.exactSourceText,
+    candidateText: providerOutput.units.map((unit) => unit.text).join('\n'),
+    materialityKind: evaluator.materiality.kind,
+  });
   if (evaluator.materiality.status !== 'material'
     || evaluator.materiality.sourceEquivalent
-    || materialityIsCosmeticOnly(manifest, providerOutput, evaluator.materiality)) {
+    || !canonicalDecision.shouldApply) {
     return failure('no_material_improvement', validation, evidence, audit);
   }
   const materiality = immutableCopy({

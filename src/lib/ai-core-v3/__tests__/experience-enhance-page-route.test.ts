@@ -6,6 +6,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { translations } from '../../i18n/translations';
 import type { CVData } from '../../types';
+import {
+  buildExperienceAiOutputProvenance,
+  resolveExperienceTextareaProvenance,
+} from '../../cv-experience-ai-output-provenance';
 import { InternalExperienceAiDiagnosticsPanel } from '@/components/InternalExperienceAiDiagnosticsPanel';
 import {
   clearExperienceAiDiagnosticsForTests,
@@ -22,7 +26,9 @@ import {
   EXPERIENCE_V3_ENHANCE_ACTION,
   captureExperienceV3EnhanceOperationSnapshot,
   classifyExperienceV3EnhanceRouting,
+  hashExperienceV3EnhanceValue,
   type ExperienceV3EnhanceAdapterInput,
+  unavailableExperienceV3DiagnosticEvidence,
 } from '..';
 
 const pageSource = readFileSync(resolve(process.cwd(), 'src/app/cv-builder/page.tsx'), 'utf8');
@@ -34,10 +40,13 @@ const legacyV2RequestMock = vi.hoisted(() => vi.fn());
 const pageUsageIncrementMock = vi.hoisted(() => vi.fn());
 const pageToastSuccessMock = vi.hoisted(() => vi.fn());
 const pageToastErrorMock = vi.hoisted(() => vi.fn());
+const pagePersistMock = vi.hoisted(() => vi.fn());
+const pageLegacyFinalizerMock = vi.hoisted(() => vi.fn());
 
 const PAGE_ENTRY_ID = 'route-m3-live-entry';
 const PAGE_STALE_SOURCE = 'Stale state source that must not be sent.';
 const PAGE_LIVE_SOURCE = 'Helps customers with service questions.\nKeeps accurate request records.';
+let pageTestLocale: 'en' | 'de' = 'en';
 
 const pageRuntimeState: {
   currentCv: CVData;
@@ -49,7 +58,7 @@ const pageRuntimeState: {
   writes: [],
 };
 
-function makePageCv(): CVData {
+function makePageCv(locale: 'en' | 'de' = 'en'): CVData {
   return {
     id: 'route-m3-live-cv',
     name: 'Route M3 live CV',
@@ -58,7 +67,7 @@ function makePageCv(): CVData {
       jobTitle: 'Support Specialist', gender: 'female',
     },
     summary: 'User-owned summary.',
-    contentLocale: 'en',
+    contentLocale: locale,
     experience: [{
       id: PAGE_ENTRY_ID,
       company: 'Example Company',
@@ -82,17 +91,24 @@ function makePageCv(): CVData {
   };
 }
 
-function installActualPageFlowMocks(): void {
+function installActualPageFlowMocks(options: { realM2?: boolean; realM3?: boolean } = {}): void {
   vi.doMock('@/lib/ai-core-v3', async () => {
     const actual = await vi.importActual<typeof import('..')>('@/lib/ai-core-v3');
     return {
       ...actual,
-      runExperienceV3GenerateAdapter: pageM2AdapterMock,
-      runExperienceV3EnhanceAdapter: pageM3AdapterMock,
+      runExperienceV3GenerateAdapter: options.realM2
+        ? (...args: Parameters<typeof actual.runExperienceV3GenerateAdapter>) => {
+          pageM2AdapterMock(...args);
+          return actual.runExperienceV3GenerateAdapter(...args);
+        }
+        : pageM2AdapterMock,
+      runExperienceV3EnhanceAdapter: options.realM3
+        ? actual.runExperienceV3EnhanceAdapter
+        : pageM3AdapterMock,
     };
   });
   vi.doMock('@/lib/i18n/context', () => ({
-    useI18n: () => ({ locale: 'en', t: translations.en }),
+    useI18n: () => ({ locale: pageTestLocale, t: translations[pageTestLocale] }),
   }));
   vi.doMock('@/lib/store', () => ({
     checkProAccess: () => 'allowed',
@@ -103,6 +119,7 @@ function installActualPageFlowMocks(): void {
         pageRuntimeState.writes.push(next);
       },
       persistCurrentCvTransactionally: (next: CVData) => {
+        pagePersistMock(next);
         pageRuntimeState.currentCv = next;
         pageRuntimeState.writes.push(next);
         return true;
@@ -123,6 +140,16 @@ function installActualPageFlowMocks(): void {
   vi.doMock('@/lib/api', async () => {
     const actual = await vi.importActual<typeof import('../../api')>('@/lib/api');
     return { ...actual, apiFetch: legacyV2RequestMock };
+  });
+  vi.doMock('@/lib/cv-ai-finalize-apply', async () => {
+    const actual = await vi.importActual<typeof import('../../cv-ai-finalize-apply')>('@/lib/cv-ai-finalize-apply');
+    return {
+      ...actual,
+      finalizeCvAiFieldForApply: (...args: Parameters<typeof actual.finalizeCvAiFieldForApply>) => {
+        pageLegacyFinalizerMock(...args);
+        return actual.finalizeCvAiFieldForApply(...args);
+      },
+    };
   });
   vi.doMock('@/components/Header', () => ({ default: () => null }));
   vi.doMock('@/components/Footer', () => ({ default: () => null }));
@@ -145,6 +172,7 @@ async function executeActualPageExperienceFlow(m3Kind: PageM3ResultKind) {
   localStorage.clear();
   sessionStorage.clear();
   pageRuntimeState.currentCv = makePageCv();
+  pageTestLocale = 'en';
   pageRuntimeState.usage = 7;
   pageRuntimeState.writes = [];
   pageM2AdapterMock.mockReset().mockResolvedValue({ kind: 'not_applicable' });
@@ -160,6 +188,8 @@ async function executeActualPageExperienceFlow(m3Kind: PageM3ResultKind) {
   pageUsageIncrementMock.mockReset();
   pageToastSuccessMock.mockReset();
   pageToastErrorMock.mockReset();
+  pagePersistMock.mockReset();
+  pageLegacyFinalizerMock.mockReset();
   process.env.NEXT_PUBLIC_AI_CORE_V3_ENABLED = 'true';
   process.env.AI_CORE_V3_ENABLED = 'true';
   Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
@@ -228,6 +258,7 @@ async function executeActualPageExperienceFlow(m3Kind: PageM3ResultKind) {
     vi.doUnmock('@/lib/i18n/context');
     vi.doUnmock('@/lib/store');
     vi.doUnmock('@/lib/api');
+    vi.doUnmock('@/lib/cv-ai-finalize-apply');
     vi.doUnmock('@/components/Header');
     vi.doUnmock('@/components/Footer');
     vi.doUnmock('sonner');
@@ -238,6 +269,208 @@ async function executeActualPageExperienceFlow(m3Kind: PageM3ResultKind) {
         configurable: true,
         value: originalScrollIntoView,
       });
+    }
+    vi.clearAllMocks();
+    vi.resetModules();
+  }
+}
+
+type ProductionBoundaryScenario = Readonly<{
+  source: string;
+  units?: readonly string[];
+  locale?: 'en' | 'de';
+  materialityKind?: string;
+  typedFailure?: string;
+  wrongIdentity?: boolean;
+  rejectValidation?: boolean;
+  repeatAcceptedCandidate?: boolean;
+  initialCv?: CVData;
+  preservePersistedTextarea?: boolean;
+  realM2?: boolean;
+  expectedSuccess: boolean;
+}>;
+
+function productionBoundaryResponse(
+  manifest: ReturnType<typeof captureExperienceV3EnhanceOperationSnapshot>['manifest'],
+  scenario: ProductionBoundaryScenario,
+  requestNumber: number,
+): unknown {
+  if (scenario.typedFailure) {
+    return { ok: false, action: EXPERIENCE_V3_ENHANCE_ACTION, typedReason: scenario.typedFailure };
+  }
+  const requestedUnits = scenario.repeatAcceptedCandidate && requestNumber > 1
+    ? manifest.facts.map((fact) => fact.text.replace(/^\s*[•*-]\s*/u, ''))
+    : (scenario.units ?? manifest.facts.map((fact) => fact.text));
+  const units = manifest.facts.map((fact, index) => ({
+    factId: fact.factId,
+    text: requestedUnits[index] ?? requestedUnits[requestedUnits.length - 1] ?? fact.text,
+  }));
+  const operationId = scenario.wrongIdentity ? `${manifest.operationId}-wrong` : manifest.operationId;
+  const candidateText = units.map((unit) => `• ${unit.text}`).join('\n');
+  return {
+    ok: true,
+    action: EXPERIENCE_V3_ENHANCE_ACTION,
+    providerOutput: {
+      operationId,
+      entryId: manifest.entryId,
+      snapshotHash: manifest.snapshotHash,
+      locale: manifest.locale,
+      units,
+    },
+    candidate: {
+      operationId: manifest.operationId,
+      candidateId: `production-boundary-${requestNumber}`,
+      operationKind: 'experience_enhance',
+      targetLocale: manifest.locale,
+      sourceSnapshotHash: manifest.snapshotHash,
+      text: candidateText,
+      units: units.map((unit, index) => ({
+        unitId: `production-boundary-${requestNumber}-${index + 1}`,
+        entryId: manifest.entryId,
+        text: unit.text,
+        factIds: [unit.factId],
+      })),
+    },
+    validation: {
+      decision: scenario.rejectValidation ? 'reject' : 'accept',
+      phases: {
+        structural: { status: 'passed', violations: [] },
+        semantic: scenario.rejectValidation
+          ? { status: 'failed', violations: [{ code: 'grounding_failed', category: 'semantic', detail: 'fixture' }] }
+          : { status: 'passed', violations: [] },
+        language_quality: { status: 'passed', violations: [] },
+      },
+    },
+    materiality: {
+      status: 'material',
+      kind: scenario.materialityKind ?? 'professional_phrasing',
+      sourceEquivalent: false,
+      degradationDetected: false,
+    },
+    diagnosticEvidence: {
+      ...unavailableExperienceV3DiagnosticEvidence(),
+      candidatePresent: true,
+      candidateHash: hashExperienceV3EnhanceValue(candidateText),
+      candidateUnitCount: units.length,
+      candidateUnitHashes: units.map((unit) => hashExperienceV3EnhanceValue(unit.text)),
+      candidateUnitLengths: units.map((unit) => unit.text.length),
+    },
+  };
+}
+
+async function executeProductionM3PageBoundary(scenario: ProductionBoundaryScenario) {
+  const environmentKeys = ['NEXT_PUBLIC_AI_CORE_V3_ENABLED', 'AI_CORE_V3_ENABLED'] as const;
+  const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
+  const originalEnvironment = Object.fromEntries(environmentKeys.map((key) => [key, {
+    present: Object.prototype.hasOwnProperty.call(process.env, key),
+    value: process.env[key],
+  }])) as Record<(typeof environmentKeys)[number], { present: boolean; value: string | undefined }>;
+
+  cleanup();
+  localStorage.clear();
+  sessionStorage.clear();
+  const locale = scenario.locale ?? 'en';
+  pageTestLocale = locale;
+  pageRuntimeState.currentCv = scenario.initialCv ?? makePageCv(locale);
+  pageRuntimeState.usage = 7;
+  pageRuntimeState.writes = [];
+  pageM2AdapterMock.mockReset().mockResolvedValue({ kind: 'not_applicable' });
+  pageM3AdapterMock.mockReset();
+  pageUsageIncrementMock.mockReset();
+  pageToastSuccessMock.mockReset();
+  pageToastErrorMock.mockReset();
+  pagePersistMock.mockReset();
+  pageLegacyFinalizerMock.mockReset();
+  let m3RequestCount = 0;
+  const requestBodies: Array<Record<string, unknown>> = [];
+  legacyV2RequestMock.mockReset().mockImplementation(async (_url: string, options: { body?: Record<string, unknown> }) => {
+    const body = options.body ?? {};
+    requestBodies.push(body);
+    if (body.action !== EXPERIENCE_V3_ENHANCE_ACTION) {
+      return { data: { error: 'unexpected_legacy_fallthrough' }, response: { ok: false, status: 422, headers: { get: () => null } } };
+    }
+    m3RequestCount += 1;
+    const manifest = body.manifest as ReturnType<typeof captureExperienceV3EnhanceOperationSnapshot>['manifest'];
+    return {
+      data: productionBoundaryResponse(manifest, scenario, m3RequestCount),
+      response: { ok: true, status: scenario.typedFailure ? 422 : 200, headers: { get: () => 'application/json' } },
+    };
+  });
+  process.env.NEXT_PUBLIC_AI_CORE_V3_ENABLED = 'true';
+  process.env.AI_CORE_V3_ENABLED = 'true';
+  Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+  vi.resetModules();
+  installActualPageFlowMocks({ realM2: scenario.realM2, realM3: true });
+
+  try {
+    const core = await import('..');
+    core.resetAiCoreV3TestOverride();
+    const Page = (await import('@/app/cv-builder/page')).default;
+    render(React.createElement(Page));
+    fireEvent.click(screen.getByRole('button', { name: translations[locale].cv.experience }));
+    const textarea = document.querySelector(
+      `[data-experience-description-id="${PAGE_ENTRY_ID}"]`,
+    ) as HTMLTextAreaElement | null;
+    expect(textarea).not.toBeNull();
+    if (scenario.preservePersistedTextarea) {
+      expect(textarea!.value).toBe(scenario.source);
+    } else {
+      fireEvent.change(textarea!, { target: { value: scenario.source } });
+      await waitFor(() => expect(textarea!.value).toBe(scenario.source));
+    }
+    const aiButton = () => screen.getByRole('button', { name: new RegExp(translations[locale].cv.aiBullets, 'i') });
+    fireEvent.click(aiButton());
+    const shouldSucceed = scenario.expectedSuccess;
+    if (shouldSucceed) await waitFor(() => expect(pageToastSuccessMock).toHaveBeenCalledTimes(1));
+    else await waitFor(() => expect(pageToastErrorMock).toHaveBeenCalledTimes(1));
+
+    if (scenario.repeatAcceptedCandidate) {
+      fireEvent.click(aiButton());
+      await waitFor(() => expect(pageToastErrorMock).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(m3RequestCount).toBe(2));
+    }
+    const currentTextarea = document.querySelector(
+      `[data-experience-description-id="${PAGE_ENTRY_ID}"]`,
+    ) as HTMLTextAreaElement | null;
+    const diagnostics = await import('../../cv-experience-ai-diagnostics');
+    const diagnostic = diagnostics.getLatestExperienceAiDiagnosticRecord();
+    return {
+      visibleText: currentTextarea?.value ?? '',
+      usage: pageRuntimeState.usage,
+      usageCalls: pageUsageIncrementMock.mock.calls.length,
+      persistCalls: pagePersistMock.mock.calls.length,
+      finalizerCalls: pageLegacyFinalizerMock.mock.calls.length,
+      m2Calls: pageM2AdapterMock.mock.calls.length,
+      m3RequestCount,
+      requestBodies,
+      successToastCalls: pageToastSuccessMock.mock.calls.length,
+      errorToastCalls: pageToastErrorMock.mock.calls.length,
+      diagnostic,
+      originalUserDescription: pageRuntimeState.currentCv.experience.find((entry) => entry.id === PAGE_ENTRY_ID)?.originalUserDescription,
+    };
+  } finally {
+    cleanup();
+    const core = await import('..');
+    core.resetAiCoreV3TestOverride();
+    for (const key of environmentKeys) {
+      const original = originalEnvironment[key];
+      if (original.present) process.env[key] = original.value;
+      else delete process.env[key];
+    }
+    localStorage.clear();
+    sessionStorage.clear();
+    vi.doUnmock('@/lib/ai-core-v3');
+    vi.doUnmock('@/lib/i18n/context');
+    vi.doUnmock('@/lib/store');
+    vi.doUnmock('@/lib/api');
+    vi.doUnmock('@/lib/cv-ai-finalize-apply');
+    vi.doUnmock('@/components/Header');
+    vi.doUnmock('@/components/Footer');
+    vi.doUnmock('sonner');
+    if (originalScrollIntoView === undefined) {
+      delete (HTMLElement.prototype as { scrollIntoView?: typeof HTMLElement.prototype.scrollIntoView }).scrollIntoView;
+    } else {
+      Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: originalScrollIntoView });
     }
     vi.clearAllMocks();
     vi.resetModules();
@@ -578,5 +811,318 @@ describe('M3 page and route integration', () => {
     expect(run.legacyV2Calls).toBe(1);
     expect(run.m3Input.entryId).toBe(PAGE_ENTRY_ID);
     expect(run.m3Input.exactVisibleDescription).toBe(PAGE_LIVE_SOURCE);
+  });
+
+  it('A. production grammar correction crosses the real M3 boundary and commits exactly once', async () => {
+    const source = 'supports customers with service questions.\nkeeps accurate request records.';
+    const units = ['Supports customers with service questions.', 'Keeps accurate request records.'];
+    const run = await executeProductionM3PageBoundary({
+      source,
+      units,
+      materialityKind: 'grammar_correction',
+      expectedSuccess: true,
+    });
+    expect(run.visibleText).toBe(units.map((unit) => `• ${unit}`).join('\n'));
+    expect([run.persistCalls, run.usageCalls, run.usage, run.finalizerCalls]).toEqual([1, 1, 8, 0]);
+    expect(run.requestBodies[0]).toMatchObject({ action: EXPERIENCE_V3_ENHANCE_ACTION });
+    expect(run.diagnostic).toMatchObject({
+      operation: EXPERIENCE_V3_ENHANCE_ACTION,
+      candidatePresent: true,
+      candidateHash: hashExperienceV3EnhanceValue(units.map((unit) => `• ${unit}`).join('\n')),
+      finalDecision: 'accept',
+      materialityKind: 'grammar_correction',
+      applyAttempted: true,
+      applyCommitted: true,
+      persistenceResult: 'succeeded',
+      usageBefore: 7,
+      usageAfter: 8,
+      usageDelta: 1,
+    });
+  });
+
+  it('B. physical AAB586 German source echo is rejected by the real M3 transaction', async () => {
+    const source = [
+      'Wartung an elektrischen Anlagen machen.',
+      'Störungen suchen und beheben.',
+      'Bei der Installation von elektrischen Komponenten helfen.',
+    ].join('\n');
+    const run = await executeProductionM3PageBoundary({
+      source,
+      locale: 'de',
+      materialityKind: 'professional_phrasing',
+      expectedSuccess: false,
+    });
+    expect(run.visibleText).toBe(source);
+    expect([run.persistCalls, run.usageCalls, run.usage, run.finalizerCalls]).toEqual([0, 0, 7, 0]);
+    expect(run.diagnostic).toMatchObject({
+      operation: EXPERIENCE_V3_ENHANCE_ACTION,
+      candidatePresent: true,
+      candidateHash: hashExperienceV3EnhanceValue(source.split('\n').map((unit) => `• ${unit}`).join('\n')),
+      finalDecision: 'reject',
+      finalDecisionKind: 'semantic_noop',
+      sourceEquivalentToAuthoritativeSource: true,
+      applyAttempted: false,
+      applyCommitted: false,
+      persistenceResult: 'not_attempted',
+      usageBefore: 7,
+      usageAfter: 7,
+      usageDelta: 0,
+    });
+  });
+
+  it('C. already-correct visible text remains distinct from original provenance and costs zero', async () => {
+    const run = await executeProductionM3PageBoundary({
+      source: PAGE_LIVE_SOURCE,
+      expectedSuccess: false,
+    });
+    expect(run.originalUserDescription).toBe('Older original source.');
+    expect(run.visibleText).toBe(PAGE_LIVE_SOURCE);
+    expect([run.persistCalls, run.usageCalls, run.usage, run.finalizerCalls]).toEqual([0, 0, 7, 0]);
+    expect(run.diagnostic).toMatchObject({
+      candidatePresent: true,
+      candidateHash: hashExperienceV3EnhanceValue(PAGE_LIVE_SOURCE.split('\n').map((unit) => `• ${unit}`).join('\n')),
+      finalDecision: 'reject',
+      finalDecisionKind: 'semantic_noop',
+      applyAttempted: false,
+      applyCommitted: false,
+      persistenceResult: 'not_attempted',
+      usageBefore: 7,
+      usageAfter: 7,
+      usageDelta: 0,
+    });
+  });
+
+  it.each(['grammar_error_fixed', 'grounded_phrasing_enhancement'])(
+    'D. invalid materiality provenance %s is rejected at the production parser boundary',
+    async (materialityKind) => {
+      const run = await executeProductionM3PageBoundary({
+        source: PAGE_LIVE_SOURCE,
+        units: ['Provides timely customer support.', 'Maintains accurate request records.'],
+        materialityKind,
+        expectedSuccess: false,
+      });
+      expect(run.visibleText).toBe(PAGE_LIVE_SOURCE);
+      expect([run.persistCalls, run.usageCalls, run.usage, run.finalizerCalls]).toEqual([0, 0, 7, 0]);
+      expect(run.diagnostic).toMatchObject({
+        candidatePresent: true,
+        candidateHash: hashExperienceV3EnhanceValue('Provides timely customer support.\nMaintains accurate request records.'.split('\n').map((unit) => `• ${unit}`).join('\n')),
+        finalDecision: 'reject',
+        applyAttempted: false,
+        applyCommitted: false,
+        persistenceResult: 'not_attempted',
+        usageBefore: 7,
+        usageAfter: 7,
+        usageDelta: 0,
+        rejectionReasonCodes: ['invalid_v3_enhance_response'],
+      });
+    },
+  );
+
+  it('E. wrong operation evidence cannot authorize a different production candidate', async () => {
+    const run = await executeProductionM3PageBoundary({
+      source: PAGE_LIVE_SOURCE,
+      units: ['Provides timely customer support.', 'Maintains accurate request records.'],
+      materialityKind: 'professional_phrasing',
+      wrongIdentity: true,
+      expectedSuccess: false,
+    });
+    expect(run.visibleText).toBe(PAGE_LIVE_SOURCE);
+    expect([run.persistCalls, run.usageCalls, run.usage, run.finalizerCalls]).toEqual([0, 0, 7, 0]);
+    expect(run.diagnostic).toMatchObject({
+      candidatePresent: true,
+      candidateHash: hashExperienceV3EnhanceValue('Provides timely customer support.\nMaintains accurate request records.'.split('\n').map((unit) => `• ${unit}`).join('\n')),
+      finalDecision: 'reject',
+      applyAttempted: false,
+      applyCommitted: false,
+      persistenceResult: 'not_attempted',
+      usageBefore: 7,
+      usageAfter: 7,
+      usageDelta: 0,
+      rejectionReasonCodes: ['candidate_or_validation_mismatch'],
+    });
+  });
+
+  it('F. accepted production improvement charges once and a same-visible repeat charges zero', async () => {
+    const units = [
+      'Provides timely support for customer service questions.',
+      'Maintains accurate records of customer requests.',
+    ];
+    const run = await executeProductionM3PageBoundary({
+      source: PAGE_LIVE_SOURCE,
+      units,
+      materialityKind: 'professional_phrasing',
+      repeatAcceptedCandidate: true,
+      expectedSuccess: true,
+    });
+    expect(run.visibleText).toBe(units.map((unit) => `• ${unit}`).join('\n'));
+    expect([run.m3RequestCount, run.persistCalls, run.usageCalls, run.usage]).toEqual([2, 1, 1, 8]);
+    expect([run.finalizerCalls, run.successToastCalls, run.errorToastCalls]).toEqual([0, 1, 1]);
+    expect(run.diagnostic).toMatchObject({
+      candidatePresent: true,
+      candidateHash: hashExperienceV3EnhanceValue(units.map((unit) => `• ${unit}`).join('\n')),
+      finalDecision: 'reject',
+      finalDecisionKind: 'semantic_noop',
+      applyAttempted: false,
+      applyCommitted: false,
+      persistenceResult: 'not_attempted',
+      usageBefore: 8,
+      usageAfter: 8,
+      usageDelta: 0,
+    });
+  });
+
+  it('G. recognized materiality cannot override failed semantic grounding', async () => {
+    const run = await executeProductionM3PageBoundary({
+      source: PAGE_LIVE_SOURCE,
+      units: ['Provides timely customer support.', 'Maintains accurate request records.'],
+      materialityKind: 'grammar_correction',
+      rejectValidation: true,
+      expectedSuccess: false,
+    });
+    expect(run.visibleText).toBe(PAGE_LIVE_SOURCE);
+    expect([run.persistCalls, run.usageCalls, run.usage, run.finalizerCalls]).toEqual([0, 0, 7, 0]);
+    expect(run.diagnostic).toMatchObject({
+      candidatePresent: true,
+      candidateHash: hashExperienceV3EnhanceValue('Provides timely customer support.\nMaintains accurate request records.'.split('\n').map((unit) => `• ${unit}`).join('\n')),
+      finalDecision: 'reject',
+      applyAttempted: false,
+      applyCommitted: false,
+      persistenceResult: 'not_attempted',
+      usageBefore: 7,
+      usageAfter: 7,
+      usageDelta: 0,
+      rejectionReasonCodes: ['candidate_or_validation_mismatch'],
+    });
+  });
+
+  it('H. persisted unedited German AI state routes through real M2/M3 without a textarea change', async () => {
+    const knownPhysicalSource = [
+      'Wartung an elektrischen Anlagen machen.',
+      'Störungen suchen und beheben.',
+      'Bei der Installation von elektrischen Komponenten helfen.',
+    ].join('\n');
+    // Controlled persisted-output fixture only; it is not claimed as the
+    // unknown pre-click text from the historical AAB586 run.
+    const syntheticPersistedAiVisible = [
+      'Führt Wartungsarbeiten an elektrischen Anlagen durch.',
+      'Lokalisiert und behebt Störungen in elektrischen Systemen.',
+      'Unterstützt die Installation elektrischer Komponenten.',
+    ].join('\n');
+    const persistedCv = makePageCv('de');
+    persistedCv.personal.gender = 'male';
+    persistedCv.experience[0] = {
+      ...persistedCv.experience[0],
+      company: 'Controlled Fixture GmbH',
+      position: 'Elektroservicetechniker',
+      startDate: '2024-01',
+      endDate: '',
+      isPresent: true,
+      description: syntheticPersistedAiVisible,
+      generatedDescription: syntheticPersistedAiVisible,
+      generatedLocale: 'de',
+      canonicalDescription: knownPhysicalSource,
+      originalUserDescription: knownPhysicalSource,
+      descriptionOrigin: 'ai_generated',
+      aiOutputProvenance: buildExperienceAiOutputProvenance({
+        experienceEntryId: PAGE_ENTRY_ID,
+        appliedOutput: syntheticPersistedAiVisible,
+        preAiFactText: knownPhysicalSource,
+        sourceLocale: 'de',
+        targetLocale: 'de',
+        operationMode: 'enhance',
+        sourceAuthorityKind: 'original_user',
+        requestHash: 'controlled-persisted-route-fixture',
+        appliedAt: '2026-09-15T00:00:00.000Z',
+      }),
+    };
+    expect(resolveExperienceTextareaProvenance(persistedCv.experience[0]!))
+      .toMatchObject({ currentTextareaProvenance: 'ai_generated_unedited' });
+
+    const run = await executeProductionM3PageBoundary({
+      source: syntheticPersistedAiVisible,
+      locale: 'de',
+      initialCv: persistedCv,
+      preservePersistedTextarea: true,
+      realM2: true,
+      expectedSuccess: false,
+    });
+
+    expect(run.m2Calls).toBe(1);
+    expect(run.requestBodies).toHaveLength(1);
+    expect(run.requestBodies[0]).toMatchObject({ action: EXPERIENCE_V3_ENHANCE_ACTION });
+    expect([run.finalizerCalls, run.persistCalls, run.usageCalls, run.usage])
+      .toEqual([0, 0, 0, 7]);
+    expect(run.visibleText).toBe(syntheticPersistedAiVisible);
+    expect(run.diagnostic).toMatchObject({
+      marker: 'EXPERIENCE_V3_TERMINAL_DIAGNOSTIC',
+      operation: EXPERIENCE_V3_ENHANCE_ACTION,
+      selectedEngine: 'experience_v3_enhance',
+      v3EnabledForOperation: true,
+      m3Applicability: 'owned',
+      m3NotApplicableReason: null,
+      finalDecision: 'reject',
+      finalDecisionKind: 'semantic_noop',
+      usageBefore: 7,
+      usageAfter: 7,
+      usageMeasurementStatus: 'observed',
+      observedUsageAfter: 7,
+      observedUsageDelta: 0,
+      usageIncrementAttempted: false,
+    });
+    expect((run.diagnostic as ExperienceV3TerminalDiagnostic).routingRequestIdHash)
+      .toBe((run.diagnostic as ExperienceV3TerminalDiagnostic).requestIdHash);
+    expect((run.diagnostic as ExperienceV3TerminalDiagnostic).routingOperationIdHash)
+      .toBe((run.diagnostic as ExperienceV3TerminalDiagnostic).operationIdHash);
+  });
+
+  it('I. actual M3 not-applicable reason is bound to the legacy terminal record', async () => {
+    const germanSource = [
+      'Wartung an elektrischen Anlagen machen.',
+      'Störungen suchen und beheben.',
+      'Bei der Installation von elektrischen Komponenten helfen.',
+    ].join('\n');
+    const invalidCompletedDateCv = makePageCv('de');
+    invalidCompletedDateCv.personal.gender = 'male';
+    invalidCompletedDateCv.experience[0] = {
+      ...invalidCompletedDateCv.experience[0],
+      position: 'Elektroservicetechniker',
+      description: germanSource,
+      generatedDescription: '',
+      generatedLocale: 'de',
+      isPresent: false,
+      endDate: 'not-a-structured-date',
+      canonicalDescription: germanSource,
+      originalUserDescription: germanSource,
+      descriptionOrigin: 'user',
+      aiOutputProvenance: undefined,
+    };
+    const run = await executeProductionM3PageBoundary({
+      source: germanSource,
+      locale: 'de',
+      initialCv: invalidCompletedDateCv,
+      preservePersistedTextarea: true,
+      realM2: true,
+      expectedSuccess: false,
+    });
+
+    expect(run.m2Calls).toBe(1);
+    expect(run.m3RequestCount).toBe(0);
+    expect(run.requestBodies).toHaveLength(1);
+    expect(run.requestBodies[0]).toMatchObject({ action: 'bullets' });
+    expect(run.diagnostic).toMatchObject({
+      marker: 'EXPERIENCE_AI_DIAG_V1',
+      selectedEngine: 'legacy_experience',
+      v3EnabledForOperation: true,
+      m2Applicability: 'not_applicable',
+      m3Applicability: 'not_applicable',
+      m3NotApplicableReason: 'end_date_invalid',
+    });
+    const legacyDiagnostic = run.diagnostic as {
+      requestIdHash?: string;
+      routingRequestIdHash?: string;
+      routingOperationIdHash?: string;
+    };
+    expect(legacyDiagnostic.routingRequestIdHash).toBe(legacyDiagnostic.requestIdHash);
+    expect(legacyDiagnostic.routingOperationIdHash).toBe(legacyDiagnostic.requestIdHash);
   });
 });

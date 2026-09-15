@@ -236,6 +236,7 @@ import {
   runExperienceV3EnhanceAdapter,
   runExperienceV3GenerateAdapter,
   runSummaryV3GenerateAdapter,
+  type ExperienceV3EnhanceRoutingDecision,
   type SummaryV3CommitFailureReason,
   type SummaryV3CommitReceipt,
   type SummaryV3CommitRequest,
@@ -2505,6 +2506,10 @@ export default function CVBuilderPage() {
     // operation. Disabled, empty, or cross-locale requests remain on their
     // existing M2/V2 paths. An owned failure is terminal and never invokes V2.
     let experienceV3EnhanceRouteHttpStatus: number | null = null;
+    let experienceV3EnhanceRoutingDecision: ExperienceV3EnhanceRoutingDecision | null =
+      experienceV3Enabled
+        ? null
+        : { kind: 'not_applicable', reason: 'v3_feature_disabled' };
     const experienceV3EnhanceResult = experienceV3Enabled
       ? await runExperienceV3EnhanceAdapter({
         enabled: true,
@@ -2560,6 +2565,9 @@ export default function CVBuilderPage() {
         incrementUsage: recordProAiSuccess,
         getUsageCount: getProAiUsageCount,
         getRouteHttpStatus: () => experienceV3EnhanceRouteHttpStatus,
+        onRoutingDecision: (decision) => {
+          experienceV3EnhanceRoutingDecision = decision;
+        },
       })
       : { kind: 'not_applicable' as const };
     if (experienceV3EnhanceResult.kind !== 'not_applicable') {
@@ -2687,6 +2695,16 @@ export default function CVBuilderPage() {
       jobContextHash: requestContext.key,
       requestId: reqCtx.requestId,
       usageCountBefore: countBefore,
+    });
+    const m3NotApplicableReason = experienceV3EnhanceRoutingDecision?.kind === 'not_applicable'
+      ? experienceV3EnhanceRoutingDecision.reason
+      : 'routing_observation_unavailable';
+    diagSession.recordRoutingDecision({
+      selectedEngine: 'legacy_experience',
+      v3EnabledForOperation: experienceV3Enabled,
+      m2Applicability: experienceV3Result.kind,
+      m3Applicability: 'not_applicable',
+      m3NotApplicableReason,
     });
     diagSession.stage('button_pressed', 'ok');
     diagSession.recordLiveExperience(exp, Boolean(exp.isPresent));

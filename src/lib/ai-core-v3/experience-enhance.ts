@@ -10,6 +10,12 @@ import type {
 import { createExperienceFactManifest } from './experience-manifest';
 import { immutableCopy } from './immutability';
 import { createSourceAuthoritySnapshot } from './source-authority';
+import {
+  experienceAiSourceUnits,
+  experienceAiSourcesEquivalent,
+  normalizeExperienceAiSourceText,
+} from '../cv-experience-ai-operation-snapshot';
+import { normalizeSourceFactText } from '../cv-source-fact-identity';
 import type { AggregateValidationResult } from './validators';
 import {
   EXPERIENCE_V3_TERMINAL_DIAGNOSTIC_MARKER,
@@ -37,6 +43,14 @@ export const EXPERIENCE_V3_ENHANCE_MATERIALITY_KINDS = [
 export type ExperienceV3EnhanceMaterialityKind =
   (typeof EXPERIENCE_V3_ENHANCE_MATERIALITY_KINDS)[number];
 
+/** Runtime boundary for the V3 evaluator materiality vocabulary. */
+export function isExperienceV3EnhanceMaterialityKind(
+  value: unknown,
+): value is ExperienceV3EnhanceMaterialityKind {
+  return typeof value === 'string'
+    && EXPERIENCE_V3_ENHANCE_MATERIALITY_KINDS.some((kind) => kind === value);
+}
+
 export type ExperienceV3EnhanceRoutingResult =
   | { readonly kind: 'not_applicable' }
   | { readonly kind: 'handled_success' }
@@ -60,6 +74,92 @@ export interface ExperienceV3EnhanceMaterialityEvidence {
   readonly kind: ExperienceV3EnhanceMaterialityKind;
   readonly sourceEquivalent: false;
   readonly degradationDetected: false;
+}
+
+export type ExperienceV3EnhanceCanonicalDecision = Readonly<{
+  materialityKind: ExperienceV3EnhanceMaterialityKind | null;
+  sourceEquivalentToAuthoritativeSource: boolean;
+  sourceComparisonClass:
+    | 'EXACT_OR_FORMATTING_EQUIVALENT'
+    | 'PUNCTUATION_ONLY_EQUIVALENT'
+    | 'CASE_ONLY_DIFFERENCE'
+    | 'MATERIALLY_DIFFERENT';
+  materialImprovementDetected: boolean;
+  finalDecisionKind: 'material_improvement' | 'semantic_noop';
+  shouldApply: boolean;
+  shouldIncrementUsage: boolean;
+}>;
+
+export type ExperienceV3EnhanceSourceComparisonClass =
+  ExperienceV3EnhanceCanonicalDecision['sourceComparisonClass'];
+
+function sameUnits(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function sourceUnitsPreservingCase(source: string): string[] {
+  return experienceAiSourceUnits(source)
+    .map((unit) => unit.normalize('NFKC').replace(/\s+/gu, ' ').trim());
+}
+
+function classifyExperienceV3EnhanceSourceDifference(
+  sourceText: string,
+  candidateText: string,
+): ExperienceV3EnhanceSourceComparisonClass {
+  const normalizedSource = normalizeExperienceAiSourceText(sourceText);
+  const normalizedCandidate = normalizeExperienceAiSourceText(candidateText);
+  if (normalizedSource === normalizedCandidate) return 'EXACT_OR_FORMATTING_EQUIVALENT';
+
+  const sourceUnits = sourceUnitsPreservingCase(sourceText);
+  const candidateUnits = sourceUnitsPreservingCase(candidateText);
+  const semanticSourceUnits = sourceUnits.map((unit) => normalizeSourceFactText(unit));
+  const semanticCandidateUnits = candidateUnits.map((unit) => normalizeSourceFactText(unit));
+  if (!sameUnits(semanticSourceUnits, semanticCandidateUnits)) return 'MATERIALLY_DIFFERENT';
+
+  const lowerSourceUnits = sourceUnits.map((unit) => unit.toLowerCase());
+  const lowerCandidateUnits = candidateUnits.map((unit) => unit.toLowerCase());
+  if (sameUnits(lowerSourceUnits, lowerCandidateUnits)) return 'CASE_ONLY_DIFFERENCE';
+  return 'PUNCTUATION_ONLY_EQUIVALENT';
+}
+
+/**
+ * Single source-equivalence/materiality gate for non-empty V3 Enhance.
+ * Provider/evaluator evidence can prove grounding, but normalized source-unit
+ * identity is the authority for whether the candidate actually improves it.
+ */
+export function decideExperienceV3EnhanceCanonicalCandidate(options: {
+  sourceText: string;
+  candidateText: string;
+  materialityKind?: ExperienceV3EnhanceMaterialityKind | null;
+}): ExperienceV3EnhanceCanonicalDecision {
+  const sourceComparisonClass = classifyExperienceV3EnhanceSourceDifference(
+    options.sourceText,
+    options.candidateText,
+  );
+  const sourceEquivalentToAuthoritativeSource = experienceAiSourcesEquivalent(
+    options.sourceText,
+    options.candidateText,
+  );
+  const caseOnlyGrammarCorrection = sourceComparisonClass === 'CASE_ONLY_DIFFERENCE'
+    && options.materialityKind === 'grammar_correction';
+  const materialImprovementDetected = Boolean(
+    (sourceComparisonClass === 'MATERIALLY_DIFFERENT' || caseOnlyGrammarCorrection)
+    && String(options.candidateText || '').trim()
+    && options.materialityKind,
+  );
+  const finalDecisionKind = materialImprovementDetected
+    ? 'material_improvement'
+    : 'semantic_noop';
+  const shouldApply = finalDecisionKind === 'material_improvement';
+  return Object.freeze({
+    materialityKind: options.materialityKind ?? null,
+    sourceEquivalentToAuthoritativeSource,
+    sourceComparisonClass,
+    materialImprovementDetected,
+    finalDecisionKind,
+    shouldApply,
+    shouldIncrementUsage: shouldApply,
+  });
 }
 
 export interface ExperienceV3EnhanceSuccessResponse {
@@ -160,6 +260,7 @@ export interface ExperienceV3EnhanceAdapterDependencies {
   readonly incrementUsage: () => void;
   readonly getUsageCount?: () => number;
   readonly getRouteHttpStatus?: () => number | null;
+  readonly onRoutingDecision?: (decision: ExperienceV3EnhanceRoutingDecision) => void;
 }
 
 export type ExperienceV3EnhanceAdapterResult = Extract<ExperienceV3AdapterResult, { readonly kind: 'not_applicable' }>
@@ -230,11 +331,66 @@ export function extractExperienceV3EnhanceSourceUnits(source: string): readonly 
   return Object.freeze(String(source ?? '').split(/\r?\n/u).filter((unit) => unit.trim().length > 0));
 }
 
-function entryCanCreateSnapshot(entry: WorkExperience | undefined, jobContextHash: string): boolean {
-  if (!entry || !String(entry.position || '').trim() || !String(jobContextHash || '').trim()) return false;
-  const start = parseStructuredDate(entry.startDate);
-  const end = entry.isPresent ? null : parseStructuredDate(entry.endDate);
-  return Boolean(start && (entry.isPresent || end));
+export type ExperienceV3EnhanceNotApplicableReason =
+  | 'v3_feature_disabled'
+  | 'operation_kind_not_experience_enhance'
+  | 'source_empty'
+  | 'requested_locale_missing'
+  | 'ui_locale_mismatch'
+  | 'stored_content_locale_mismatch'
+  | 'source_script_mismatch'
+  | 'target_entry_missing'
+  | 'role_title_missing'
+  | 'job_context_missing'
+  | 'start_date_invalid'
+  | 'end_date_invalid';
+
+export type ExperienceV3EnhanceRoutingDecision =
+  | { readonly kind: 'owned' }
+  | {
+    readonly kind: 'not_applicable';
+    readonly reason: ExperienceV3EnhanceNotApplicableReason;
+  };
+
+/**
+ * Single M3 routing authority. The compatibility classifier and the runtime
+ * adapter both consume this exact decision rather than reimplementing gates.
+ */
+export function decideExperienceV3EnhanceRouting(
+  input: Pick<ExperienceV3EnhanceAdapterInput,
+    | 'enabled' | 'operationKind' | 'entryId' | 'cv' | 'requestedLocale' | 'uiLocale'
+    | 'storedContentLocale' | 'exactVisibleDescription' | 'jobContextHash'>,
+): ExperienceV3EnhanceRoutingDecision {
+  if (!input.enabled) return { kind: 'not_applicable', reason: 'v3_feature_disabled' };
+  if (input.operationKind !== 'experience_enhance') {
+    return { kind: 'not_applicable', reason: 'operation_kind_not_experience_enhance' };
+  }
+  const source = normalizeExperienceV3EnhanceSource(input.exactVisibleDescription);
+  if (!source) return { kind: 'not_applicable', reason: 'source_empty' };
+  const requested = normalizeLocale(input.requestedLocale);
+  const ui = normalizeLocale(input.uiLocale);
+  const stored = normalizeLocale(input.storedContentLocale);
+  if (!requested) return { kind: 'not_applicable', reason: 'requested_locale_missing' };
+  if (requested !== ui) return { kind: 'not_applicable', reason: 'ui_locale_mismatch' };
+  if (requested !== stored) return { kind: 'not_applicable', reason: 'stored_content_locale_mismatch' };
+  if (!scriptMatchesLocale(source, requested)) {
+    return { kind: 'not_applicable', reason: 'source_script_mismatch' };
+  }
+  const entry = input.cv.experience.find((item) => item.id === input.entryId);
+  if (!entry) return { kind: 'not_applicable', reason: 'target_entry_missing' };
+  if (!String(entry.position || '').trim()) {
+    return { kind: 'not_applicable', reason: 'role_title_missing' };
+  }
+  if (!String(input.jobContextHash || '').trim()) {
+    return { kind: 'not_applicable', reason: 'job_context_missing' };
+  }
+  if (!parseStructuredDate(entry.startDate)) {
+    return { kind: 'not_applicable', reason: 'start_date_invalid' };
+  }
+  if (!entry.isPresent && !parseStructuredDate(entry.endDate)) {
+    return { kind: 'not_applicable', reason: 'end_date_invalid' };
+  }
+  return { kind: 'owned' };
 }
 
 export function classifyExperienceV3EnhanceRouting(
@@ -242,18 +398,7 @@ export function classifyExperienceV3EnhanceRouting(
     | 'enabled' | 'operationKind' | 'entryId' | 'cv' | 'requestedLocale' | 'uiLocale'
     | 'storedContentLocale' | 'exactVisibleDescription' | 'jobContextHash'>,
 ): 'not_applicable' | 'owned' {
-  if (!input.enabled || input.operationKind !== 'experience_enhance') return 'not_applicable';
-  const source = normalizeExperienceV3EnhanceSource(input.exactVisibleDescription);
-  if (!source) return 'not_applicable';
-  const requested = normalizeLocale(input.requestedLocale);
-  const ui = normalizeLocale(input.uiLocale);
-  const stored = normalizeLocale(input.storedContentLocale);
-  if (!requested || requested !== ui || requested !== stored) return 'not_applicable';
-  if (!scriptMatchesLocale(source, requested)) return 'not_applicable';
-  if (!entryCanCreateSnapshot(input.cv.experience.find((entry) => entry.id === input.entryId), input.jobContextHash)) {
-    return 'not_applicable';
-  }
-  return 'owned';
+  return decideExperienceV3EnhanceRouting(input).kind;
 }
 
 function targetContext(entry: WorkExperience, input: ExperienceV3EnhanceAdapterInput, dates: StructuredEmploymentDates): unknown {
@@ -410,9 +555,7 @@ export function parseExperienceV3EnhanceSuccessResponse(
   if (!Array.isArray(value.providerOutput.units)) return null;
   if (
     value.materiality.status !== 'material'
-    || !EXPERIENCE_V3_ENHANCE_MATERIALITY_KINDS.includes(
-      value.materiality.kind as ExperienceV3EnhanceMaterialityKind,
-    )
+    || !isExperienceV3EnhanceMaterialityKind(value.materiality.kind)
     || value.materiality.sourceEquivalent !== false
     || value.materiality.degradationDetected !== false
   ) return null;
@@ -550,6 +693,17 @@ export function applyExperienceV3EnhanceTransaction(
   }
   if (!liveStateMatchesSnapshot(liveBefore, snapshot)) {
     return { kind: 'handled_failure', typedReason: 'stale_snapshot' };
+  }
+  const canonicalDecision = decideExperienceV3EnhanceCanonicalCandidate({
+    sourceText: snapshot.exactSourceText,
+    candidateText: response.candidate.text,
+    materialityKind: response.materiality.kind,
+  });
+  // Grounding/evaluator acceptance is not sufficient for Enhance. A final
+  // candidate equivalent to the authoritative source is a semantic no-op and
+  // must not reach the visible write or usage transaction.
+  if (!canonicalDecision.shouldApply) {
+    return { kind: 'handled_failure', typedReason: 'no_material_improvement' };
   }
   const liveEntry = liveBefore.cv.experience.find((entry) => entry.id === snapshot.entryId);
   if (!liveEntry) return { kind: 'handled_failure', typedReason: 'target_entry_deleted' };
@@ -691,18 +845,54 @@ function buildM3TerminalDiagnostic(
   dependencies: ExperienceV3EnhanceAdapterDependencies,
   result: Exclude<ExperienceV3EnhanceRoutingResult, { kind: 'not_applicable' }>,
   rawResponse: unknown,
+  usageIncrementAttempted: boolean,
 ): ExperienceV3TerminalDiagnostic {
   const accepted = result.kind === 'handled_success';
+  const rawResponseAccepted = parseExperienceV3EnhanceSuccessResponse(rawResponse) !== null;
   const reason = terminalReason(accepted ? 'none' : result.typedReason);
   const evidence = responseEvidence(rawResponse);
   const validation = responseValidation(rawResponse);
   const snapshot = (() => { try { return captureExperienceV3EnhanceOperationSnapshot(input); } catch { return null; } })();
   const entry = input.cv.experience.find((item) => item.id === input.entryId);
   const routeHttpStatus = (() => { try { const status = dependencies.getRouteHttpStatus?.(); return typeof status === 'number' && Number.isInteger(status) && status >= 100 && status <= 599 ? status : null; } catch { return null; } })();
-  const usageAfter = (() => { try { const count = dependencies.getUsageCount?.(); return Number.isFinite(count) ? Number(count) : input.usageCountBefore + (accepted ? 1 : 0); } catch { return input.usageCountBefore + (accepted ? 1 : 0); } })();
   const transportFailure = reason === 'provider_request_failed' || reason === 'validator_exception'
     || (routeHttpStatus !== null && routeHttpStatus >= 500);
   const materiality = isRecord(rawResponse) && isRecord(rawResponse.materiality) ? rawResponse.materiality : null;
+  const responseCandidateText = isRecord(rawResponse) && isRecord(rawResponse.candidate)
+    && typeof rawResponse.candidate.text === 'string'
+    ? rawResponse.candidate.text
+    : '';
+  const canonicalDecision = snapshot && responseCandidateText
+    ? decideExperienceV3EnhanceCanonicalCandidate({
+      sourceText: snapshot.exactSourceText,
+      candidateText: responseCandidateText,
+      materialityKind: isExperienceV3EnhanceMaterialityKind(materiality?.kind)
+        ? materiality.kind
+        : null,
+    })
+    : null;
+  const canonicalDecisionAllowsApply = canonicalDecision?.shouldApply ?? accepted;
+  const canonicalDecisionAllowsUsage = canonicalDecision?.shouldIncrementUsage ?? accepted;
+  const finalTransactionAccepted = accepted && canonicalDecisionAllowsApply;
+  const finalCanonicalNoOp = canonicalDecision?.finalDecisionKind === 'semantic_noop'
+    && !canonicalDecisionAllowsApply;
+  const terminalReasonCode = finalCanonicalNoOp && accepted ? 'no_material_improvement' : reason;
+  const usageObservation = (() => {
+    if (!dependencies.getUsageCount) {
+      return { status: 'unavailable' as const, value: null, reason: 'reader_unavailable' as const };
+    }
+    try {
+      const count = dependencies.getUsageCount();
+      return Number.isFinite(count)
+        ? { status: 'observed' as const, value: Number(count), reason: null }
+        : { status: 'unavailable' as const, value: null, reason: 'invalid_reading' as const };
+    } catch {
+      return { status: 'unavailable' as const, value: null, reason: 'reader_threw' as const };
+    }
+  })();
+  // Numeric compatibility fields remain populated, but an unavailable read is
+  // explicitly identified and never synthesized into a claimed measurement.
+  const usageAfter = usageObservation.value ?? input.usageCountBefore;
   const attempts = m3Attempts(reason, accepted);
   return immutableCopy({
     schemaVersion: 1 as const,
@@ -721,6 +911,12 @@ function buildM3TerminalDiagnostic(
     normalizedLevel: String(input.level || '').trim().toLowerCase() || 'unknown',
     employmentState: entry ? (entry.isPresent ? 'present' as const : 'completed' as const) : 'unknown' as const,
     ownershipResult: 'owned' as const,
+    selectedEngine: 'experience_v3_enhance' as const,
+    v3EnabledForOperation: input.enabled,
+    m3Applicability: 'owned' as const,
+    m3NotApplicableReason: null,
+    routingRequestIdHash: hashExperienceV3EnhanceValue(input.requestId),
+    routingOperationIdHash: hashExperienceV3EnhanceValue(input.operationId),
     routeHttpStatus,
     writer: attempts.writer,
     evaluator: attempts.evaluator,
@@ -729,15 +925,29 @@ function buildM3TerminalDiagnostic(
       semantic: validation?.phases.semantic?.status ?? 'not_evaluated',
       language_quality: validation?.phases.language_quality?.status ?? 'not_evaluated',
     },
-    rejectionReasonCodes: accepted ? [] : [reason as ExperienceV3TerminalDiagnostic['rejectionReasonCodes'][number]],
-    finalDecision: accepted ? 'accept' as const : transportFailure ? 'transport_failure' as const : 'reject' as const,
-    applyAuthorized: accepted,
-    applyAttempted: accepted,
-    applyCommitted: accepted,
+    rejectionReasonCodes: finalTransactionAccepted ? [] : [terminalReasonCode as ExperienceV3TerminalDiagnostic['rejectionReasonCodes'][number]],
+    finalDecision: finalTransactionAccepted
+      ? 'accept' as const
+      : finalCanonicalNoOp
+        ? 'reject' as const
+        : transportFailure ? 'transport_failure' as const : 'reject' as const,
+    applyAuthorized: finalTransactionAccepted,
+    applyAttempted: finalTransactionAccepted,
+    applyCommitted: finalTransactionAccepted,
     v2FallthroughCount: 0 as const,
     usageBefore: input.usageCountBefore,
     usageAfter,
     usageDelta: usageAfter - input.usageCountBefore,
+    usageMeasurementStatus: usageObservation.status,
+    observedUsageAfter: usageObservation.value,
+    observedUsageDelta: usageObservation.value === null
+      ? null
+      : usageObservation.value - input.usageCountBefore,
+    usageMeasurementFailureReason: usageObservation.reason,
+    usageAfterBasis: usageObservation.status === 'observed'
+      ? 'observed'
+      : 'compatibility_unmeasured_before',
+    usageIncrementAttempted,
     raceGuardResult: ['operation_superseded', 'stale_snapshot', 'target_entry_deleted'].includes(reason) ? 'failed' as const : accepted ? 'passed' as const : 'not_evaluated' as const,
     sourceCommitMarker: /^[0-9a-f]{7,40}$/u.test(String(process.env.NEXT_PUBLIC_SOURCE_COMMIT_SHORT || '')) ? String(process.env.NEXT_PUBLIC_SOURCE_COMMIT_SHORT).slice(0, 7) : null,
     buildChannel: String(process.env.NEXT_PUBLIC_BUILD_CHANNEL || '').trim() || null,
@@ -746,10 +956,21 @@ function buildM3TerminalDiagnostic(
     sourceUnitCount: snapshot?.sourceUnits.length ?? extractExperienceV3EnhanceSourceUnits(input.exactVisibleDescription).length,
     sourceUnitHashes: snapshot?.sourceUnitHashes ?? extractExperienceV3EnhanceSourceUnits(input.exactVisibleDescription).map(hashExperienceV3EnhanceValue),
     sourceUnitLengths: snapshot?.sourceUnits.map((unit) => unit.length) ?? extractExperienceV3EnhanceSourceUnits(input.exactVisibleDescription).map((unit) => unit.length),
-    materialityStatus: materiality?.status === 'material' || materiality?.status === 'no_op' || materiality?.status === 'degraded' ? materiality.status : 'unknown',
-    materialityKind: typeof materiality?.kind === 'string' ? materiality.kind : null,
+    materialityStatus: canonicalDecision?.finalDecisionKind === 'semantic_noop'
+      ? 'no_op'
+      : (materiality?.status === 'material' || materiality?.status === 'no_op' || materiality?.status === 'degraded' ? materiality.status : 'unknown'),
+    materialityKind: canonicalDecision?.finalDecisionKind === 'semantic_noop'
+      ? null
+      : (typeof materiality?.kind === 'string' ? materiality.kind : null),
+    rawResponseAccepted,
+    sourceEquivalentToAuthoritativeSource: canonicalDecision?.sourceEquivalentToAuthoritativeSource,
+    sourceComparisonClass: canonicalDecision?.sourceComparisonClass,
+    materialImprovementDetected: canonicalDecision?.materialImprovementDetected,
+    finalDecisionKind: canonicalDecision?.finalDecisionKind ?? null,
+    canonicalDecisionAllowsApply,
+    canonicalDecisionAllowsUsage,
     degradationResult: typeof materiality?.degradationDetected === 'boolean' ? materiality.degradationDetected : null,
-    persistenceResult: accepted ? 'succeeded' as const : 'not_attempted' as const,
+    persistenceResult: finalTransactionAccepted ? 'succeeded' as const : 'not_attempted' as const,
   }) as ExperienceV3TerminalDiagnostic;
 }
 
@@ -758,8 +979,15 @@ function withM3TerminalDiagnostic(
   dependencies: ExperienceV3EnhanceAdapterDependencies,
   result: Exclude<ExperienceV3EnhanceRoutingResult, { kind: 'not_applicable' }>,
   rawResponse: unknown,
+  usageIncrementAttempted: boolean,
 ): ExperienceV3EnhanceAdapterResult {
-  const diagnostic = buildM3TerminalDiagnostic(input, dependencies, result, rawResponse);
+  const diagnostic = buildM3TerminalDiagnostic(
+    input,
+    dependencies,
+    result,
+    rawResponse,
+    usageIncrementAttempted,
+  );
   const internalRejectionAudit = result.kind === 'handled_failure' && isRecord(rawResponse)
     ? parseExperienceV3InternalRejectionAudit(rawResponse.internalRejectionAudit)
     : null;
@@ -772,14 +1000,28 @@ export async function runExperienceV3EnhanceAdapter(
   input: ExperienceV3EnhanceAdapterInput,
   dependencies: ExperienceV3EnhanceAdapterDependencies,
 ): Promise<ExperienceV3EnhanceAdapterResult> {
-  if (classifyExperienceV3EnhanceRouting(input) === 'not_applicable') {
+  const routingDecision = decideExperienceV3EnhanceRouting(input);
+  try {
+    dependencies.onRoutingDecision?.(routingDecision);
+  } catch {
+    // Diagnostic observation must never alter the routing decision or transaction.
+  }
+  if (routingDecision.kind === 'not_applicable') {
     return { kind: 'not_applicable' };
   }
+  let usageIncrementAttempted = false;
+  const trackedDependencies: ExperienceV3EnhanceAdapterDependencies = {
+    ...dependencies,
+    incrementUsage: () => {
+      usageIncrementAttempted = true;
+      dependencies.incrementUsage();
+    },
+  };
   let snapshot: ExperienceV3EnhanceOperationSnapshot;
   try {
     snapshot = captureExperienceV3EnhanceOperationSnapshot(input);
   } catch (error) {
-    return withM3TerminalDiagnostic(input, dependencies, { kind: 'handled_failure', typedReason: error instanceof Error ? error.message : 'snapshot_capture_failed' }, undefined);
+    return withM3TerminalDiagnostic(input, trackedDependencies, { kind: 'handled_failure', typedReason: error instanceof Error ? error.message : 'snapshot_capture_failed' }, undefined, usageIncrementAttempted);
   }
   let rawResponse: unknown;
   try {
@@ -788,19 +1030,20 @@ export async function runExperienceV3EnhanceAdapter(
       manifest: snapshot.manifest,
     });
   } catch (error) {
-    return withM3TerminalDiagnostic(input, dependencies, {
+    return withM3TerminalDiagnostic(input, trackedDependencies, {
       kind: 'handled_failure',
       typedReason: error instanceof Error && error.message ? error.message : 'provider_request_failed',
-    }, undefined);
+    }, undefined, usageIncrementAttempted);
   }
   const response = parseExperienceV3EnhanceSuccessResponse(rawResponse);
-  if (!response) return withM3TerminalDiagnostic(input, dependencies, { kind: 'handled_failure', typedReason: failureReasonFromResponse(rawResponse) }, rawResponse);
+  if (!response) return withM3TerminalDiagnostic(input, trackedDependencies, { kind: 'handled_failure', typedReason: failureReasonFromResponse(rawResponse) }, rawResponse, usageIncrementAttempted);
   try {
     if (!responseMatchesExperienceV3EnhanceSnapshot(response, snapshot)) {
-      return withM3TerminalDiagnostic(input, dependencies, { kind: 'handled_failure', typedReason: 'candidate_or_validation_mismatch' }, rawResponse);
+      return withM3TerminalDiagnostic(input, trackedDependencies, { kind: 'handled_failure', typedReason: 'candidate_or_validation_mismatch' }, rawResponse, usageIncrementAttempted);
     }
-    return withM3TerminalDiagnostic(input, dependencies, applyExperienceV3EnhanceTransaction(snapshot, response, dependencies), rawResponse);
+    const transactionResult = applyExperienceV3EnhanceTransaction(snapshot, response, trackedDependencies);
+    return withM3TerminalDiagnostic(input, trackedDependencies, transactionResult, rawResponse, usageIncrementAttempted);
   } catch {
-    return withM3TerminalDiagnostic(input, dependencies, { kind: 'handled_failure', typedReason: 'client_verification_exception' }, rawResponse);
+    return withM3TerminalDiagnostic(input, trackedDependencies, { kind: 'handled_failure', typedReason: 'client_verification_exception' }, rawResponse, usageIncrementAttempted);
   }
 }

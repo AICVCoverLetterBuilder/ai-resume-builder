@@ -218,6 +218,13 @@ export interface ExperienceV3TerminalDiagnostic {
   readonly normalizedLevel: string;
   readonly employmentState: 'present' | 'completed' | 'unknown';
   readonly ownershipResult: 'owned';
+  /** Runtime routing decision recorded by the selected Experience engine. */
+  readonly selectedEngine?: 'experience_v3_generate' | 'experience_v3_enhance' | 'legacy_experience';
+  readonly v3EnabledForOperation?: boolean;
+  readonly m3Applicability?: 'owned' | 'not_applicable' | 'not_evaluated';
+  readonly m3NotApplicableReason?: string | null;
+  readonly routingRequestIdHash?: string;
+  readonly routingOperationIdHash?: string;
   readonly routeHttpStatus: number | null;
   readonly writer: ExperienceV3DiagnosticAttempt;
   readonly evaluator: ExperienceV3DiagnosticAttempt;
@@ -231,6 +238,13 @@ export interface ExperienceV3TerminalDiagnostic {
   readonly usageBefore: number;
   readonly usageAfter: number;
   readonly usageDelta: number;
+  /** M3-only separation of policy, global observation, and this operation's side effect. */
+  readonly usageMeasurementStatus?: 'observed' | 'unavailable';
+  readonly observedUsageAfter?: number | null;
+  readonly observedUsageDelta?: number | null;
+  readonly usageMeasurementFailureReason?: 'reader_unavailable' | 'invalid_reading' | 'reader_threw' | null;
+  readonly usageAfterBasis?: 'observed' | 'compatibility_unmeasured_before';
+  readonly usageIncrementAttempted?: boolean;
   readonly raceGuardResult: 'passed' | 'failed' | 'not_evaluated';
   readonly sourceCommitMarker: string | null;
   readonly buildChannel: string | null;
@@ -280,6 +294,18 @@ export interface ExperienceV3TerminalDiagnostic {
   readonly sourceUnitLengths?: readonly number[];
   readonly materialityStatus?: 'material' | 'no_op' | 'degraded' | 'unknown';
   readonly materialityKind?: string | null;
+  /** Canonical non-empty Enhance source-equivalence/materiality decision. */
+  readonly rawResponseAccepted?: boolean;
+  readonly sourceEquivalentToAuthoritativeSource?: boolean;
+  readonly sourceComparisonClass?:
+    | 'EXACT_OR_FORMATTING_EQUIVALENT'
+    | 'PUNCTUATION_ONLY_EQUIVALENT'
+    | 'CASE_ONLY_DIFFERENCE'
+    | 'MATERIALLY_DIFFERENT';
+  readonly materialImprovementDetected?: boolean;
+  readonly finalDecisionKind?: 'material_improvement' | 'semantic_noop' | null;
+  readonly canonicalDecisionAllowsApply?: boolean;
+  readonly canonicalDecisionAllowsUsage?: boolean;
   readonly degradationResult?: boolean | null;
   readonly persistenceResult?: 'succeeded' | 'failed' | 'not_attempted' | 'unknown';
 }
@@ -1438,6 +1464,12 @@ function buildExperienceV3TerminalDiagnostic(
     normalizedLevel: diagnosticContextValue(input.diagnosticLevel ?? input.level),
     employmentState: entry ? (entry.isPresent ? 'present' as const : 'completed' as const) : 'unknown' as const,
     ownershipResult: 'owned' as const,
+    selectedEngine: 'experience_v3_generate' as const,
+    v3EnabledForOperation: input.enabled,
+    m3Applicability: 'not_evaluated' as const,
+    m3NotApplicableReason: null,
+    routingRequestIdHash: hashExperienceV3Value(input.operationId),
+    routingOperationIdHash: hashExperienceV3Value(input.operationId),
     routeHttpStatus,
     writer: attempts.writer,
     evaluator: attempts.evaluator,

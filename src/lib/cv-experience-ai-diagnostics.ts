@@ -13,7 +13,10 @@ import type {
   ExperienceV3InternalRejectionAudit,
   ExperienceV3TerminalDiagnostic,
 } from './ai-core-v3/experience-generate';
-import type { ExperienceV3EnhanceAdapterResult } from './ai-core-v3/experience-enhance';
+import type {
+  ExperienceV3EnhanceAdapterResult,
+  ExperienceV3EnhanceNotApplicableReason,
+} from './ai-core-v3/experience-enhance';
 import { fingerprintText, resolveAppVersionInfo, resolveNextBuildId } from './cv-export-diagnostics';
 import { extractSourceDutyUnits, sourceFactIdentitiesFromDescription } from './cv-source-fact-identity';
 import { splitExperienceBullets } from './cv-canonical-facts';
@@ -668,6 +671,13 @@ export type ExperienceAiDiagnosticTrace = {
   serverUrlConfigured?: boolean;
   sourceCommitShort?: string | null;
   operationKind?: 'experience';
+  selectedEngine?: 'experience_v3_generate' | 'experience_v3_enhance' | 'legacy_experience';
+  v3EnabledForOperation?: boolean;
+  m2Applicability?: 'owned' | 'not_applicable';
+  m3Applicability?: 'owned' | 'not_applicable';
+  m3NotApplicableReason?: ExperienceV3EnhanceNotApplicableReason | 'routing_observation_unavailable' | null;
+  routingRequestIdHash?: string;
+  routingOperationIdHash?: string;
   buildChannel?: string | null;
   diagnosticInvariantCheckPassed?: boolean;
   diagnosticInvariantFailureCount?: number;
@@ -1359,6 +1369,27 @@ export class ExperienceAiDiagnosticSession {
     if (!this.draft.marker || this.draft.marker !== EXPERIENCE_AI_DIAG_MARKER) {
       this.draft.marker = EXPERIENCE_AI_DIAG_MARKER;
     }
+  }
+
+  /**
+   * Records the actual page routing result on the legacy terminal record. The
+   * page supplies the M2 result and the M3 decision emitted by the adapter's
+   * single routing authority; this method only binds them to this request.
+   */
+  recordRoutingDecision(input: {
+    selectedEngine: 'legacy_experience';
+    v3EnabledForOperation: boolean;
+    m2Applicability: 'owned' | 'not_applicable';
+    m3Applicability: 'not_applicable';
+    m3NotApplicableReason: ExperienceV3EnhanceNotApplicableReason | 'routing_observation_unavailable';
+  }): void {
+    this.patch({
+      ...input,
+      routingRequestIdHash: this.draft.requestIdHash,
+      // handleGenBullets uses the request ID as the operation ID for every
+      // Experience engine, so both identities intentionally share one hash.
+      routingOperationIdHash: this.draft.requestIdHash,
+    });
   }
 
   recordLiveExperience(_exp: WorkExperience, isPresent: boolean): void {

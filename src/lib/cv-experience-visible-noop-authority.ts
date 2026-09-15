@@ -173,6 +173,8 @@ export type ExperienceCanonicalPreapplyDecision = Readonly<{
   revision: typeof EXPERIENCE_CANONICAL_PREAPPLY_DECISION_421_REVISION;
   candidateValidationAccepted: boolean;
   visibleComparisonAvailable: boolean;
+  /** Final candidate equivalence against authoritative non-empty source. */
+  sourceEquivalentToAuthoritativeSource: boolean;
   semanticNoOpDetected: boolean;
   semanticNoOpReason: string | null;
   materialImprovementDetected: boolean;
@@ -189,6 +191,8 @@ export type ExperienceCanonicalPreapplyDecision = Readonly<{
 export function decideExperienceCanonicalPreapply(options: {
   candidateValidationAccepted: boolean;
   visibleComparisonAvailable: boolean;
+  /** Normalized Experience source-unit equivalence, separate from the visible baseline. */
+  sourceEquivalentToAuthoritativeSource?: boolean;
   semanticNoOpDetected: boolean;
   semanticNoOpReason?: string | null;
   materialImprovementDetected: boolean;
@@ -208,6 +212,11 @@ export function decideExperienceCanonicalPreapply(options: {
     && !options.visibleComparisonAvailable
     && options.allowMaterialApplyWithoutVisibleComparison === true,
   );
+  const sourceEquivalentToAuthoritativeSource = Boolean(
+    options.candidateValidationAccepted
+    && options.sourceEquivalentToAuthoritativeSource === true,
+  );
+  const sourceEquivalentNoOp = sourceEquivalentToAuthoritativeSource;
   const improvementKinds = Object.freeze(
     generationWithoutVisibleBaseline && reportedImprovementKinds.length === 0
       ? ['grounded_target_generation']
@@ -217,18 +226,24 @@ export function decideExperienceCanonicalPreapply(options: {
     ...new Set((options.degradationKinds || []).filter(Boolean)),
   ]);
   const semanticNoOpDetected = Boolean(
-    options.visibleComparisonAvailable
-    && options.semanticNoOpDetected
-    && !options.materialImprovementDetected,
+    sourceEquivalentNoOp
+    || (
+      !sourceEquivalentNoOp
+      && options.visibleComparisonAvailable
+      && options.semanticNoOpDetected
+      && !options.materialImprovementDetected
+    ),
   );
   const degradationDetected = Boolean(
     options.candidateValidationAccepted
+    && !sourceEquivalentNoOp
     && !semanticNoOpDetected
     && options.degradationDetected
     && degradationKinds.length > 0,
   );
   const materialImprovementDetected = Boolean(
     options.candidateValidationAccepted
+    && !sourceEquivalentNoOp
     && !semanticNoOpDetected
     && !degradationDetected
     && (
@@ -257,9 +272,12 @@ export function decideExperienceCanonicalPreapply(options: {
     revision: EXPERIENCE_CANONICAL_PREAPPLY_DECISION_421_REVISION,
     candidateValidationAccepted: Boolean(options.candidateValidationAccepted),
     visibleComparisonAvailable: Boolean(options.visibleComparisonAvailable),
+    sourceEquivalentToAuthoritativeSource,
     semanticNoOpDetected,
     semanticNoOpReason: semanticNoOpDetected
-      ? (options.semanticNoOpReason || 'semantic_equivalent_visible')
+      ? (sourceEquivalentToAuthoritativeSource
+        ? 'semantic_equivalent_authoritative_source'
+        : (options.semanticNoOpReason || 'semantic_equivalent_visible'))
       : null,
     materialImprovementDetected,
     materialImprovementKinds: materialImprovementDetected ? improvementKinds : Object.freeze([]),

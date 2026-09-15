@@ -321,6 +321,7 @@ async function runHarness(options: HarnessOptions = {}) {
       usage += 1;
       events.push('usage');
     },
+    getUsageCount: () => usage,
   });
   return {
     result, cv, persistedCv, usage, requestCount, writeCount, persistCount, usageCallCount,

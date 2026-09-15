@@ -1192,6 +1192,8 @@ export type FinalizeCvAiFieldResult = {
     normalizedBulletsUsedForApply?: boolean;
     finalMatchesProviderOutput?: boolean;
     finalMatchesSourceAfterNormalization?: boolean;
+    /** Final candidate equivalence against authoritative Experience source units. */
+    sourceEquivalentToAuthoritativeSource?: boolean;
     meaningfulChangeDetected?: boolean;
     meaningfulChangeReason?: string | null;
     noOpRejected?: boolean;
@@ -11302,9 +11304,17 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       && evidenceKinds.length > 0,
     );
     const visibleComparisonAvailable = Boolean((visibleComparisonText || '').trim());
+    const sourceEquivalentToAuthoritativeSource = Boolean(
+      !sourceWasEmpty && experienceAiSourcesEquivalent(sourceForCoverage, result.text || ''),
+    );
+    successVisFields.finalMatchesSourceAfterNormalization =
+      sourceEquivalentToAuthoritativeSource;
+    successVisFields.sourceEquivalentToAuthoritativeSource =
+      sourceEquivalentToAuthoritativeSource;
     const canonicalPreapplyDecision = decideExperienceCanonicalPreapply({
       candidateValidationAccepted: Boolean(result.countedAsSuccess && !result.blocked),
       visibleComparisonAvailable,
+      sourceEquivalentToAuthoritativeSource,
       semanticNoOpDetected: successVisFields.semanticNoOpDetected === true,
       semanticNoOpReason: typeof successVisFields.semanticNoOpReason === 'string'
         ? successVisFields.semanticNoOpReason
