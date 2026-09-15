@@ -1,5 +1,6 @@
 /** Internal observations only. No token, signature, key, or entitlement authority. */
 import type { ProTokenVerificationReason } from './pro-token';
+import type { ProEntitlementSource } from './pro-token-client';
 
 export function isInternalProAuthDiagnosticsEnabled(): boolean {
   return process.env.NEXT_PUBLIC_BUILD_CHANNEL === 'internal';
@@ -27,6 +28,8 @@ export interface ProAuthObservation {
   authTokenRemainingLifetimeBucket: 'unknown' | 'expired' | 'under_42s' | '42s_to_5m' | 'over_5m';
   authTokenFingerprint: string | null;
   authTokenFingerprintAtClick: string | null;
+  /** Non-secret diagnostic classification of the canonical entitlement token. */
+  proEntitlementSource?: ProEntitlementSource;
 }
 
 export interface ProAuthServerObservation {
@@ -61,7 +64,7 @@ export function readProAuthServerObservation(body: unknown): ProAuthServerObserv
     const raw = (body as { internalProAuth?: ProAuthServerObservation })?.internalProAuth;
     const reasons: readonly ProTokenVerificationReason[] = ['valid', 'missing_token', 'malformed_format',
       'payload_decode_failed', 'signature_length_mismatch', 'signature_mismatch', 'expired',
-      'is_pro_false', 'signing_key_unavailable'];
+      'is_pro_false', 'signing_key_unavailable', 'internal_test_not_allowed', 'unsupported_source'];
     if (!raw || !reasons.includes(raw.serverProTokenVerificationReason)) return undefined;
     return {
       serverReceivedTokenFingerprint: safeProTokenFingerprint(raw.serverReceivedTokenFingerprint),

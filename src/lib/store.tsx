@@ -8,7 +8,12 @@ import {
   type EntitlementSyncResult,
   type TokenSyncResult,
 } from './iap';
-import { AI_PRO_TOKEN_OPERATION_LEASE_MS, isUsableProToken } from './pro-token-client';
+import {
+  AI_PRO_TOKEN_OPERATION_LEASE_MS,
+  isUsableProToken,
+  readProTokenEntitlementSource,
+  type ProEntitlementSource,
+} from './pro-token-client';
 import { Capacitor } from '@capacitor/core';
 import { fingerprintProToken, isInternalProAuthDiagnosticsEnabled, tokenLifetimeBucket, type ProAuthObservation } from './pro-auth-diagnostics';
 import {
@@ -77,9 +82,12 @@ interface SetIsProOptions {
 
 interface AppContextType {
   isPro: boolean;
+  /** Diagnostic source of the canonical server-issued token. */
+  proEntitlementSource: ProEntitlementSource;
   setIsPro: (val: boolean, token?: string | null, options?: SetIsProOptions) => void;
   /** HMAC-signed Pro token for server-side verification. Refreshed every 24h. */
   getProToken: () => string | null;
+  getProEntitlementSource: () => ProEntitlementSource;
   /** Current AI authorization gate, read at click time from canonical Pro state. */
   getAiGate: () => AiGateResult;
   /** Internal snapshot of the canonical owner; never authorizes or refreshes. */
@@ -217,6 +225,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [internalIsPro, setInternalIsPro] = useState<boolean>(() => loadIsPro());
   const isPro = internalIsPro;
   const [proToken, setProToken] = useState<string | null>(() => (loadIsPro() ? loadProToken() : null));
+  const [proEntitlementSource, setProEntitlementSource] = useState<ProEntitlementSource>(() => (
+    loadIsPro() ? readProTokenEntitlementSource(loadProToken()) : 'none'
+  ));
   const [downloads, setDownloads] = useState<{ cv: number; cl: number }>(() => loadDownloads());
   // Initialize from localStorage drafts for persistence across sessions.
   // Controlled idempotent migration only — never invents English or rewrites on autosave.
@@ -248,12 +259,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const isProRef = useRef(isPro);
   const proTokenRef = useRef(proToken);
   const tokenSyncLastResultRef = useRef<TokenSyncResult | 'not-run'>(tokenSyncLastResult);
+  const proEntitlementSourceRef = useRef<ProEntitlementSource>(proEntitlementSource);
   const tokenSyncSourceRef = useRef<ProAuthObservation['authSyncSource']>('unknown');
   const authPlatformAtSyncRef = useRef<ReturnType<typeof observeAuthPlatform>>({ authPlatformNative: null, authPlatformName: 'unknown' });
 
   isProRef.current = isPro;
   proTokenRef.current = proToken;
   tokenSyncLastResultRef.current = tokenSyncLastResult;
+  proEntitlementSourceRef.current = proEntitlementSource;
 
   const setIsPro = useCallback((val: boolean, token?: string | null, options?: SetIsProOptions) => {
     tokenSyncSourceRef.current = options?.source ?? 'unknown';
@@ -273,6 +286,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         persistIsPro(false);
         persistProToken(null);
         setProToken(null);
+        proEntitlementSourceRef.current = 'none';
+        setProEntitlementSource('none');
         return;
       }
       const nextToken = token || loadProToken();
@@ -285,15 +300,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         persistProToken(null);
         setProToken(null);
         setTokenSyncLastResult('failed');
+        proEntitlementSourceRef.current = 'none';
+        setProEntitlementSource('none');
         return;
       }
+      // Derive diagnostics from the signed token payload itself; caller-supplied
+      // metadata can never relabel the canonical entitlement source.
+      const nextSource = readProTokenEntitlementSource(nextToken);
       isProRef.current = true;
       proTokenRef.current = nextToken;
+      proEntitlementSourceRef.current = nextSource;
       tokenSyncLastResultRef.current = options?.tokenSyncLastResult || 'success';
       setInternalIsPro(true);
       persistIsPro(true);
       persistProToken(nextToken);
       setProToken(nextToken);
+      setProEntitlementSource(nextSource);
       setTokenSyncLastResult(options?.tokenSyncLastResult || 'success');
       return;
     }
@@ -304,6 +326,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     persistIsPro(false);
     persistProToken(null);
     setProToken(null);
+    proEntitlementSourceRef.current = 'none';
+    setProEntitlementSource('none');
   }, []);
 
   // On mount: initialise RevenueCat SDK and sync Pro entitlement from the store.
@@ -335,11 +359,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         isProRef.current = false;
         tokenSyncSourceRef.current = 'startup';
         proTokenRef.current = null;
+        proEntitlementSourceRef.current = 'none';
         tokenSyncLastResultRef.current = 'failed';
         setInternalIsPro(false);
         persistIsPro(false);
         persistProToken(null);
         setProToken(null);
+        setProEntitlementSource('none');
         setTokenSyncLastResult('failed');
       }
     })();
@@ -414,6 +440,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         ...authPlatformAtSyncRef.current,
         authSyncLastResult: tokenSyncLastResultRef.current,
         authSyncSource: tokenSyncSourceRef.current,
+        proEntitlementSource: proEntitlementSourceRef.current,
         authTokenRemainingLifetimeBucket: tokenLifetimeBucket(capturedToken, Date.now()),
       };
       const [authTokenFingerprint, authTokenFingerprintAtClick] = await Promise.all([
@@ -428,6 +455,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const gate = readAiGateState();
     return gate.status === 'ready' ? gate.token : null;
   }, [readAiGateState]);
+
+  const getProEntitlementSource = useCallback((): ProEntitlementSource => (
+    proEntitlementSourceRef.current
+  ), []);
 
   const canDownload = useCallback((type: 'cv' | 'cl') => {
     if (isProRef.current) return true;
@@ -640,7 +671,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   void FREE_AI_RECOMMEND_LIMIT; // used via canUseAiRecommend logic above
   return (
     <AppContext.Provider value={{
-      isPro, setIsPro, getProToken, getAiGate, getProAuthObservation,
+      isPro, proEntitlementSource, setIsPro, getProToken, getProEntitlementSource,
+      getAiGate, getProAuthObservation,
       saveCv, deleteCv, saveCoverLetter, deleteCoverLetter,
       currentCv, setCurrentCv, persistCurrentCvTransactionally,
       currentCoverLetter, setCurrentCoverLetter,

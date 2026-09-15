@@ -12,6 +12,10 @@
  */
 
 import crypto from 'crypto';
+import {
+  INTERNAL_TEST_PRO_TOKEN_AUDIENCE,
+  isInternalTestTokenRuntimeAllowed,
+} from './internal-test-pro-entitlement';
 
 const TOKEN_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
@@ -28,16 +32,33 @@ export interface ProTokenPayload {
   isPro: boolean;
   /** Expiration timestamp (epoch ms) */
   exp: number;
+  /** Entitlement source. Omitted on legacy/commercial tokens for compatibility. */
+  source?: 'commercial' | 'internal_test';
+  /** Fixed signed audience for internal-test tokens. */
+  audience?: string;
+}
+
+export interface ProTokenCreateOptions {
+  source?: 'commercial' | 'internal_test';
 }
 
 /**
  * Creates a signed Pro status token for the client.
  * Called after verifying Pro entitlement (via RevenueCat or otherwise).
  */
-export async function createProToken(isPro: boolean): Promise<string> {
+export async function createProToken(
+  isPro: boolean,
+  options: ProTokenCreateOptions = {},
+): Promise<string> {
+  if (isPro && options.source === 'internal_test' && !isInternalTestTokenRuntimeAllowed()) {
+    throw new Error('Internal test Pro tokens are restricted to approved preview deployments');
+  }
   const payload: ProTokenPayload = {
     isPro,
     exp: Date.now() + TOKEN_TTL_MS,
+    ...(isPro && options.source === 'internal_test'
+      ? { source: 'internal_test' as const, audience: INTERNAL_TEST_PRO_TOKEN_AUDIENCE }
+      : {}),
   };
   const payloadStr = JSON.stringify(payload);
   const encoded = Buffer.from(payloadStr).toString('base64url');
@@ -55,7 +76,8 @@ export async function createProToken(isPro: boolean): Promise<string> {
 export type ProTokenVerificationReason =
   | 'valid' | 'missing_token' | 'malformed_format' | 'payload_decode_failed'
   | 'signature_length_mismatch' | 'signature_mismatch' | 'expired'
-  | 'is_pro_false' | 'signing_key_unavailable';
+  | 'is_pro_false' | 'signing_key_unavailable'
+  | 'internal_test_not_allowed' | 'unsupported_source';
 
 /** Server-only taxonomy. This is the sole verifier; no key/payload is logged. */
 export async function verifyProTokenDetailed(token: unknown): Promise<{
@@ -95,6 +117,18 @@ export async function verifyProTokenDetailed(token: unknown): Promise<{
     // Explicitly verify isPro is exactly true — do not grant access if
     // isPro is missing, false, or malformed
     if (payload.isPro !== true) return reject('is_pro_false');
+
+    // Internal-test tokens are cryptographically distinguished by their signed
+    // source and audience, then fenced to the approved preview runtime. A
+    // copied token therefore cannot become a production commercial token.
+    if (payload.source === 'internal_test') {
+      if (payload.audience !== INTERNAL_TEST_PRO_TOKEN_AUDIENCE
+        || !isInternalTestTokenRuntimeAllowed()) {
+        return reject('internal_test_not_allowed');
+      }
+    } else if (payload.source !== undefined && payload.source !== 'commercial') {
+      return reject('unsupported_source');
+    }
 
     return { payload, reason: 'valid' };
   } catch {

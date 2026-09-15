@@ -7,6 +7,12 @@
  */
 
 import { AI_CLIENT_TIMEOUT_MS, AI_RESPONSE_GUARD_MS } from './ai-request-timing';
+import {
+  INTERNAL_TEST_PRO_TOKEN_AUDIENCE,
+  isInternalTestClientCapabilityEnabled,
+} from './internal-test-pro-entitlement';
+
+export type ProEntitlementSource = 'commercial' | 'internal_test' | 'none';
 
 /** One admitted token must outlive the complete bounded AI operation. */
 export const AI_PRO_TOKEN_OPERATION_LEASE_MS = AI_CLIENT_TIMEOUT_MS + AI_RESPONSE_GUARD_MS;
@@ -35,7 +41,11 @@ export function isUsableProToken(
     const payloadPart = parts[0];
     const decoded: unknown = JSON.parse(base64UrlDecode(payloadPart));
     if (!decoded || typeof decoded !== 'object') return false;
-    const payload = decoded as { isPro?: unknown; exp?: unknown };
+    const payload = decoded as { isPro?: unknown; exp?: unknown; source?: unknown; audience?: unknown };
+    const internalTestToken = payload.source === 'internal_test';
+    if (internalTestToken && (!isInternalTestClientCapabilityEnabled()
+      || payload.audience !== INTERNAL_TEST_PRO_TOKEN_AUDIENCE)) return false;
+    if (payload.source !== undefined && payload.source !== 'commercial' && !internalTestToken) return false;
     const remainingMs = typeof payload.exp === 'number' ? payload.exp - now : Number.NaN;
     return payload.isPro === true
       && typeof payload.exp === 'number'
@@ -44,5 +54,25 @@ export function isUsableProToken(
       && remainingMs >= minimumRemainingMs;
   } catch {
     return false;
+  }
+}
+
+/** Read the signed token's non-secret entitlement source for diagnostics only. */
+export function readProTokenEntitlementSource(token: string | null | undefined): ProEntitlementSource {
+  if (!token) return 'none';
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 2 || !parts[0]) return 'none';
+    const decoded: unknown = JSON.parse(base64UrlDecode(parts[0]));
+    if (!decoded || typeof decoded !== 'object') return 'none';
+    const payload = decoded as { isPro?: unknown; source?: unknown; audience?: unknown };
+    if (payload.isPro !== true) return 'none';
+    if (payload.source === 'internal_test' && payload.audience === INTERNAL_TEST_PRO_TOKEN_AUDIENCE) {
+      return 'internal_test';
+    }
+    if (payload.source === undefined || payload.source === 'commercial') return 'commercial';
+    return 'none';
+  } catch {
+    return 'none';
   }
 }

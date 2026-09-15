@@ -14,8 +14,18 @@ const sourceEnable = process.env.NEXT_PUBLIC_ENABLE_AI_TEST_RESET;
 const internalAiResetEnabled =
   sourceChannel === 'internal' && sourceEnable === 'true';
 
+// Internal-test Pro is a separate, explicit client request capability. It is
+// compiled on only for an internal build when the flag is explicitly true;
+// the server-only authority is never exposed through Next's public env map.
+const internalTestProEntitlementEnabled =
+  sourceChannel === 'internal' && process.env.NEXT_PUBLIC_INTERNAL_TEST_PRO_ENTITLEMENT === 'true';
+const internalTestProBootstrapCapability =
+  sourceChannel === 'internal' ? (process.env.NEXT_PUBLIC_INTERNAL_TEST_PRO_BOOTSTRAP_CAPABILITY || '') : '';
+
 const compiled = internalAiResetEnabled ? 'true' : 'false';
 process.env.NEXT_PUBLIC_INTERNAL_AI_RESET_ENABLED = compiled;
+process.env.NEXT_PUBLIC_INTERNAL_TEST_PRO_ENTITLEMENT = internalTestProEntitlementEnabled ? 'true' : 'false';
+process.env.NEXT_PUBLIC_INTERNAL_TEST_PRO_BOOTSTRAP_CAPABILITY = internalTestProBootstrapCapability;
 
 function resolveSourceCommitShortForBuild(): string {
   const fromEnv = (process.env.NEXT_PUBLIC_SOURCE_COMMIT_SHORT
@@ -62,6 +72,8 @@ const nextConfig: NextConfig = {
   },
   env: {
     NEXT_PUBLIC_INTERNAL_AI_RESET_ENABLED: compiled,
+    NEXT_PUBLIC_INTERNAL_TEST_PRO_ENTITLEMENT: internalTestProEntitlementEnabled ? 'true' : 'false',
+    NEXT_PUBLIC_INTERNAL_TEST_PRO_BOOTSTRAP_CAPABILITY: internalTestProBootstrapCapability,
     NEXT_PUBLIC_SOURCE_COMMIT_SHORT: sourceCommitShort,
   },
   ...(process.env.NEXT_PUBLIC_STATIC_EXPORT === 'true'

@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
+import crypto from 'crypto';
 import { createProToken } from '@/lib/pro-token';
 import { resolveCorsOrigin, buildCorsHeaders, handleOptions } from '@/lib/cors';
+import {
+  INTERNAL_TEST_PRO_BOOTSTRAP_CAPABILITY_MAX_LENGTH,
+  getInternalTestBootstrapCapability,
+  isInternalTestServerCapabilityEnabled,
+} from '@/lib/internal-test-pro-entitlement';
 
 // ─── Response shape from RevenueCat V2 active_entitlements API ─────────────────
 
@@ -23,6 +29,24 @@ interface V2ActiveEntitlementsResponse {
 
 const RC_SERVER_ERROR_STATUSES = new Set([401, 403, 429]);
 const RC_RETRYABLE_STATUSES = new Set([429, 502, 503, 504]);
+
+const INTERNAL_TEST_ENTITLEMENT_NOT_AUTHORIZED = 'internal_test_entitlement_not_authorized';
+
+/** Validate a per-build bearer capability without logging or returning it. */
+function matchesInternalTestBootstrapCapability(value: unknown): boolean {
+  if (typeof value !== 'string'
+    || value.length === 0
+    || value.trim().length === 0
+    || value.length > INTERNAL_TEST_PRO_BOOTSTRAP_CAPABILITY_MAX_LENGTH) {
+    return false;
+  }
+  const expectedHex = process.env.AI_INTERNAL_TEST_PRO_BOOTSTRAP_SHA256;
+  if (typeof expectedHex !== 'string' || !/^[a-f0-9]{64}$/i.test(expectedHex)) return false;
+  const actualDigest = crypto.createHash('sha256').update(value, 'utf8').digest();
+  const expectedDigest = Buffer.from(expectedHex, 'hex');
+  return expectedDigest.length === actualDigest.length
+    && crypto.timingSafeEqual(actualDigest, expectedDigest);
+}
 
 /**
  * POST /api/verify-pro
@@ -65,8 +89,45 @@ export async function POST(req: NextRequest) {
     });
   }
 
+  // Parse the request once. The internal request marker is intentionally a
+  // strict boolean; it is only a request capability, never an entitlement.
+  let body: {
+    revenueCatAppUserId?: unknown;
+    internalTestProEntitlementRequested?: unknown;
+    internalTestProBootstrapCapability?: unknown;
+  } = {};
+  try {
+    const parsed: unknown = await req.json();
+    if (parsed && typeof parsed === 'object') {
+      body = parsed as typeof body;
+    }
+  } catch {
+    // Body is optional — the commercial path issues a free token below.
+  }
+
+  if (body.internalTestProEntitlementRequested === true) {
+    const capability = getInternalTestBootstrapCapability({
+      NEXT_PUBLIC_INTERNAL_TEST_PRO_BOOTSTRAP_CAPABILITY:
+        typeof body.internalTestProBootstrapCapability === 'string'
+          ? body.internalTestProBootstrapCapability
+          : undefined,
+    });
+    if (isInternalTestServerCapabilityEnabled() && capability
+      && matchesInternalTestBootstrapCapability(capability)) {
+      const token = await createProToken(true, { source: 'internal_test' });
+      return jsonResponse({ token, proEntitlementSource: 'internal_test' });
+    }
+    return jsonResponse(
+      {
+        error: 'Internal test Pro entitlement is not authorized.',
+        code: INTERNAL_TEST_ENTITLEMENT_NOT_AUTHORIZED,
+      },
+      { status: 403 },
+    );
+  }
+
   // ═══════════════════════════════════════════════════════════════
-  // Environment validation — all three must be set for Pro to work
+  // Environment validation — all three must be set for commercial Pro
   // ═══════════════════════════════════════════════════════════════
   const secretKey = process.env.REVENUECAT_SECRET_API_KEY;
   const projectId = process.env.REVENUECAT_PROJECT_ID;
@@ -86,14 +147,9 @@ export async function POST(req: NextRequest) {
     return jsonResponse({ token });
   }
 
-  // ── Parse request body ──────────────────────────────────────────────
-  let revenueCatAppUserId: string | undefined;
-  try {
-    const body = await req.json();
-    revenueCatAppUserId = body.revenueCatAppUserId;
-  } catch {
-    // Body is optional — if missing, we issue a free token
-  }
+  // ── Commercial RevenueCat request ──────────────────────────────────
+  const revenueCatAppUserId = typeof body.revenueCatAppUserId === 'string'
+    ? body.revenueCatAppUserId : undefined;
 
   if (!revenueCatAppUserId) {
     const token = await createProToken(false);

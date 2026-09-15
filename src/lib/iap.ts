@@ -28,7 +28,11 @@ import { Capacitor, type PluginListenerHandle } from '@capacitor/core';
 import { App } from '@capacitor/app';
 import { LOG_LEVEL, Purchases as RevenueCatPurchases } from '@revenuecat/purchases-capacitor';
 import { apiFetch } from './api';
-import { isUsableProToken } from './pro-token-client';
+import { isUsableProToken, readProTokenEntitlementSource, type ProEntitlementSource } from './pro-token-client';
+import {
+  getInternalTestBootstrapCapability,
+  isInternalTestClientCapabilityEnabled,
+} from './internal-test-pro-entitlement';
 
 // --- Constants ------------------------------------------------------------------
 
@@ -450,7 +454,7 @@ export type IAPFailureCode =
   | 'restore_failed';
 
 export type IAPResult =
-  | { success: true; isPro: boolean; token?: string }
+  | { success: true; isPro: boolean; token?: string; entitlementSource?: ProEntitlementSource }
   | {
     success: false;
     cancelled: boolean;
@@ -493,6 +497,8 @@ export interface ProEntitlementSyncResult {
   tokenSyncLastError?: string;
   isPro: boolean;
   token?: string;
+  /** Diagnostic source only; access still follows the canonical token gate. */
+  entitlementSource?: ProEntitlementSource;
 }
 
 function clearStoredProToken() {
@@ -509,13 +515,23 @@ function persistStoredProToken(token: string) {
   } catch {}
 }
 
-async function verifyProWithServer(): Promise<IAPResult> {
+async function verifyProWithServer(options: {
+  internalTestProEntitlementRequested?: boolean;
+  internalTestProBootstrapCapability?: string;
+} = {}): Promise<IAPResult> {
   const appUserId = getAppUserId();
   diagLog('verifyProWithServer: calling /api/verify-pro');
   try {
+    const body: Record<string, unknown> = { revenueCatAppUserId: appUserId };
+    if (options.internalTestProEntitlementRequested === true) {
+      body.internalTestProEntitlementRequested = true;
+      if (options.internalTestProBootstrapCapability) {
+        body.internalTestProBootstrapCapability = options.internalTestProBootstrapCapability;
+      }
+    }
     const { data, response: res } = await apiFetch<{ token?: string; error?: string }>(
       '/api/verify-pro',
-      { method: 'POST', body: { revenueCatAppUserId: appUserId } },
+      { method: 'POST', body },
     );
 
     if (!res.ok || !data.token) {
@@ -525,6 +541,7 @@ async function verifyProWithServer(): Promise<IAPResult> {
 
     diagLog('verifyProWithServer: token received');
     const isPro = isUsableProToken(data.token);
+    const entitlementSource = isPro ? readProTokenEntitlementSource(data.token) : 'none';
 
     if (isPro) {
       persistStoredProToken(data.token);
@@ -533,7 +550,12 @@ async function verifyProWithServer(): Promise<IAPResult> {
     }
 
     diagLog('verifyProWithServer: isPro =', isPro);
-    return { success: true, isPro, token: isPro ? data.token : undefined };
+    return {
+      success: true,
+      isPro,
+      token: isPro ? data.token : undefined,
+      entitlementSource,
+    };
   } catch (err) {
     diagError('verifyProWithServer: fetch threw:', err);
     return { success: false, cancelled: false, message: err instanceof Error ? err.message : 'Verification failed.' };
@@ -557,6 +579,7 @@ async function syncTokenForEntitlement(hasEntitlement: boolean): Promise<ProEnti
       tokenSyncLastResult: 'success',
       isPro: true,
       token: serverResult.token,
+      entitlementSource: serverResult.entitlementSource,
     };
   }
 
@@ -572,7 +595,35 @@ async function syncTokenForEntitlement(hasEntitlement: boolean): Promise<ProEnti
   };
 }
 
+/**
+ * Internal QA bootstrap uses the same server issuer and canonical token path;
+ * it is attempted only when the explicitly compiled client capability exists.
+ */
+async function tryInternalTestProEntitlement(): Promise<ProEntitlementSyncResult | null> {
+  if (!isInternalTestClientCapabilityEnabled()) return null;
+  const capability = getInternalTestBootstrapCapability();
+  if (!capability) return null;
+  const serverResult = await verifyProWithServer({
+    internalTestProEntitlementRequested: true,
+    internalTestProBootstrapCapability: capability,
+  });
+  if (serverResult.success && serverResult.isPro && serverResult.token
+    && serverResult.entitlementSource === 'internal_test') {
+    return {
+      entitlementResult: 'active',
+      tokenSyncLastResult: 'success',
+      isPro: true,
+      token: serverResult.token,
+      entitlementSource: 'internal_test',
+    };
+  }
+  return null;
+}
+
 export async function syncProEntitlement(): Promise<ProEntitlementSyncResult> {
+  const internalResult = await tryInternalTestProEntitlement();
+  if (internalResult) return internalResult;
+
   if (!isNative()) {
     const token = typeof window !== 'undefined' ? localStorage.getItem(PRO_TOKEN_KEY) : null;
     if (isUsableProToken(token)) {
@@ -581,6 +632,7 @@ export async function syncProEntitlement(): Promise<ProEntitlementSyncResult> {
         tokenSyncLastResult: 'success',
         isPro: true,
         token: token ?? undefined,
+        entitlementSource: readProTokenEntitlementSource(token),
       };
     }
     clearStoredProToken();
