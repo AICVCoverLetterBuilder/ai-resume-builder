@@ -11,6 +11,7 @@ import {
   type ExperienceV3GenerateFailureResponse,
   type ExperienceV3GenerateResponse,
   type ExperienceV3InternalRejectionAudit,
+  type ExperienceV3ProviderFailureEvidence,
   type ExperienceV3ProviderOutput,
 } from './experience-generate';
 import { immutableCopy } from './immutability';
@@ -23,6 +24,10 @@ import {
   type ValidationPhaseResult,
   type ViolationCategory,
 } from './validators';
+import {
+  classifyExperienceV3EnhanceProviderFailure,
+  ExperienceV3EnhanceProviderTransportError,
+} from './experience-enhance-server';
 
 export interface ExperienceV3GenerateTransportSet {
   readonly generate: (prompt: string) => Promise<string>;
@@ -170,6 +175,12 @@ function withEvaluatorDiagnosticMetadata(
   update: Partial<ExperienceV3EvaluatorDiagnosticMetadata>,
 ): ExperienceV3EvaluatorDiagnosticMetadata {
   return immutableCopy({ ...metadata, ...update }) as ExperienceV3EvaluatorDiagnosticMetadata;
+}
+
+function providerFailureEvidence(error: unknown): ExperienceV3ProviderFailureEvidence {
+  return error instanceof ExperienceV3EnhanceProviderTransportError
+    ? error.evidence
+    : classifyExperienceV3EnhanceProviderFailure(error);
 }
 
 function failure(
@@ -585,6 +596,7 @@ function buildExperienceV3DiagnosticEvidence(
   candidate: AiCoreV3CandidateEnvelope | null,
   evaluatorMetadata: ExperienceV3EvaluatorDiagnosticMetadata = unavailableEvaluatorDiagnosticMetadata(),
   validation?: AggregateValidationResult,
+  providerFailure?: ReturnType<typeof classifyExperienceV3EnhanceProviderFailure>,
 ): ExperienceV3DiagnosticEvidence {
   const semantic = phaseViolationCodes(validation, 'semantic');
   const languageQuality = phaseViolationCodes(validation, 'language_quality');
@@ -601,6 +613,7 @@ function buildExperienceV3DiagnosticEvidence(
     candidateUnitHashes: candidate ? (candidate.units || []).map((unit) => hashExperienceV3Value(unit.text)) : [],
     candidateUnitLengths: candidate ? (candidate.units || []).map((unit) => unit.text.length) : [],
     ...evaluatorMetadata,
+    ...(providerFailure ? providerFailure : {}),
     semanticViolationCount: semantic.count,
     semanticViolationCodes: semantic.codes,
     languageQualityViolationCount: languageQuality.count,
@@ -686,8 +699,18 @@ export async function executeExperienceV3GenerateServer(
   let writerRaw: string;
   try {
     writerRaw = await transports.generate(buildExperienceV3WriterPrompt(manifest));
-  } catch {
-    return failure('provider_request_failed');
+  } catch (error) {
+    const providerFailure = providerFailureEvidence(error);
+    return failure(
+      providerFailure.providerErrorType === 'timeout' ? 'writer_timeout' : 'writer_request_failed',
+      undefined,
+      buildExperienceV3DiagnosticEvidence(
+        null,
+        unavailableEvaluatorDiagnosticMetadata(),
+        undefined,
+        providerFailure,
+      ),
+    );
   }
   const providerOutput = parseExperienceV3ProviderOutput(writerRaw, manifest);
   if (!providerOutput) return failure('provider_output_malformed');
@@ -712,7 +735,8 @@ export async function executeExperienceV3GenerateServer(
   let evaluatorResponse: ExperienceV3EvaluatorResponse;
   try {
     evaluatorResponse = await transports.evaluate(buildExperienceV3EvaluatorPrompt(manifest, candidate));
-  } catch {
+  } catch (error) {
+    const providerFailure = providerFailureEvidence(error);
     const validation = aggregateWithPhases(
       manifest,
       candidate,
@@ -721,9 +745,14 @@ export async function executeExperienceV3GenerateServer(
       notEvaluatedPhase('language_quality'),
     );
     return failure(
-      'evaluator_request_failed',
+      providerFailure.providerErrorType === 'timeout' ? 'evaluator_timeout' : 'evaluator_request_failed',
       validation,
-      buildExperienceV3DiagnosticEvidence(candidate, unavailableEvaluatorDiagnosticMetadata(), validation),
+      buildExperienceV3DiagnosticEvidence(
+        candidate,
+        unavailableEvaluatorDiagnosticMetadata(),
+        validation,
+        providerFailure,
+      ),
     );
   }
   const evaluatorResult = parseExperienceV3EvaluatorToolResponse(evaluatorResponse, manifest);

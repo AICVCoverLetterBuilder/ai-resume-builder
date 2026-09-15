@@ -194,7 +194,7 @@ async function runDeviceFixture(mode: RunMode = 'success') {
       });
       httpStatus = response.ok
         ? 200
-        : response.typedReason.includes('provider') || response.typedReason.includes('evaluator')
+        : response.typedReason.includes('provider') || response.typedReason.includes('writer') || response.typedReason.includes('evaluator')
           ? 502
           : 422;
       if (mode === 'race_failure') visible = 'User typed while the request was active.';
@@ -257,7 +257,7 @@ describe('M4 device-test-1 V3 Experience terminal diagnostics', () => {
     expect(getCvAiDiagnosticHistory('experience')).toHaveLength(1);
     expect(summarizeExperienceAiDiagnostic(getLatestExperienceAiDiagnosticRecord())).toMatchObject({
       operationKind: 'experience_v3_generate',
-      typedFailureReason: 'provider_request_failed',
+      typedFailureReason: 'writer_request_failed',
     });
   });
 

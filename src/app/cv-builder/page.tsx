@@ -233,6 +233,7 @@ import {
   classifySummaryV3GenerateRouting,
   isAiCoreV3Enabled,
   hashSummaryV3Value,
+  mapExperienceV3GenerateResultToErrorCode,
   mapExperienceV3EnhanceResultToErrorCode,
   runExperienceV3EnhanceAdapter,
   runExperienceV3GenerateAdapter,
@@ -2479,15 +2480,27 @@ export default function CVBuilderPage() {
       : { kind: 'not_applicable' as const };
     if (experienceV3Result.kind !== 'not_applicable') {
       clearTimeout(timer);
+      const experienceV3GenerateErrorCode = experienceV3Result.kind === 'handled_failure'
+        ? mapExperienceV3GenerateResultToErrorCode(experienceV3Result)
+        : null;
+      const experienceV3GenerateHttpStatus = experienceV3Result.kind === 'handled_success'
+        ? 200
+        : experienceV3Result.diagnostic.routeHttpStatus
+          ?? (experienceV3GenerateErrorCode === 'request_timeout'
+            ? 504
+            : experienceV3GenerateErrorCode === 'provider_temporarily_unavailable' ? 502 : 422);
       finishAiClientRequest({
         ctx: reqCtx,
         isProVerified: true,
         countBefore,
         countAfter: experienceV3Result.kind === 'handled_success' ? countBefore + 1 : countBefore,
-        httpStatus: experienceV3Result.kind === 'handled_success' ? 200 : 422,
+        httpStatus: experienceV3GenerateHttpStatus,
         error: experienceV3Result.kind === 'handled_success'
           ? null
-          : { code: 'generation_validation_failed', httpStatus: 422 },
+          : {
+            code: experienceV3GenerateErrorCode ?? 'generation_validation_failed',
+            httpStatus: experienceV3GenerateHttpStatus,
+          },
         responseSource: experienceV3Result.kind === 'handled_success' ? 'provider' : 'blocked',
       });
       setGeneratingBulletsId(null);
@@ -2497,7 +2510,10 @@ export default function CVBuilderPage() {
           if (process.env.NODE_ENV !== 'production') {
             console.info('[ExperienceV3GenerateRejected]', typedReason);
           }
-          toast.error(aiErrorMessage('generation_validation_failed', locale));
+          toast.error(aiErrorMessage(
+            experienceV3GenerateErrorCode ?? 'generation_validation_failed',
+            locale,
+          ));
         },
       });
       return;

@@ -898,40 +898,87 @@ export async function POST(req: NextRequest) {
         }, { status: 409 });
       }
       const result = await executeExperienceV3GenerateServer(params, {
-        generate: async (prompt) => getText(await callWithRetry({
-          model: MODEL,
-          max_tokens: 900,
-          temperature: 0,
-          system: 'You are the single AI Core V3 Experience prose writer. Follow the strict JSON contract exactly.',
-          messages: [{ role: 'user', content: prompt }],
-        }, deadlineAt, undefined, AI_PROVIDER_CALL_TIMEOUT_MS, 'provider', undefined, false)),
+        generate: async (prompt) => {
+          let request: Parameters<Anthropic['messages']['create']>[0];
+          try {
+            request = {
+              model: MODEL,
+              max_tokens: 900,
+              temperature: 0,
+              system: 'You are the single AI Core V3 Experience prose writer. Follow the strict JSON contract exactly.',
+              messages: [{ role: 'user', content: prompt }],
+            };
+          } catch (error) {
+            throw createExperienceV3EnhanceProviderTransportError(error, 'request_construction');
+          }
+          let response: Anthropic.Messages.Message;
+          try {
+            response = await callWithRetry(
+              request,
+              deadlineAt,
+              undefined,
+              AI_PROVIDER_CALL_TIMEOUT_MS,
+              'provider', undefined, false);
+          } catch (error) {
+            throw createExperienceV3EnhanceProviderTransportError(error);
+          }
+          try {
+            return getText(response);
+          } catch (error) {
+            throw createExperienceV3EnhanceProviderTransportError(error, 'response_extraction');
+          }
+        },
         evaluate: async (prompt) => {
-          const response = await callWithRetry({
-            model: MODEL,
-            max_tokens: 1200,
-            temperature: 0,
-            system: 'You are an independent non-writing CV validator. Submit structured validation evidence only through the required tool.',
-            messages: [{ role: 'user', content: prompt }],
-            tools: [EXPERIENCE_V3_EVALUATOR_TOOL],
-            tool_choice: {
-              type: 'tool',
-              name: EXPERIENCE_V3_EVALUATOR_TOOL.name,
-              disable_parallel_tool_use: true,
-            },
-          }, deadlineAt, undefined, AI_PROVIDER_CALL_TIMEOUT_MS, 'verifier', undefined, false);
-          return {
-            stopReason: response.stop_reason,
-            content: response.content.map((block) => block.type === 'tool_use'
-              ? { type: 'tool_use' as const, name: block.name, input: block.input }
-              : { type: block.type }),
-          };
+          let request: Parameters<Anthropic['messages']['create']>[0];
+          try {
+            request = {
+              model: MODEL,
+              max_tokens: 1200,
+              temperature: 0,
+              system: 'You are an independent non-writing CV validator. Submit structured validation evidence only through the required tool.',
+              messages: [{ role: 'user', content: prompt }],
+              tools: [EXPERIENCE_V3_EVALUATOR_TOOL],
+              tool_choice: {
+                type: 'tool',
+                name: EXPERIENCE_V3_EVALUATOR_TOOL.name,
+                disable_parallel_tool_use: true,
+              },
+            };
+          } catch (error) {
+            throw createExperienceV3EnhanceProviderTransportError(error, 'request_construction');
+          }
+          let response: Anthropic.Messages.Message;
+          try {
+            response = await callWithRetry(
+              request,
+              deadlineAt,
+              undefined,
+              AI_PROVIDER_CALL_TIMEOUT_MS,
+              'verifier', undefined, false);
+          } catch (error) {
+            throw createExperienceV3EnhanceProviderTransportError(error);
+          }
+          try {
+            return {
+              stopReason: response.stop_reason,
+              content: response.content.map((block) => block.type === 'tool_use'
+                ? { type: 'tool_use' as const, name: block.name, input: block.input }
+                : { type: block.type }),
+            };
+          } catch (error) {
+            throw createExperienceV3EnhanceProviderTransportError(error, 'response_extraction');
+          }
         },
       });
       const status = result.ok
         ? 200
         : result.typedReason === 'invalid_request_contract'
           ? 400
-          : result.typedReason.includes('provider') || result.typedReason.includes('evaluator')
+          : result.typedReason === 'writer_timeout' || result.typedReason === 'evaluator_timeout'
+            ? 504
+            : result.typedReason.includes('provider')
+              || result.typedReason.includes('writer')
+              || result.typedReason.includes('evaluator')
             ? 502
             : 422;
       return jsonResponse(

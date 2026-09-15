@@ -310,7 +310,7 @@ describe('M2 A. exact routing', () => {
 
   it('5. eligible provider failure is terminal handled_failure with no write or usage', async () => {
     const run = await runHarness({ serverOptions: { writerThrows: true } });
-    expect(run.result).toMatchObject({ kind: 'handled_failure', typedReason: 'provider_request_failed' });
+    expect(run.result).toMatchObject({ kind: 'handled_failure', typedReason: 'writer_request_failed' });
     expect(run.result.kind === 'handled_failure' && run.result.diagnostic).toMatchObject({
       finalDecision: 'transport_failure',
       usageDelta: 0,
@@ -422,7 +422,7 @@ describe('M2 C and D. bounded transports and fail-closed validation', () => {
   it('17. a provider failure produces no deterministic fallback candidate', async () => {
     const manifest = captureExperienceV3OperationSnapshot(makeInput()).manifest;
     const result = await validServerResponse(manifest, { writerThrows: true });
-    expect(result).toMatchObject({ ok: false, typedReason: 'provider_request_failed' });
+    expect(result).toMatchObject({ ok: false, typedReason: 'writer_request_failed' });
     expect(result).not.toHaveProperty('candidate');
   });
 

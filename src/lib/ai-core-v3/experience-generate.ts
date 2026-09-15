@@ -30,6 +30,7 @@ export const EXPERIENCE_V3_TERMINAL_REASON_CODES = [
   'invalid_request_contract',
   'v3_feature_disabled',
   'provider_request_failed',
+  'writer_timeout',
   'writer_request_failed',
   'provider_output_malformed',
   'writer_max_tokens',
@@ -41,6 +42,7 @@ export const EXPERIENCE_V3_TERMINAL_REASON_CODES = [
   'writer_identity_mismatch',
   'structural_validation_failed',
   'evaluator_request_failed',
+  'evaluator_timeout',
   'evaluator_max_tokens',
   'evaluator_tool_missing',
   'evaluator_multiple_tools',
@@ -1336,7 +1338,7 @@ function diagnosticAttempts(
   if (reason === 'provider_request_failed') {
     return { writer: { attempted: true, result: 'failed' }, evaluator: notAttempted };
   }
-  if (reason === 'writer_request_failed') {
+  if (reason === 'writer_timeout' || reason === 'writer_request_failed') {
     return { writer: { attempted: true, result: 'failed' }, evaluator: notAttempted };
   }
   if (reason === 'provider_output_malformed') {
@@ -1356,7 +1358,7 @@ function diagnosticAttempts(
   if (reason === 'structural_validation_failed') {
     return { writer: succeeded, evaluator: notAttempted };
   }
-  if (reason === 'evaluator_request_failed') {
+  if (reason === 'evaluator_request_failed' || reason === 'evaluator_timeout') {
     return { writer: succeeded, evaluator: { attempted: true, result: 'failed' } };
   }
   if ([
@@ -1424,7 +1426,10 @@ function buildExperienceV3TerminalDiagnostic(
   })();
   const raceFailure = reason === 'stale_snapshot' || reason === 'target_entry_deleted';
   const transportFailure = reason === 'provider_request_failed'
+    || reason === 'writer_timeout'
+    || reason === 'writer_request_failed'
     || reason === 'evaluator_request_failed'
+    || reason === 'evaluator_timeout'
     || reason === 'evaluator_max_tokens'
     || reason === 'evaluator_tool_missing'
     || reason === 'evaluator_multiple_tools'
@@ -1527,6 +1532,31 @@ function withTerminalDiagnostic(
       diagnostic,
       ...(internalRejectionAudit ? { internalRejectionAudit } : {}),
     };
+}
+
+export type ExperienceV3GenerateErrorCode =
+  | 'request_timeout'
+  | 'provider_temporarily_unavailable'
+  | 'generation_validation_failed';
+
+/** Map an owned Generate terminal result to the existing localized UX taxonomy. */
+export function mapExperienceV3GenerateResultToErrorCode(
+  result: ExperienceV3AdapterResult,
+): ExperienceV3GenerateErrorCode | null {
+  if (result.kind === 'not_applicable' || result.kind === 'handled_success') return null;
+  if (result.typedReason === 'writer_timeout'
+    || result.typedReason === 'evaluator_timeout'
+    || result.diagnostic.providerErrorType === 'timeout') {
+    return 'request_timeout';
+  }
+  if (result.diagnostic.finalDecision === 'transport_failure'
+    || (result.diagnostic.routeHttpStatus !== null && result.diagnostic.routeHttpStatus >= 500)
+    || result.typedReason === 'provider_request_failed'
+    || result.typedReason === 'writer_request_failed'
+    || result.typedReason === 'evaluator_request_failed') {
+    return 'provider_temporarily_unavailable';
+  }
+  return 'generation_validation_failed';
 }
 
 export async function runExperienceV3GenerateAdapter(
