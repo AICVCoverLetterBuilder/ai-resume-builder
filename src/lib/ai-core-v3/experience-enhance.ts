@@ -272,6 +272,17 @@ export type ExperienceV3EnhanceAdapterResult = Extract<ExperienceV3AdapterResult
     readonly internalRejectionAudit?: ExperienceV3InternalRejectionAudit;
   };
 
+export type ExperienceV3EnhanceErrorCode = 'request_timeout' | 'generation_validation_failed';
+
+/** Preserve validation wording while giving provider transport timeouts their truthful UX. */
+export function mapExperienceV3EnhanceResultToErrorCode(
+  result: ExperienceV3EnhanceAdapterResult,
+): ExperienceV3EnhanceErrorCode {
+  return result.kind === 'handled_failure' && result.diagnostic?.providerErrorType === 'timeout'
+    ? 'request_timeout'
+    : 'generation_validation_failed';
+}
+
 function normalizeLocale(value: string): string {
   return String(value || '').trim().replace(/_/g, '-').toLowerCase();
 }
@@ -834,7 +845,9 @@ function m3Attempts(reason: string, accepted: boolean): {
     'writer_identity_mismatch',
   ].includes(reason)) return { writer: { attempted: true, result: 'malformed' }, evaluator: none };
   if (reason === 'structural_validation_failed') return { writer: ok, evaluator: none };
-  if (reason === 'validator_exception') return { writer: ok, evaluator: { attempted: true, result: 'failed' } };
+  if (['validator_exception', 'evaluator_request_failed', 'evaluator_timeout'].includes(reason)) {
+    return { writer: ok, evaluator: { attempted: true, result: 'failed' } };
+  }
   if (['evaluator_max_tokens', 'evaluator_tool_missing', 'evaluator_multiple_tools', 'evaluator_wrong_tool', 'evaluator_unexpected_text_block', 'evaluator_tool_input_malformed', 'evaluator_identity_mismatch', 'evaluator_output_malformed'].includes(reason)) return { writer: ok, evaluator: { attempted: true, result: 'malformed' } };
   if (['validation_rejected', 'materiality_degraded', 'no_material_improvement'].includes(reason)) return { writer: ok, evaluator: ok };
   return { writer: { attempted: null, result: 'unknown' }, evaluator: { attempted: null, result: 'unknown' } };
@@ -855,7 +868,10 @@ function buildM3TerminalDiagnostic(
   const snapshot = (() => { try { return captureExperienceV3EnhanceOperationSnapshot(input); } catch { return null; } })();
   const entry = input.cv.experience.find((item) => item.id === input.entryId);
   const routeHttpStatus = (() => { try { const status = dependencies.getRouteHttpStatus?.(); return typeof status === 'number' && Number.isInteger(status) && status >= 100 && status <= 599 ? status : null; } catch { return null; } })();
-  const transportFailure = reason === 'provider_request_failed' || reason === 'validator_exception'
+  const transportFailure = reason === 'provider_request_failed'
+    || reason === 'validator_exception'
+    || reason === 'evaluator_request_failed'
+    || reason === 'evaluator_timeout'
     || (routeHttpStatus !== null && routeHttpStatus >= 500);
   const materiality = isRecord(rawResponse) && isRecord(rawResponse.materiality) ? rawResponse.materiality : null;
   const responseCandidateText = isRecord(rawResponse) && isRecord(rawResponse.candidate)

@@ -47,9 +47,11 @@ import type { AiErrorCode } from '@/lib/ai-error-codes';
 import { validateAiUnitLocalePurity } from '@/lib/cv-ai-unit-locale-purity';
 import {
   AI_PROVIDER_CALL_TIMEOUT_MS,
+  EXPERIENCE_V3_PROVIDER_STAGE_TIMEOUT_MS,
   EXPERIENCE_LOCALIZATION_TRANSLATION_TIMEOUT_MS,
   EXPERIENCE_LOCALIZATION_VERIFIER_TIMEOUT_MS,
   callProviderWithDeadline,
+  computeExperienceV3EnhanceDeadline,
   computeExperienceLocalizationDeadline,
   computeServerDeadline,
   hasProviderBudget,
@@ -507,7 +509,6 @@ function getText(response: Anthropic.Messages.Message): string {
 const EXPERIENCE_COMPACT_TRANSLATOR_MAX_RECORDS = EXPERIENCE_LOCALIZATION_PROVIDER_BATCH_SIZE;
 const EXPERIENCE_COMPACT_LOCALIZED_SURFACE_MAX_CHARS = EXPERIENCE_LOCALIZATION_MAX_SOURCE_TEXT_CHARS;
 const EXPERIENCE_ROUTE_FINALIZATION_MARGIN_MS = 2_000;
-const EXPERIENCE_V3_ENHANCE_WRITER_TIMEOUT_MS = EXPERIENCE_LOCALIZATION_VERIFIER_TIMEOUT_MS;
 
 type CompactTranslatorRecord = {
   recordId: string;
@@ -785,11 +786,12 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     const { action, proToken, freeUserId, requestId, ...params } = body;
-    if (
+    if (String(action) === EXPERIENCE_V3_ENHANCE_ACTION) {
+      deadlineAt = computeExperienceV3EnhanceDeadline(serverReceivedAt);
+    } else if (
       action === 'experience-localize'
       || action === 'export-title-localize'
       || action === 'summary-context-localize'
-      || action === EXPERIENCE_V3_ENHANCE_ACTION
     ) {
       deadlineAt = computeExperienceLocalizationDeadline(serverReceivedAt);
     }
@@ -2878,7 +2880,7 @@ ${sourceFactsText || '(none)'}`
               request,
               deadlineAt,
               undefined,
-              EXPERIENCE_V3_ENHANCE_WRITER_TIMEOUT_MS,
+              EXPERIENCE_V3_PROVIDER_STAGE_TIMEOUT_MS,
               'provider',
               undefined,
               false,
@@ -2913,7 +2915,7 @@ ${sourceFactsText || '(none)'}`
               request,
               deadlineAt,
               undefined,
-              EXPERIENCE_LOCALIZATION_VERIFIER_TIMEOUT_MS,
+              EXPERIENCE_V3_PROVIDER_STAGE_TIMEOUT_MS,
               'verifier',
               undefined,
               false,
@@ -2934,6 +2936,7 @@ ${sourceFactsText || '(none)'}`
           ? 400
           : result.typedReason.includes('provider') || result.typedReason.includes('evaluator')
             || result.typedReason.startsWith('writer_')
+            || result.typedReason.startsWith('evaluator_')
             || result.typedReason === 'validator_exception'
             ? 502
             : 422;

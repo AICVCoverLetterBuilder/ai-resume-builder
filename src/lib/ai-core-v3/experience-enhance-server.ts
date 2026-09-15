@@ -960,17 +960,20 @@ export async function executeExperienceV3EnhanceServer(
   try {
     evaluatorResponse = await transports.evaluate(buildExperienceV3EnhanceEvaluatorPrompt(manifest, candidate));
   } catch (error) {
+    const evaluatorFailure = error instanceof ExperienceV3EnhanceProviderTransportError
+      ? error.evidence
+      : classifyExperienceV3EnhanceProviderFailure(error);
     return failure(
-      'validator_exception',
+      evaluatorFailure.providerErrorType === 'timeout'
+        ? 'evaluator_timeout'
+        : 'evaluator_request_failed',
       undefined,
       diagnosticEvidence(
         candidate,
         undefined,
         writerDiagnostic,
         unavailableEnhanceEvaluatorMetadata(),
-        error instanceof ExperienceV3EnhanceProviderTransportError
-          ? error.evidence
-          : classifyExperienceV3EnhanceProviderFailure(error),
+        evaluatorFailure,
       ),
       internalRejectionAudit(manifest, candidate),
     );

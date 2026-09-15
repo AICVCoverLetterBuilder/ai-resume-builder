@@ -79,6 +79,24 @@ export const EXPERIENCE_LOCALIZATION_TRANSLATION_TIMEOUT_MS = 11_500;
 export const EXPERIENCE_LOCALIZATION_VERIFIER_TIMEOUT_MS = 11_500;
 export const EXPERIENCE_LOCALIZATION_SERVER_BUDGET_MS = 27_000;
 export const EXPERIENCE_LOCALIZATION_CLIENT_TIMEOUT_MS = 29_000;
+
+/**
+ * Experience V3 Enhance has two sequential provider stages (writer then
+ * evaluator). Keep one explicit stage authority and a bounded orchestration
+ * reserve so both stages can complete without approaching the platform cap.
+ * The 15-second slice is the smallest rounded increase above the repeated
+ * 11.5-second physical failures that still fits the existing 40-second client
+ * guard when paired with the fixed six-second application reserve.
+ */
+export const EXPERIENCE_V3_PROVIDER_STAGE_TIMEOUT_MS = 15_000;
+export const EXPERIENCE_V3_ROUTE_OVERHEAD_MS = 6_000;
+export const EXPERIENCE_V3_ROUTE_APPLICATION_BUDGET_MS =
+  EXPERIENCE_V3_PROVIDER_STAGE_TIMEOUT_MS * 2 + EXPERIENCE_V3_ROUTE_OVERHEAD_MS;
+
+export function computeExperienceV3EnhanceDeadline(requestStartedAt: number): number {
+  return requestStartedAt + EXPERIENCE_V3_ROUTE_APPLICATION_BUDGET_MS;
+}
+
 /**
  * One export-localization operation may span several bounded server requests,
  * but it must never scale its wall-clock deadline without limit. Four complete

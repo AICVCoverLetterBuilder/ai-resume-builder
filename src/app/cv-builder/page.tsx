@@ -233,6 +233,7 @@ import {
   classifySummaryV3GenerateRouting,
   isAiCoreV3Enabled,
   hashSummaryV3Value,
+  mapExperienceV3EnhanceResultToErrorCode,
   runExperienceV3EnhanceAdapter,
   runExperienceV3GenerateAdapter,
   runSummaryV3GenerateAdapter,
@@ -2572,6 +2573,7 @@ export default function CVBuilderPage() {
       : { kind: 'not_applicable' as const };
     if (experienceV3EnhanceResult.kind !== 'not_applicable') {
       clearTimeout(timer);
+      const experienceV3EnhanceErrorCode = mapExperienceV3EnhanceResultToErrorCode(experienceV3EnhanceResult);
       finishAiClientRequest({
         ctx: reqCtx,
         isProVerified: true,
@@ -2580,7 +2582,7 @@ export default function CVBuilderPage() {
         httpStatus: experienceV3EnhanceResult.kind === 'handled_success' ? 200 : 422,
         error: experienceV3EnhanceResult.kind === 'handled_success'
           ? null
-          : { code: 'generation_validation_failed', httpStatus: 422 },
+          : { code: experienceV3EnhanceErrorCode, httpStatus: 422 },
         responseSource: experienceV3EnhanceResult.kind === 'handled_success' ? 'provider' : 'blocked',
       });
       setGeneratingBulletsId(null);
@@ -2590,7 +2592,7 @@ export default function CVBuilderPage() {
           if (process.env.NODE_ENV !== 'production') {
             console.info('[ExperienceV3EnhanceRejected]', typedReason);
           }
-          toast.error(aiErrorMessage('generation_validation_failed', locale));
+          toast.error(aiErrorMessage(experienceV3EnhanceErrorCode, locale));
         },
       });
       return;
