@@ -51,6 +51,7 @@ import {
   EXPERIENCE_LOCALIZATION_TRANSLATION_TIMEOUT_MS,
   EXPERIENCE_LOCALIZATION_VERIFIER_TIMEOUT_MS,
   callProviderWithDeadline,
+  computeExperienceV3Deadline,
   computeExperienceV3EnhanceDeadline,
   computeExperienceLocalizationDeadline,
   computeServerDeadline,
@@ -786,7 +787,9 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     const { action, proToken, freeUserId, requestId, ...params } = body;
-    if (String(action) === EXPERIENCE_V3_ENHANCE_ACTION) {
+    if (String(action) === EXPERIENCE_V3_GENERATE_ACTION) {
+      deadlineAt = computeExperienceV3Deadline(serverReceivedAt);
+    } else if (String(action) === EXPERIENCE_V3_ENHANCE_ACTION) {
       deadlineAt = computeExperienceV3EnhanceDeadline(serverReceivedAt);
     } else if (
       action === 'experience-localize'
@@ -917,7 +920,7 @@ export async function POST(req: NextRequest) {
               request,
               deadlineAt,
               undefined,
-              AI_PROVIDER_CALL_TIMEOUT_MS,
+              EXPERIENCE_V3_PROVIDER_STAGE_TIMEOUT_MS,
               'provider', undefined, false);
           } catch (error) {
             throw createExperienceV3EnhanceProviderTransportError(error);
@@ -953,7 +956,7 @@ export async function POST(req: NextRequest) {
               request,
               deadlineAt,
               undefined,
-              AI_PROVIDER_CALL_TIMEOUT_MS,
+              EXPERIENCE_V3_PROVIDER_STAGE_TIMEOUT_MS,
               'verifier', undefined, false);
           } catch (error) {
             throw createExperienceV3EnhanceProviderTransportError(error);

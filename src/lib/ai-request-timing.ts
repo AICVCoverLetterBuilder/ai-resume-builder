@@ -93,9 +93,13 @@ export const EXPERIENCE_V3_ROUTE_OVERHEAD_MS = 6_000;
 export const EXPERIENCE_V3_ROUTE_APPLICATION_BUDGET_MS =
   EXPERIENCE_V3_PROVIDER_STAGE_TIMEOUT_MS * 2 + EXPERIENCE_V3_ROUTE_OVERHEAD_MS;
 
-export function computeExperienceV3EnhanceDeadline(requestStartedAt: number): number {
+/** Shared application deadline for the two-stage Experience V3 operations. */
+export function computeExperienceV3Deadline(requestStartedAt: number): number {
   return requestStartedAt + EXPERIENCE_V3_ROUTE_APPLICATION_BUDGET_MS;
 }
+
+/** Backward-compatible name retained for existing Enhance callers and tests. */
+export const computeExperienceV3EnhanceDeadline = computeExperienceV3Deadline;
 
 /**
  * One export-localization operation may span several bounded server requests,
