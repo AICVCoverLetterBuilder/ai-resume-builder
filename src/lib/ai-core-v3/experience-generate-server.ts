@@ -16,6 +16,7 @@ import {
 } from './experience-generate';
 import { immutableCopy } from './immutability';
 import { INTERNAL_AI_RESET_ENABLED } from '../build-channel';
+import { isInternalTestServerCapabilityEnabled } from '../internal-test-pro-entitlement';
 import {
   runAiCoreV3Validation,
   validateStructuralPhase,
@@ -630,7 +631,12 @@ function buildExperienceV3InternalRejectionAudit(
   evaluatorMetadata: ExperienceV3EvaluatorDiagnosticMetadata,
   validation: AggregateValidationResult,
 ): ExperienceV3InternalRejectionAudit | undefined {
-  if (!INTERNAL_AI_RESET_ENABLED || validation.decision !== 'reject') return undefined;
+  // Internal Preview deployments may be authorized by the server-only Pro
+  // entitlement without carrying the client reset source flag. Keep the
+  // established audit owner, but allow that explicitly scoped Preview gate to
+  // preserve rejected-candidate evidence for an internal device build.
+  if (!(INTERNAL_AI_RESET_ENABLED || isInternalTestServerCapabilityEnabled())
+    || validation.decision !== 'reject') return undefined;
   return immutableCopy({
     operationId: manifest.operationId,
     entryId: manifest.entryId,

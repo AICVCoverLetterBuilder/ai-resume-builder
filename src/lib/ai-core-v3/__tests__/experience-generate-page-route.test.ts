@@ -509,6 +509,106 @@ describe('M2 focused page and route integration', () => {
     }
   });
 
+  it('preserves an internal Preview rejection audit through the server entitlement gate', async () => {
+    const environmentKeys = [
+      'NEXT_PUBLIC_INTERNAL_AI_RESET_ENABLED',
+      'AI_INTERNAL_TEST_PRO_ENTITLEMENT',
+      'VERCEL_ENV',
+      'NEXT_PUBLIC_BUILD_CHANNEL',
+    ] as const;
+    const originalEnvironment = Object.fromEntries(environmentKeys.map((key) => [key, {
+      present: Object.prototype.hasOwnProperty.call(process.env, key),
+      value: process.env[key],
+    }])) as Record<(typeof environmentKeys)[number], { present: boolean; value: string | undefined }>;
+    const manifest = {
+      operationId: 'server-entitlement-audit-operation',
+      operationKind: 'experience_generate' as const,
+      mode: 'generate' as const,
+      entryId: 'server-entitlement-audit-entry',
+      locale: 'de',
+      roleTitle: 'Synthetic Role',
+      company: 'Synthetic Company',
+      employmentState: 'present' as const,
+      dates: { start: { year: 2024, month: 1 }, end: null },
+      exactSourceText: '',
+      facts: [],
+      snapshotHash: 'server-entitlement-audit-snapshot',
+    };
+    const bullets = [
+      'Unterstützt routinemäßige technische Aufgaben.',
+      'Dokumentiert ausgeführte Arbeitsschritte.',
+      'Stimmt laufende Aufgaben mit Kolleginnen und Kollegen ab.',
+    ];
+    try {
+      process.env.NEXT_PUBLIC_INTERNAL_AI_RESET_ENABLED = 'false';
+      process.env.AI_INTERNAL_TEST_PRO_ENTITLEMENT = 'true';
+      process.env.VERCEL_ENV = 'preview';
+      process.env.NEXT_PUBLIC_BUILD_CHANNEL = 'internal';
+      vi.resetModules();
+      const { executeExperienceV3GenerateServer } = await import('../experience-generate-server');
+      const result = await executeExperienceV3GenerateServer({ manifest }, {
+        generate: async () => JSON.stringify({
+          operationId: manifest.operationId,
+          entryId: manifest.entryId,
+          snapshotHash: manifest.snapshotHash,
+          locale: manifest.locale,
+          bullets,
+        }),
+        evaluate: async () => ({
+          stopReason: 'tool_use',
+          content: [{
+            type: 'tool_use',
+            name: 'submit_experience_validation',
+            input: {
+              operationId: manifest.operationId,
+              entryId: manifest.entryId,
+              snapshotHash: manifest.snapshotHash,
+              locale: manifest.locale,
+              phases: {
+                semantic: {
+                  status: 'failed',
+                  violations: [{
+                    code: 'unsupported claim',
+                    category: 'semantic',
+                    detail: 'Synthetic uncoded semantic violation.',
+                    entryIds: [manifest.entryId],
+                  }],
+                },
+                language_quality: { status: 'passed', violations: [] },
+              },
+            },
+          }],
+        }),
+      });
+      expect(result).toMatchObject({
+        ok: false,
+        action: 'experience_v3_generate',
+        typedReason: 'validation_rejected',
+        diagnosticEvidence: {
+          semanticViolationCount: 1,
+          semanticViolationCodes: [],
+          primaryValidationRejectionCode: null,
+        },
+        internalRejectionAudit: {
+          candidate: { units: bullets.map((text) => ({ text })) },
+          evaluator: {
+            semanticViolations: [{
+              code: 'unsupported claim',
+              detail: 'Synthetic uncoded semantic violation.',
+            }],
+          },
+        },
+      });
+    } finally {
+      vi.resetModules();
+      for (const key of environmentKeys) {
+        const original = originalEnvironment[key];
+        if (original.present) process.env[key] = original.value;
+        else delete process.env[key];
+      }
+    }
+  });
+
   it('has one V3 writer path and one evaluator path, both with provider retries disabled', () => {
     const branch = routeSource.slice(
       routeSource.indexOf('if (action === EXPERIENCE_V3_GENERATE_ACTION)'),
