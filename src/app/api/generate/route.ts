@@ -2225,7 +2225,12 @@ Rules:
           : result.reason === 'invalid_authorization_snapshot' || result.reason === 'candidate_rejected'
             ? 422
             : 502;
-      return jsonResponse(result, { status });
+      return jsonResponse(
+        result.status === 'candidate_ready'
+          ? { status: result.status, receipt: result.receipt, diagnostic: result.diagnostic }
+          : { status: result.status, reason: result.reason, diagnostic: result.diagnostic },
+        { status },
+      );
     }
 
     if (isSummaryV3StyleRouteAction(action)) {

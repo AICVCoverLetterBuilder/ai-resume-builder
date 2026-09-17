@@ -3874,7 +3874,9 @@ export default function CVBuilderPage() {
     }
 
     const proToken = getCurrentProTokenOrToast(() => setSummaryAiModal(true));
-    if (!proToken) return;
+    if (!proToken) {
+      return;
+    }
 
     const reqCtx = beginAiClientRequest('summary_translate', targetLocale);
     const operation = createContentLocalizeM6Operation({
@@ -3915,6 +3917,7 @@ export default function CVBuilderPage() {
         getLiveCv: () => cvRef.current,
         getActiveOperationId: () => latestSummaryRequestIdRef.current || '',
         commitCandidate: commitSummaryV3Candidate,
+        getUsageCount: () => getProAiUsageCount(),
       });
       finishAiClientRequest({
         ctx: reqCtx,
@@ -4024,6 +4027,7 @@ export default function CVBuilderPage() {
         getLiveCv: () => cvRef.current,
         getActiveOperationId: () => latestBulletsRequestIdRef.current[intent.experienceEntryId] || '',
         commitCandidate: commitExperienceTranslationCandidate,
+        getUsageCount: () => getProAiUsageCount(),
       });
       finishAiClientRequest({
         ctx: reqCtx,

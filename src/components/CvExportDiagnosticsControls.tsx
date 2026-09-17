@@ -90,6 +90,21 @@ export function SummaryAiCopyDiagnosticsButton() {
   return <Link />;
 }
 
+/** Internal-only Content Localization diagnostics copy control. */
+export function ContentLocalizationAiCopyDiagnosticsButton() {
+  const [Link, setLink] = useState<null | typeof import('./InternalContentLocalizationDiagnosticsPanel').InternalContentLocalizationCopyLink>(null);
+  useEffect(() => {
+    if (!INTERNAL_AI_RESET_ENABLED) return;
+    let cancelled = false;
+    void import('./InternalContentLocalizationDiagnosticsPanel').then((mod) => {
+      if (!cancelled) setLink(() => mod.InternalContentLocalizationCopyLink);
+    });
+    return () => { cancelled = true; };
+  }, []);
+  if (!INTERNAL_AI_RESET_ENABLED || !Link) return null;
+  return <Link />;
+}
+
 /** Hidden diagnostics modal opened via seven taps on the About version label. */
 export function CvExportDiagnosticsModal({
   open,
@@ -102,6 +117,7 @@ export function CvExportDiagnosticsModal({
   const [EnabledPanel, setEnabledPanel] = useState<null | typeof import('./InternalAiUsageResetPanel').InternalAiUsageResetPanel>(null);
   const [ExpAiPanel, setExpAiPanel] = useState<null | typeof import('./InternalExperienceAiDiagnosticsPanel').InternalExperienceAiDiagnosticsPanel>(null);
   const [SumAiPanel, setSumAiPanel] = useState<null | typeof import('./InternalSummaryAiDiagnosticsPanel').InternalSummaryAiDiagnosticsPanel>(null);
+  const [ContentLocalizationPanel, setContentLocalizationPanel] = useState<null | typeof import('./InternalContentLocalizationDiagnosticsPanel').InternalContentLocalizationDiagnosticsPanel>(null);
 
   const diagnosticsRevision = useSyncExternalStore(
     subscribeCvExportDiagnosticsChanged,
@@ -128,6 +144,9 @@ export function CvExportDiagnosticsModal({
     });
     void import('./InternalSummaryAiDiagnosticsPanel').then((mod) => {
       if (!cancelled) setSumAiPanel(() => mod.InternalSummaryAiDiagnosticsPanel);
+    });
+    void import('./InternalContentLocalizationDiagnosticsPanel').then((mod) => {
+      if (!cancelled) setContentLocalizationPanel(() => mod.InternalContentLocalizationDiagnosticsPanel);
     });
     return () => {
       cancelled = true;
@@ -189,6 +208,10 @@ export function CvExportDiagnosticsModal({
 
           {INTERNAL_AI_RESET_ENABLED && SumAiPanel ? (
             <SumAiPanel refreshToken={diagnosticsRevision} />
+          ) : null}
+
+          {INTERNAL_AI_RESET_ENABLED && ContentLocalizationPanel ? (
+            <ContentLocalizationPanel refreshToken={diagnosticsRevision} />
           ) : null}
 
           <p className="text-xs text-muted-foreground">

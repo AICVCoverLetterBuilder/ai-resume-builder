@@ -8,6 +8,7 @@ import type {
   ContentLocalizeM6ServerDependencies,
   ContentLocalizeM6WriterRequest,
 } from './content-localize-m6-server';
+import type { ContentLocalizeV3DiagnosticPhase } from './content-localize-v3-terminal-diagnostics';
 
 export const CONTENT_LOCALIZE_V3_OPERATION = 'content-localize-v3' as const;
 
@@ -44,6 +45,45 @@ export interface ContentLocalizeV3ProviderTransport {
 
 export interface ContentLocalizeV3ProviderDependenciesOptions {
   readonly invoke: ContentLocalizeV3ProviderTransport['invoke'];
+}
+
+const PROVIDER_OBSERVATION = '__contentLocalizeV3Observation';
+
+type ProviderResponseRecord = {
+  stop_reason?: unknown;
+  content?: unknown;
+};
+
+function withProviderObservation(value: unknown, observation: Partial<ContentLocalizeV3DiagnosticPhase>): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    // Keep malformed values parser-ineligible while carrying only request-local,
+    // non-enumerable observation data. The array is unreachable with the caller's
+    // result and therefore cannot accumulate in process-global state.
+    const sentinel: unknown[] = [];
+    Object.defineProperty(sentinel, PROVIDER_OBSERVATION, {
+      value: observation,
+      enumerable: false,
+      configurable: false,
+    });
+    return sentinel;
+  }
+  const output = value && typeof value === 'object' && !Array.isArray(value)
+    ? { ...(value as Record<string, unknown>) }
+    : {};
+  Object.defineProperty(output, PROVIDER_OBSERVATION, {
+    value: observation,
+    enumerable: false,
+    configurable: false,
+  });
+  return output;
+}
+
+export function readContentLocalizeV3ProviderObservation(value: unknown): Partial<ContentLocalizeV3DiagnosticPhase> | null {
+  if (!value || typeof value !== 'object') return null;
+  const observation = (value as Record<string, unknown>)[PROVIDER_OBSERVATION];
+  return observation && typeof observation === 'object' && !Array.isArray(observation)
+    ? observation as Partial<ContentLocalizeV3DiagnosticPhase>
+    : null;
 }
 
 const WRITER_TOOL_NAME = 'content_localize_m6_writer';
@@ -111,15 +151,36 @@ function systemForPhase(phase: ContentLocalizeV3ProviderPhase): string {
 }
 
 function extractToolInput(value: unknown, expectedToolName: string): unknown {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  const response = value as { stop_reason?: unknown; content?: unknown };
-  if (response.stop_reason !== 'tool_use' || !Array.isArray(response.content) || response.content.length !== 1) return null;
-  const block = response.content[0];
-  if (!block || typeof block !== 'object' || Array.isArray(block)) return null;
-  const candidate = block as { type?: unknown; name?: unknown; input?: unknown };
-  return candidate.type === 'tool_use' && candidate.name === expectedToolName && 'input' in candidate
-    ? candidate.input
+  const response = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as ProviderResponseRecord
     : null;
+  const content = response && Array.isArray(response.content) ? response.content : [];
+  const blocks = content.filter((block) => block && typeof block === 'object' && !Array.isArray(block)) as Array<Record<string, unknown>>;
+  const toolBlocks = blocks.filter((block) => block.type === 'tool_use');
+  const matched = toolBlocks.find((block) => block.name === expectedToolName);
+  const singleBlock = content.length === 1 && blocks.length === 1 ? blocks[0] : null;
+  const strictMatch = response?.stop_reason === 'tool_use'
+    && singleBlock?.type === 'tool_use'
+    && singleBlock.name === expectedToolName
+    && Object.prototype.hasOwnProperty.call(singleBlock, 'input');
+  const matchedInput = matched && Object.prototype.hasOwnProperty.call(matched, 'input')
+    ? matched.input
+    : null;
+  const input = strictMatch ? singleBlock.input : null;
+  const observation: Partial<ContentLocalizeV3DiagnosticPhase> = {
+    stopReason: typeof response?.stop_reason === 'string' ? response.stop_reason : null,
+    contentBlockCount: content.length,
+    textBlockCount: blocks.filter((block) => block.type === 'text').length,
+    toolBlockCount: toolBlocks.length,
+    expectedToolCount: 1,
+    toolNameMatched: Boolean(matched),
+    toolInputObject: Boolean(matchedInput && typeof matchedInput === 'object' && !Array.isArray(matchedInput)),
+    toolInputSchemaPassed: null,
+  };
+  if (!strictMatch || !input || typeof input !== 'object' || Array.isArray(input)) {
+    return withProviderObservation(null, observation);
+  }
+  return withProviderObservation(input, observation);
 }
 
 function invocationFor(
