@@ -553,7 +553,7 @@ describe('M3 C. writer, evaluator, and validation', () => {
   });
 
   it('47. language-quality failure is rejected', async () => {
-    const run = await runHarness({ server: { evaluator: { languageStatus: 'failed', code: 'malformed_spanish_surface' } } });
+    const run = await runHarness({ server: { evaluator: { languageStatus: 'failed', code: 'malformed_surface' } } });
     expect([run.result.kind, run.writeCount]).toEqual(['handled_failure', 0]);
   });
 
@@ -584,13 +584,13 @@ describe('M3 C. writer, evaluator, and validation', () => {
     const source = 'Prüft Unterlagen.\nDokumentiert Abweichungen.';
     const run = await runHarness({
       input: makeInput({ cv, requestedLocale: 'de', uiLocale: 'de', storedContentLocale: 'de', exactVisibleDescription: source }),
-      server: { writerUnits: ['Unterlagen abprüfe.', 'Abweichungen weiterdokumentierte.'], evaluator: { languageStatus: 'failed', code: 'malformed_german_surface' } },
+      server: { writerUnits: ['Unterlagen abprüfe.', 'Abweichungen weiterdokumentierte.'], evaluator: { languageStatus: 'failed', code: 'malformed_surface' } },
     });
     expect([run.result.kind, run.writeCount]).toEqual(['handled_failure', 0]);
   });
 
   it('rejects malformed non-German language output without replacement prose', async () => {
-    const run = await runHarness({ server: { evaluator: { languageStatus: 'failed', code: 'malformed_english_surface' } } });
+    const run = await runHarness({ server: { evaluator: { languageStatus: 'failed', code: 'malformed_surface' } } });
     expect([run.result.kind, run.writeCount]).toEqual(['handled_failure', 0]);
   });
 });
@@ -853,7 +853,7 @@ describe('M3 terminal observability', () => {
     });
     diagnostics.clearExperienceAiDiagnosticsForTests();
     const run = await runHarness({
-      server: { evaluator: { languageStatus: 'failed', code: 'malformed_german_surface' } },
+      server: { evaluator: { languageStatus: 'failed', code: 'malformed_surface' } },
     });
     expect(run.result.kind).toBe('handled_failure');
     if (run.result.kind !== 'handled_failure') return;
@@ -868,8 +868,8 @@ describe('M3 terminal observability', () => {
       evaluatorIdentityPassed: true,
       semanticViolationCount: 0,
       languageQualityViolationCount: 1,
-      languageQualityViolationCodes: ['malformed_german_surface'],
-      primaryValidationRejectionCode: 'malformed_german_surface',
+      languageQualityViolationCodes: ['malformed_surface'],
+      primaryValidationRejectionCode: 'malformed_surface',
       applyAuthorized: false,
       applyAttempted: false,
       applyCommitted: false,
@@ -881,11 +881,11 @@ describe('M3 terminal observability', () => {
     expect(run.result.internalRejectionAudit?.candidate.units.map((unit) => unit.text)).toEqual([...IMPROVED]);
     expect(run.result.internalRejectionAudit?.evaluator.evaluatorStopReason).toBe('tool_use');
     expect(run.result.internalRejectionAudit?.evaluator.languageQualityViolations.map((violation) => violation.code))
-      .toEqual(['malformed_german_surface']);
+      .toEqual(['malformed_surface']);
     diagnostics.routeExperienceV3PageTerminal(run.result, { onSuccess: vi.fn(), onFailure: vi.fn() });
     expect(diagnostics.getLatestExperienceAiDiagnosticRecord()).toMatchObject({
       candidatePresent: true,
-      languageQualityViolationCodes: ['malformed_german_surface'],
+      languageQualityViolationCodes: ['malformed_surface'],
     });
     expect(diagnostics.getLatestExperienceV3InternalRejectionAudit()?.candidate.units.map((unit) => unit.text))
       .toEqual([...IMPROVED]);

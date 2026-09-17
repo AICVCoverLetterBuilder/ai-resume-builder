@@ -137,9 +137,10 @@ function evaluatorJson(
       language_quality: {
         status: languageStatus,
         violations: languageStatus === 'passed' ? [] : [{
-          code: options.languageCode ?? 'language_quality_failed',
+          code: options.languageCode ?? 'grammar_error',
           category: 'language_quality',
           detail: 'The evaluator found a language-quality violation.',
+          classification: 'hard_defect',
           entryIds: [manifest.entryId],
         }],
       },
@@ -648,7 +649,7 @@ describe('M2 C and D. bounded transports and fail-closed validation', () => {
       serverOptions: {
         bullets: [`Unterlagen ${malformed[0]}.`, `Abweichungen ${malformed[1]}.`, 'Stimmt Arbeitsschritte im Team ab.'],
         languageStatus: 'failed',
-        languageCode: 'malformed_german_surface',
+        languageCode: 'malformed_surface',
       },
     });
     expect(run.result.kind).toBe('handled_failure');

@@ -160,7 +160,7 @@ function m6RejectedEvaluation(
     noLeakage: true,
     reasonCodes: [gate === 'semantic'
       ? 'synthetic_semantic_rejection'
-      : 'synthetic_language_quality_rejection'],
+      : 'malformed_surface'],
   };
 }
 
@@ -230,9 +230,10 @@ function m2EvaluatorResponse(
     ? {
       status: 'failed' as const,
       violations: [{
-        code: category === 'semantic' ? 'synthetic_semantic_rejection' : 'synthetic_language_quality_rejection',
+        code: category === 'semantic' ? 'synthetic_semantic_rejection' : 'malformed_surface',
         category,
         detail: 'Synthetic test-only independent evaluator rejection.',
+        ...(category === 'language_quality' ? { classification: 'hard_defect' as const } : {}),
         entryIds: [manifest.entryId],
       }],
     }

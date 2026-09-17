@@ -90,7 +90,7 @@ describe('German AAB529 user-supplied device-output fixture', () => {
           category: 'language_quality',
           status: 'failed',
           violations: [{
-            code: 'test_only_aab529_malformed_surface',
+            code: 'malformed_surface',
             category: 'language_quality',
             detail: 'Test-only fixture double detected the documented malformed markers',
           }],
@@ -100,7 +100,7 @@ describe('German AAB529 user-supplied device-output fixture', () => {
 
     expect(result.decision).toBe('reject');
     expect(result.violations).toContainEqual(expect.objectContaining({
-      code: 'test_only_aab529_malformed_surface',
+      code: 'malformed_surface',
       category: 'language_quality',
     }));
     expect(candidate.text).toBe(originalCandidate);

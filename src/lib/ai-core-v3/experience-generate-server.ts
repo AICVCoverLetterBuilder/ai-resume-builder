@@ -37,6 +37,47 @@ export interface ExperienceV3GenerateTransportSet {
 
 type EvaluatedCategory = Extract<ViolationCategory, 'semantic' | 'language_quality'>;
 
+export const EXPERIENCE_V3_LANGUAGE_QUALITY_HARD_DEFECT_CODES = [
+  'wrong_target_language',
+  'wrong_target_script',
+  'grammar_error',
+  'malformed_surface',
+  'wrong_cv_perspective',
+  'current_role_past_tense',
+  'completed_role_present_tense',
+  'wrong_employment_tense',
+  'employment_state_tense_mismatch',
+  'mixed_tense',
+  'inconsistent_tense',
+  'incomplete_sentence',
+  'fragment',
+  'incoherent_language',
+  'invalid_language',
+] as const;
+
+export const EXPERIENCE_V3_LANGUAGE_QUALITY_STYLE_PREFERENCE_CODES = [
+  'style_convention_preference',
+  'valid_alternative_cv_style',
+] as const;
+
+const LANGUAGE_QUALITY_HARD_DEFECT_CODE_SET = new Set<string>(EXPERIENCE_V3_LANGUAGE_QUALITY_HARD_DEFECT_CODES);
+const LANGUAGE_QUALITY_STYLE_PREFERENCE_CODE_SET = new Set<string>(EXPERIENCE_V3_LANGUAGE_QUALITY_STYLE_PREFERENCE_CODES);
+
+type LanguageQualityViolationClassification = 'hard_defect' | 'style_preference';
+
+function classifyLanguageQualityViolation(
+  code: string,
+  classification: unknown,
+): LanguageQualityViolationClassification | null {
+  if (LANGUAGE_QUALITY_STYLE_PREFERENCE_CODE_SET.has(code)) {
+    return classification === 'style_preference' ? 'style_preference' : null;
+  }
+  if (LANGUAGE_QUALITY_HARD_DEFECT_CODE_SET.has(code)) {
+    return classification === 'hard_defect' ? 'hard_defect' : null;
+  }
+  return null;
+}
+
 export const EXPERIENCE_V3_EVALUATOR_TOOL_NAME = 'submit_experience_validation' as const;
 
 export const EXPERIENCE_V3_EVALUATOR_TOOL: Anthropic.Tool = {
@@ -86,13 +127,26 @@ function evaluatorPhaseSchema(category: EvaluatedCategory) {
         items: {
           type: 'object',
           additionalProperties: false,
-          required: ['code', 'category', 'detail'],
+          required: category === 'language_quality'
+            ? ['code', 'category', 'detail', 'classification']
+            : ['code', 'category', 'detail'],
           properties: {
-            code: { type: 'string' },
+            code: category === 'language_quality'
+              ? {
+                type: 'string',
+                enum: [
+                  ...EXPERIENCE_V3_LANGUAGE_QUALITY_HARD_DEFECT_CODES,
+                  ...EXPERIENCE_V3_LANGUAGE_QUALITY_STYLE_PREFERENCE_CODES,
+                ],
+              }
+              : { type: 'string' },
             category: { type: 'string', const: category },
             detail: { type: 'string' },
             factIds: { type: 'array', items: { type: 'string' } },
             entryIds: { type: 'array', items: { type: 'string' } },
+            ...(category === 'language_quality'
+              ? { classification: { type: 'string', enum: ['hard_defect', 'style_preference'] } }
+              : {}),
           },
         },
       },
@@ -382,8 +436,16 @@ export function validateExperienceV3CandidateStructure(
   return mergeStructural(base, violations);
 }
 
-function parseViolation(value: unknown, category: EvaluatedCategory): AiCoreV3Violation | null {
-  if (!isRecord(value) || !exactKeys(value, ['code', 'category', 'detail'], ['factIds', 'entryIds'])) return null;
+function parseViolation(
+  value: unknown,
+  category: EvaluatedCategory,
+  allowLanguageClassification = false,
+): AiCoreV3Violation | null {
+  if (!isRecord(value) || !exactKeys(
+    value,
+    ['code', 'category', 'detail'],
+    allowLanguageClassification ? ['factIds', 'entryIds', 'classification'] : ['factIds', 'entryIds'],
+  )) return null;
   if (
     value.category !== category
     || typeof value.code !== 'string'
@@ -402,14 +464,45 @@ function parseViolation(value: unknown, category: EvaluatedCategory): AiCoreV3Vi
   }) as AiCoreV3Violation;
 }
 
+function parseLanguageQualityViolation(value: unknown): AiCoreV3Violation | undefined | null {
+  if (!isRecord(value)) return null;
+  const violation = parseViolation(value, 'language_quality', true);
+  if (!violation) return null;
+  const classification = classifyLanguageQualityViolation(violation.code, value.classification);
+  if (classification === null) return null;
+  return classification === 'style_preference' ? undefined : violation;
+}
+
 function parseEvaluatorPhase(value: unknown, category: EvaluatedCategory): EvaluatorPhasePayload | null {
   if (!isRecord(value) || !exactKeys(value, ['status', 'violations'])) return null;
   if ((value.status !== 'passed' && value.status !== 'failed') || !Array.isArray(value.violations)) return null;
-  const violations = value.violations.map((item) => parseViolation(item, category));
+  if (category === 'language_quality') {
+    // Preserve the raw phase-shape invariant before style preferences are
+    // intentionally removed from the blocking violation set. A failed phase
+    // must contain evidence, while a passed phase must contain none.
+    if (value.status === 'passed' && value.violations.length !== 0) return null;
+    if (value.status === 'failed' && value.violations.length === 0) return null;
+  }
+  const violations = value.violations.map((item) => (
+    category === 'language_quality'
+      ? parseLanguageQualityViolation(item)
+      : parseViolation(item, category)
+  ));
   if (violations.some((item) => item === null)) return null;
-  if (value.status === 'passed' && violations.length !== 0) return null;
-  if (value.status === 'failed' && violations.length === 0) return null;
-  return immutableCopy({ status: value.status, violations }) as EvaluatorPhasePayload;
+  const blockingViolations = violations.filter((item): item is AiCoreV3Violation => item !== undefined && item !== null);
+  if (category === 'language_quality') {
+    // A style preference is evidence for prompt quality, not a reason to block
+    // an otherwise valid candidate. Only canonical hard-defect violations can
+    // enter the shared validation owner as a failed language-quality phase.
+    if (blockingViolations.length === 0) {
+      return immutableCopy({ status: 'passed' as const, violations: [] }) as EvaluatorPhasePayload;
+    }
+    if (value.status !== 'failed') return null;
+    return immutableCopy({ status: 'failed' as const, violations: blockingViolations }) as EvaluatorPhasePayload;
+  }
+  if (value.status === 'passed' && blockingViolations.length !== 0) return null;
+  if (value.status === 'failed' && blockingViolations.length === 0) return null;
+  return immutableCopy({ status: value.status, violations: blockingViolations }) as EvaluatorPhasePayload;
 }
 
 type EvaluatorToolRejectionReason =
@@ -685,10 +778,13 @@ export function buildExperienceV3EvaluatorPrompt(
   return [
     'Act only as an independent non-writing validator. Never rewrite, correct, or replace candidate prose.',
     'Check relevance, unsupported concrete claims, metrics, achievements, certifications, tools, leadership, cross-entry facts, role/company mutation, responsibility escalation, Summary leakage, target locale/script, grammar, CV form, and employment tense.',
+    'Report a language_quality violation only for an objective hard defect that should block application: wrong language or script, broken grammar, malformed or incomplete text, materially incoherent wording, or a real employment-state/tense contradiction.',
+    'Do not report a stylistic preference as a violation. Infinitive, nominal, and finite-present German CV forms are all valid when grammatical and internally consistent. For a present German role, consistent present-tense action verbs such as Führt, Analysiert, and Dokumentiert are valid and must not be rejected merely because another CV convention is also possible.',
+    `For language_quality violations, use classification hard_defect only with one canonical hard-defect code from: ${EXPERIENCE_V3_LANGUAGE_QUALITY_HARD_DEFECT_CODES.join(', ')}. Use classification style_preference only with one canonical style code: ${EXPERIENCE_V3_LANGUAGE_QUALITY_STYLE_PREFERENCE_CODES.join(' or ')}. Style-preference entries never fail the phase. Do not emit historical sample-specific codes.`,
     `Invoke only the ${EXPERIENCE_V3_EVALUATOR_TOOL_NAME} tool. Do not emit text, Markdown, code fences, commentary, explanations, headings, or reasoning.`,
     'Its input has exactly operationId, entryId, snapshotHash, locale, and phases. Echo operationId, entryId, snapshotHash, and locale exactly from the immutable manifest.',
     'phases has exactly semantic and language_quality. Each phase has exactly status (passed or failed) and violations.',
-    'Each violation contains only code, category, detail, and optional factIds/entryIds. A passed phase has an empty violations array; a failed phase has at least one violation.',
+    'Each semantic violation contains only code, category, detail, and optional factIds/entryIds. Each language_quality violation contains code, category, detail, required classification, and optional factIds/entryIds; classification is required for language_quality violations. A passed phase has an empty violations array; a failed phase has at least one hard_defect violation.',
     'Keep each violation detail concise and return no fields other than the required validation schema.',
     'Do not return replacement prose, corrected bullets, apply authorization, or usage authorization.',
     JSON.stringify({ manifest, candidate }),

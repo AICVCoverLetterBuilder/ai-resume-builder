@@ -659,8 +659,8 @@ describe('M3 page and route integration', () => {
       writerToolBlockCount: 1, writerExpectedToolCount: 1, writerToolNameMatched: true,
       writerToolInputObject: true, writerToolInputSchemaPassed: true, writerIdentityPassed: true,
       semanticViolationCount: 0, semanticViolationCodes: [], languageQualityViolationCount: 1,
-      languageQualityViolationCodes: ['malformed_german_surface'], violationFactIdHashesByCode: {},
-      violationEntryIdHashesByCode: {}, primaryValidationRejectionCode: 'malformed_german_surface',
+      languageQualityViolationCodes: ['malformed_surface'], violationFactIdHashesByCode: {},
+      violationEntryIdHashesByCode: {}, primaryValidationRejectionCode: 'malformed_surface',
       sourceHash: 'v3e-12345678', sourceUnitCount: 3, sourceUnitHashes: ['v3e-12345678'], sourceUnitLengths: [10, 11, 12],
       materialityStatus: 'unknown', materialityKind: null, degradationResult: null, persistenceResult: 'not_attempted',
     } as ExperienceV3TerminalDiagnostic;
@@ -674,7 +674,7 @@ describe('M3 page and route integration', () => {
         evaluatorToolBlockCount: 1, evaluatorExpectedToolCount: 1, evaluatorToolNameMatched: true,
         evaluatorToolInputObject: true, evaluatorToolInputSchemaPassed: true, evaluatorIdentityPassed: true,
         semanticViolations: [], languageQualityViolations: [{
-          code: 'malformed_german_surface', category: 'language_quality', detail: 'synthetic detail',
+          code: 'malformed_surface', category: 'language_quality', detail: 'synthetic detail',
           factIds: ['fact-1'], entryIds: ['exp-target'],
         }],
       },
