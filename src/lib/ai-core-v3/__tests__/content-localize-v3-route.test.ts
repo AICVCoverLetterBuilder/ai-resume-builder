@@ -203,7 +203,10 @@ describe('M6.4 actual /api/generate route boundary', () => {
 
   it('blocks a disabled feature before provider invocation', async () => {
     const run = await invokeActualRoute({ enabled: false });
-    expect(run.response.status).toBe(409); expect(run.body.typedReason).toBe('v3_feature_disabled'); expect(run.calls).toHaveLength(0);
+    expect(run.response.status).toBe(409);
+    expect(run.body).toMatchObject({ status: 'handled_failure', reason: 'v3_feature_disabled' });
+    expect(run.body).toHaveProperty('diagnostic');
+    expect(run.calls).toHaveLength(0);
   });
 
   it('blocks malformed JSON before provider invocation', async () => {

@@ -133,7 +133,10 @@ import {
   createContentLocalizeV3ProviderDependencies,
   type ContentLocalizeV3ProviderInvocation,
 } from '@/lib/ai-core-v3/content-localize-v3-provider';
-import { executeContentLocalizeM6Server } from '@/lib/ai-core-v3/content-localize-m6-server';
+import {
+  createContentLocalizeM6HandledFailure,
+  executeContentLocalizeM6Server,
+} from '@/lib/ai-core-v3/content-localize-m6-server';
 import type { ContentLocalizeM6Snapshot } from '@/lib/ai-core-v3/content-localize-m6';
 
 /**
@@ -2195,10 +2198,11 @@ Rules:
         AI_CORE_V3_ENABLED: process.env.AI_CORE_V3_ENABLED ?? process.env.NEXT_PUBLIC_AI_CORE_V3_ENABLED,
       });
       if (!v3Enabled) {
+        const gateFailure = createContentLocalizeM6HandledFailure('v3_feature_disabled');
         return jsonResponse({
-          ok: false,
-          action: CONTENT_LOCALIZE_V3_OPERATION,
-          typedReason: 'v3_feature_disabled',
+          status: gateFailure.status,
+          reason: gateFailure.reason,
+          diagnostic: gateFailure.diagnostic,
         }, { status: 409 });
       }
       const result = await executeContentLocalizeM6Server(

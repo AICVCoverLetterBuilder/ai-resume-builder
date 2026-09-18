@@ -15,6 +15,7 @@ export const AI_ERROR_CODES = [
   'network_error',
   'request_timeout',
   'invalid_pro_token',
+  'ai_feature_unavailable',
   'circuit_breaker_open',
   'generation_validation_failed',
   'experience_description_required',
@@ -180,6 +181,21 @@ const INVALID_PRO: MsgMap = {
   ru: 'Требуется обновить авторизацию Pro. Повторите попытку через минуту.',
   'pt-BR': 'A autorização Pro precisa ser atualizada. Tente novamente em instantes.',
   ja: 'Pro認証の更新が必要です。しばらくしてからもう一度お試しください。',
+};
+
+const AI_FEATURE_UNAVAILABLE: MsgMap = {
+  en: 'This AI feature is temporarily unavailable. Please try again later.',
+  hi: 'यह AI सुविधा अस्थायी रूप से उपलब्ध नहीं है। कृपया बाद में पुनः प्रयास करें।',
+  de: 'Diese KI-Funktion ist vorübergehend nicht verfügbar. Bitte versuchen Sie es später erneut.',
+  es: 'Esta función de IA no está disponible temporalmente. Inténtalo más tarde.',
+  fr: 'Cette fonctionnalité IA est temporairement indisponible. Réessayez plus tard.',
+  it: 'Questa funzione IA è temporaneamente non disponibile. Riprova più tardi.',
+  ar: 'هذه الميزة للذكاء الاصطناعي غير متاحة مؤقتًا. يُرجى المحاولة لاحقًا.',
+  sr: 'Ova AI funkcija je privremeno nedostupna. Pokušajte ponovo kasnije.',
+  hr: 'Ova AI značajka privremeno nije dostupna. Pokušajte ponovno kasnije.',
+  ru: 'Эта функция ИИ временно недоступна. Повторите попытку позже.',
+  'pt-BR': 'Este recurso de IA está temporariamente indisponível. Tente novamente mais tarde.',
+  ja: 'このAI機能は一時的に利用できません。後でもう一度お試しください。',
 };
 
 const CIRCUIT_OPEN: MsgMap = {
@@ -453,6 +469,8 @@ export function aiErrorMessage(
       return pick(TIMEOUT, locale);
     case 'invalid_pro_token':
       return pick(INVALID_PRO, locale);
+    case 'ai_feature_unavailable':
+      return pick(AI_FEATURE_UNAVAILABLE, locale);
     case 'circuit_breaker_open':
       return withSeconds(pick(CIRCUIT_OPEN, locale), retryAfterSec);
     case 'generation_validation_failed':

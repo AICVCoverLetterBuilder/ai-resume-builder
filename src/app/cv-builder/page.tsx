@@ -250,6 +250,7 @@ import {
   type ContentLocalizeM6TargetLocale,
 } from '@/lib/ai-core-v3/content-localize-m6';
 import {
+  contentLocalizeV3ClientErrorCode,
   runContentLocalizeV3ClientOperation,
   runContentLocalizeV3ExperienceClientOperation,
   type ContentLocalizeV3ExperienceCommitRequest,
@@ -3919,6 +3920,9 @@ export default function CVBuilderPage() {
         commitCandidate: commitSummaryV3Candidate,
         getUsageCount: () => getProAiUsageCount(),
       });
+      const terminalErrorCode = outcome.kind === 'terminal'
+        ? contentLocalizeV3ClientErrorCode(outcome.reason)
+        : null;
       finishAiClientRequest({
         ctx: reqCtx,
         isProVerified: true,
@@ -3927,11 +3931,11 @@ export default function CVBuilderPage() {
         httpStatus: outcome.status,
         error: outcome.kind === 'committed' || outcome.reason === 'operation_superseded'
           ? null
-          : { code: 'generation_validation_failed', httpStatus: outcome.status },
+          : { code: terminalErrorCode ?? 'generation_validation_failed', httpStatus: outcome.status },
         responseSource: outcome.kind === 'committed' ? 'provider' : 'blocked',
       });
       if (outcome.kind === 'committed') toast.success(t.cv.genSuccess);
-      else if (outcome.reason !== 'operation_superseded') toast.error(aiErrorMessage('generation_validation_failed', locale));
+      else if (outcome.reason !== 'operation_superseded') toast.error(aiErrorMessage(terminalErrorCode ?? 'generation_validation_failed', locale));
     } finally {
       clearTimeout(timer);
     }
@@ -4029,6 +4033,9 @@ export default function CVBuilderPage() {
         commitCandidate: commitExperienceTranslationCandidate,
         getUsageCount: () => getProAiUsageCount(),
       });
+      const terminalErrorCode = outcome.kind === 'terminal'
+        ? contentLocalizeV3ClientErrorCode(outcome.reason)
+        : null;
       finishAiClientRequest({
         ctx: reqCtx,
         isProVerified: true,
@@ -4037,11 +4044,11 @@ export default function CVBuilderPage() {
         httpStatus: outcome.status,
         error: outcome.kind === 'committed' || outcome.reason === 'operation_superseded'
           ? null
-          : { code: 'generation_validation_failed', httpStatus: outcome.status },
+          : { code: terminalErrorCode ?? 'generation_validation_failed', httpStatus: outcome.status },
         responseSource: outcome.kind === 'committed' ? 'provider' : 'blocked',
       });
       if (outcome.kind === 'committed') toast.success(t.cv.genSuccess);
-      else if (outcome.reason !== 'operation_superseded') toast.error(aiErrorMessage('generation_validation_failed', locale));
+      else if (outcome.reason !== 'operation_superseded') toast.error(aiErrorMessage(terminalErrorCode ?? 'generation_validation_failed', locale));
     } finally {
       clearTimeout(timer);
       experienceTranslateConfirmingRef.current = false;

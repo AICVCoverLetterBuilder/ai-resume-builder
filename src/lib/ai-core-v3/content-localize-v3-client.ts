@@ -1,5 +1,6 @@
 import { hashExperienceSourceLocaleText } from '@/lib/cv-experience-source-locale';
 import { hashSummarySourceLocaleText } from '@/lib/cv-summary-source-locale';
+import type { AiErrorCode } from '@/lib/ai-error-codes';
 import type { CVData } from '@/lib/types';
 import type { ContentLocalizeM6ExperienceSnapshot, ContentLocalizeM6SummarySnapshot } from './content-localize-m6';
 import { hashSummaryV3Value, type SummaryV3CommitReceipt, type SummaryV3CommitRequest } from './summary-generate';
@@ -32,6 +33,18 @@ export interface ContentLocalizeV3ClientDependencies {
 export type ContentLocalizeV3ClientOutcome =
   | Readonly<{ kind: 'committed'; status: 200; receipt: Extract<SummaryV3CommitReceipt, { kind: 'committed' }> }>
   | Readonly<{ kind: 'terminal'; status: number; reason: string }>;
+
+/** Map only known content-localize terminal reasons to user-facing categories. */
+export function contentLocalizeV3ClientErrorCode(reason: string): AiErrorCode {
+  switch (reason) {
+    case 'v3_feature_disabled':
+      return 'ai_feature_unavailable';
+    case 'deadline_exceeded':
+      return 'request_timeout';
+    default:
+      return 'generation_validation_failed';
+  }
+}
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -156,7 +169,9 @@ export async function runContentLocalizeV3ClientOperation(
     && Object.keys(result).every((key) => ['status', 'reason', 'diagnostic'].includes(key))
     && Object.prototype.hasOwnProperty.call(result, 'status')
     && Object.prototype.hasOwnProperty.call(result, 'reason')
-    && nonBlank(result.reason)) {
+    && nonBlank(result.reason)
+    && (result.reason !== 'v3_feature_disabled'
+      || (Object.prototype.hasOwnProperty.call(result, 'diagnostic') && record(result.diagnostic) !== null))) {
     const reason = String(result.reason);
     const decision = reason === 'deadline_exceeded' ? 'deadline_exceeded' : reason === 'candidate_rejected' ? 'rejected' : 'transport_failure';
     recordSummaryDiagnostic(input, dependencies, transport.status || 502, decision, reason, result.diagnostic as ContentLocalizeV3ServerDiagnostic, { authorized: false, attempted: false, committed: false, persistenceResult: 'not_attempted', race: 'not_evaluated' });
@@ -436,7 +451,9 @@ export async function runContentLocalizeV3ExperienceClientOperation(
     && Object.keys(result).every((key) => ['status', 'reason', 'diagnostic'].includes(key))
     && Object.prototype.hasOwnProperty.call(result, 'status')
     && Object.prototype.hasOwnProperty.call(result, 'reason')
-    && experienceNonBlank(result.reason)) {
+    && experienceNonBlank(result.reason)
+    && (result.reason !== 'v3_feature_disabled'
+      || (Object.prototype.hasOwnProperty.call(result, 'diagnostic') && experienceRecord(result.diagnostic) !== null))) {
     const reason = String(result.reason);
     const decision = reason === 'deadline_exceeded' ? 'deadline_exceeded' : reason === 'candidate_rejected' ? 'rejected' : 'transport_failure';
     recordExperienceDiagnostic(input, dependencies, transport.status || 502, decision, reason, result.diagnostic as ContentLocalizeV3ServerDiagnostic, { authorized: false, attempted: false, committed: false, persistenceResult: 'not_attempted', race: 'not_evaluated' });

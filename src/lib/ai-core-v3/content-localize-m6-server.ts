@@ -21,6 +21,7 @@ import {
 import { readContentLocalizeV3ProviderObservation } from './content-localize-v3-provider';
 
 export type ContentLocalizeM6ServerFailureReason =
+  | 'v3_feature_disabled'
   | 'invalid_authorization_snapshot'
   | 'writer_failed'
   | 'writer_identity_mismatch'
@@ -394,6 +395,18 @@ function handledFailure(
   const result = { status: 'handled_failure' as const, reason } as { status: 'handled_failure'; reason: ContentLocalizeM6ServerFailureReason };
   Object.defineProperty(result, 'diagnostic', { value: diagnostic, enumerable: false, configurable: false });
   return Object.freeze(result) as ContentLocalizeM6ServerResult;
+}
+
+/**
+ * Canonical handled-failure envelope for route-owned failures that occur
+ * before the provider pipeline starts. The route serializes this same typed
+ * result shape that the client already accepts for executor failures.
+ */
+export function createContentLocalizeM6HandledFailure(
+  reason: ContentLocalizeM6ServerFailureReason,
+  diagnostic: ContentLocalizeV3ServerDiagnostic = createEmptyContentLocalizeV3ServerDiagnostic(),
+): Extract<ContentLocalizeM6ServerResult, { status: 'handled_failure' }> {
+  return handledFailure(reason, diagnostic) as Extract<ContentLocalizeM6ServerResult, { status: 'handled_failure' }>;
 }
 
 function candidateReady(
