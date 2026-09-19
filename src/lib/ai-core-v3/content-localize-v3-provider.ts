@@ -1,5 +1,6 @@
 import {
-  CONTENT_LOCALIZE_V3_PROVIDER_CALL_TIMEOUT_MS,
+  contentLocalizeV3ProviderTimeoutMs,
+  type ContentLocalizeV3ProviderPhase as ContentLocalizeV3ProviderPhaseContract,
   type ProviderCallOptions,
 } from '@/lib/ai-request-timing';
 import type {
@@ -12,7 +13,7 @@ import type { ContentLocalizeV3DiagnosticPhase } from './content-localize-v3-ter
 
 export const CONTENT_LOCALIZE_V3_OPERATION = 'content-localize-v3' as const;
 
-export type ContentLocalizeV3ProviderPhase = 'writer' | 'evaluator' | 'repair';
+export type ContentLocalizeV3ProviderPhase = ContentLocalizeV3ProviderPhaseContract;
 export type ContentLocalizeV3ProviderRequest =
   | ContentLocalizeM6WriterRequest
   | ContentLocalizeM6EvaluatorRequest
@@ -139,15 +140,19 @@ const EVALUATOR_SYSTEM = `Invoke only the ${EVALUATOR_TOOL_NAME} tool. Independe
 const REPAIR_SYSTEM = `Invoke only the ${REPAIR_TOOL_NAME} tool. Repair only the supplied primary candidate using the supplied reason codes and failed criteria. Preserve the exact source identity.`;
 
 function toolForPhase(phase: ContentLocalizeV3ProviderPhase): ContentLocalizeV3ForcedTool {
-  return phase === 'evaluator' ? EVALUATOR_TOOL : phase === 'repair' ? REPAIR_TOOL : WRITER_TOOL;
+  return phase === 'evaluator' || phase === 'repair_evaluator'
+    ? EVALUATOR_TOOL
+    : phase === 'repair_writer' ? REPAIR_TOOL : WRITER_TOOL;
 }
 
 function roleForPhase(phase: ContentLocalizeV3ProviderPhase): 'writer' | 'evaluator' {
-  return phase === 'evaluator' ? 'evaluator' : 'writer';
+  return phase === 'evaluator' || phase === 'repair_evaluator' ? 'evaluator' : 'writer';
 }
 
 function systemForPhase(phase: ContentLocalizeV3ProviderPhase): string {
-  return phase === 'evaluator' ? EVALUATOR_SYSTEM : phase === 'repair' ? REPAIR_SYSTEM : WRITER_SYSTEM;
+  return phase === 'evaluator' || phase === 'repair_evaluator'
+    ? EVALUATOR_SYSTEM
+    : phase === 'repair_writer' ? REPAIR_SYSTEM : WRITER_SYSTEM;
 }
 
 function extractToolInput(value: unknown, expectedToolName: string): unknown {
@@ -195,7 +200,7 @@ function invocationFor(
     prompt: `M6 logical operation ${CONTENT_LOCALIZE_V3_OPERATION}. Follow the forced structured tool contract exactly.\n\nREQUEST_JSON:\n${JSON.stringify(request)}`,
     system: systemForPhase(phase),
     tool,
-    timeoutMs: CONTENT_LOCALIZE_V3_PROVIDER_CALL_TIMEOUT_MS,
+    timeoutMs: contentLocalizeV3ProviderTimeoutMs(phase),
     toolChoice: { type: 'tool', name: tool.name, disable_parallel_tool_use: true },
   };
 }
@@ -210,8 +215,10 @@ export function createContentLocalizeV3ProviderDependencies(
   };
   return {
     writer: invoke('writer') as ContentLocalizeM6ServerDependencies['writer'],
-    evaluator: invoke('evaluator') as ContentLocalizeM6ServerDependencies['evaluator'],
-    repair: invoke('repair') as ContentLocalizeM6ServerDependencies['repair'],
+    evaluator: async (request) => invoke(
+      request.candidateOrigin === 'repair' ? 'repair_evaluator' : 'evaluator',
+    )(request),
+    repair: invoke('repair_writer') as ContentLocalizeM6ServerDependencies['repair'],
   };
 }
 

@@ -12,7 +12,12 @@ import {
 } from '../content-localize-v3-provider';
 import type { ContentLocalizeM6EvaluatorRequest, ContentLocalizeM6WriterRequest } from '../content-localize-m6-server';
 import { executeContentLocalizeM6Server } from '../content-localize-m6-server';
-import { CONTENT_LOCALIZE_V3_PROVIDER_CALL_TIMEOUT_MS } from '../../ai-request-timing';
+import {
+  CONTENT_LOCALIZE_V3_EVALUATOR_TIMEOUT_MS,
+  CONTENT_LOCALIZE_V3_REPAIR_EVALUATOR_TIMEOUT_MS,
+  CONTENT_LOCALIZE_V3_REPAIR_WRITER_TIMEOUT_MS,
+  CONTENT_LOCALIZE_V3_WRITER_TIMEOUT_MS,
+} from '../../ai-request-timing';
 
 const summaryText = 'Mila builds reliable APIs at Atlas and improved delivery by 20%.';
 const experienceText = 'Led a team of 12 engineers and reduced release time by 30%.';
@@ -84,22 +89,26 @@ async function invokeActualRoute(options: {
     const create = vi.fn(async (params: { tools?: Array<{ name?: string; strict?: boolean }>; tool_choice?: { type?: string; name?: string; disable_parallel_tool_use?: boolean }; messages?: Array<{ content?: unknown }> }, requestOptions?: { maxRetries?: number; timeout?: number }) => {
       const tool = params.tools?.[0]?.name ?? 'unknown';
       const request = requestFromPrompt(params.messages?.[0]?.content);
-      const phase = tool === CONTENT_LOCALIZE_V3_PROVIDER_TOOL_NAMES.writer
+      const phase: ContentLocalizeV3ProviderPhase = tool === CONTENT_LOCALIZE_V3_PROVIDER_TOOL_NAMES.writer
         ? 'writer'
-        : tool === CONTENT_LOCALIZE_V3_PROVIDER_TOOL_NAMES.repair ? 'repair' : 'evaluator';
-      calls.push({ tool, strict: params.tools?.[0]?.strict, choice: params.tool_choice, invocation: { phase, role: phase === 'evaluator' ? 'evaluator' : 'writer', request: request as ContentLocalizeV3ProviderRequest, prompt: String(params.messages?.[0]?.content), system: '', tool: { name: tool, description: '', strict: true, input_schema: {} }, timeoutMs: requestOptions?.timeout ?? 0, toolChoice: { type: 'tool', name: tool, disable_parallel_tool_use: true } } });
+        : tool === CONTENT_LOCALIZE_V3_PROVIDER_TOOL_NAMES.repair
+          ? 'repair_writer'
+          : (request as { candidateOrigin?: string }).candidateOrigin === 'repair'
+            ? 'repair_evaluator'
+            : 'evaluator';
+      calls.push({ tool, strict: params.tools?.[0]?.strict, choice: params.tool_choice, invocation: { phase, role: phase === 'evaluator' || phase === 'repair_evaluator' ? 'evaluator' : 'writer', request: request as ContentLocalizeV3ProviderRequest, prompt: String(params.messages?.[0]?.content), system: '', tool: { name: tool, description: '', strict: true, input_schema: {} }, timeoutMs: requestOptions?.timeout ?? 0, toolChoice: { type: 'tool', name: tool, disable_parallel_tool_use: true } } });
       expect(requestOptions?.maxRetries).toBe(0);
       if (mode === 'abort') throw Object.assign(new Error('aborted'), { name: 'AbortError' });
       if (mode === 'provider-error') throw new Error('provider HTTP 503');
       if (mode === 'malformed-writer' && phase === 'writer') return { stop_reason: 'tool_use', content: [{ type: 'text', text: 'malformed' }] };
-      if (mode === 'malformed-repair' && phase === 'repair') return { stop_reason: 'tool_use', content: [{ type: 'text', text: 'malformed repair' }] };
-      if (phase === 'writer' || phase === 'repair') {
+      if (mode === 'malformed-repair' && phase === 'repair_writer') return { stop_reason: 'tool_use', content: [{ type: 'text', text: 'malformed repair' }] };
+      if (phase === 'writer' || phase === 'repair_writer') {
         const writer = request as ContentLocalizeM6WriterRequest;
-        return toolResponse(tool, writerOutput(writer, phase === 'repair' ? 'Mila a construit des API fiables chez Atlas et a amélioré la livraison de 20 %.' : 'Mila construit des API fiables chez Atlas et a amélioré la livraison de 20 %.'));
+        return toolResponse(tool, writerOutput(writer, phase === 'repair_writer' ? 'Mila a construit des API fiables chez Atlas et a amélioré la livraison de 20 %.' : 'Mila construit des API fiables chez Atlas et a amélioré la livraison de 20 %.'));
       }
       const evaluator = request as ContentLocalizeM6EvaluatorRequest;
       if (mode === 'identity-drift') return toolResponse(tool, { ...evaluatorOutput(evaluator, true), candidateTextHash: 'foreign-hash' });
-      const evaluatorCount = calls.filter((call) => call.invocation.phase === 'evaluator').length;
+      const evaluatorCount = calls.filter((call) => call.invocation.role === 'evaluator').length;
       const rejected = mode === 'reject-primary'
         ? evaluatorCount === 1
         : mode === 'malformed-repair'
@@ -130,7 +139,7 @@ describe('M6.4 provider adapter contract', () => {
     const dependencies = createContentLocalizeV3ProviderDependencies({
       invoke: async (invocation) => {
         calls.push(invocation.phase);
-        if (invocation.phase === 'writer' || invocation.phase === 'repair') {
+        if (invocation.phase === 'writer' || invocation.phase === 'repair_writer') {
           return toolResponse(invocation.tool.name, writerOutput(invocation.request as ContentLocalizeM6WriterRequest, 'Texte traduit fidèle.'));
         }
         const request = invocation.request as ContentLocalizeM6EvaluatorRequest;
@@ -153,8 +162,8 @@ describe('M6.4 actual /api/generate route boundary', () => {
     expect(run.calls.every((call) => (call.choice as { name?: string }).name === call.tool)).toBe(true);
     expect(run.calls.every((call) => (call.choice as { disable_parallel_tool_use?: boolean }).disable_parallel_tool_use === true)).toBe(true);
     expect(run.calls.map((call) => call.invocation.timeoutMs)).toEqual([
-      CONTENT_LOCALIZE_V3_PROVIDER_CALL_TIMEOUT_MS,
-      CONTENT_LOCALIZE_V3_PROVIDER_CALL_TIMEOUT_MS,
+      CONTENT_LOCALIZE_V3_WRITER_TIMEOUT_MS,
+      CONTENT_LOCALIZE_V3_EVALUATOR_TIMEOUT_MS,
     ]);
   });
 
@@ -177,7 +186,7 @@ describe('M6.4 actual /api/generate route boundary', () => {
   it('executes exactly one repair and second evaluator after primary rejection', async () => {
     const run = await invokeActualRoute({ mode: 'reject-primary' });
     expect(run.response.status).toBe(200); expect(run.calls).toHaveLength(4);
-    expect(run.calls.map((call) => call.invocation.phase)).toEqual(['writer', 'evaluator', 'repair', 'evaluator']);
+    expect(run.calls.map((call) => call.invocation.phase)).toEqual(['writer', 'evaluator', 'repair_writer', 'repair_evaluator']);
     expect(run.calls.map((call) => call.tool)).toEqual([
       CONTENT_LOCALIZE_V3_PROVIDER_TOOL_NAMES.writer,
       CONTENT_LOCALIZE_V3_PROVIDER_TOOL_NAMES.evaluator,
@@ -185,10 +194,10 @@ describe('M6.4 actual /api/generate route boundary', () => {
       CONTENT_LOCALIZE_V3_PROVIDER_TOOL_NAMES.evaluator,
     ]);
     expect(run.calls.map((call) => call.invocation.timeoutMs)).toEqual([
-      CONTENT_LOCALIZE_V3_PROVIDER_CALL_TIMEOUT_MS,
-      CONTENT_LOCALIZE_V3_PROVIDER_CALL_TIMEOUT_MS,
-      CONTENT_LOCALIZE_V3_PROVIDER_CALL_TIMEOUT_MS,
-      CONTENT_LOCALIZE_V3_PROVIDER_CALL_TIMEOUT_MS,
+      CONTENT_LOCALIZE_V3_WRITER_TIMEOUT_MS,
+      CONTENT_LOCALIZE_V3_EVALUATOR_TIMEOUT_MS,
+      CONTENT_LOCALIZE_V3_REPAIR_WRITER_TIMEOUT_MS,
+      CONTENT_LOCALIZE_V3_REPAIR_EVALUATOR_TIMEOUT_MS,
     ]);
     expect(run.calls.every((call) => call.strict === true)).toBe(true);
     expect(run.calls.every((call) => (call.choice as { type?: string }).type === 'tool')).toBe(true);
@@ -240,7 +249,7 @@ describe('M6.4 actual /api/generate route boundary', () => {
     expect(drift.response.status).toBe(502); expect(drift.body.reason).toBe('evaluator_identity_mismatch');
     const malformedRepair = await invokeActualRoute({ mode: 'malformed-repair' });
     expect(malformedRepair.response.status).toBe(502); expect(malformedRepair.body.reason).toBe('repair_failed');
-    expect(malformedRepair.calls.map((call) => call.invocation.phase)).toEqual(['writer', 'evaluator', 'repair']);
+    expect(malformedRepair.calls.map((call) => call.invocation.phase)).toEqual(['writer', 'evaluator', 'repair_writer']);
   });
 
   it('keeps accepted=false as a separate rejection gate', async () => {
@@ -251,7 +260,7 @@ describe('M6.4 actual /api/generate route boundary', () => {
   it('proves accepted=true plus a false mandatory criterion cannot false-green', async () => {
     const run = await invokeActualRoute({ mode: 'accepted-true-false-criterion' });
     expect(run.response.status).toBe(422); expect(run.body.reason).toBe('candidate_rejected');
-    expect(run.calls.map((call) => call.invocation.phase)).toEqual(['writer', 'evaluator', 'repair', 'evaluator']);
+    expect(run.calls.map((call) => call.invocation.phase)).toEqual(['writer', 'evaluator', 'repair_writer', 'repair_evaluator']);
     expect(run.calls).toHaveLength(4);
   });
 

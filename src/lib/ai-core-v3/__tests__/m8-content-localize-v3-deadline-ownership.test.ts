@@ -2,14 +2,22 @@ import { describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import {
   AI_PROVIDER_CALL_TIMEOUT_MS,
-  AI_RESPONSE_GUARD_MS,
-  CONTENT_LOCALIZE_V3_PROVIDER_CALL_TIMEOUT_MS,
+  CONTENT_LOCALIZE_V3_EVALUATOR_TIMEOUT_MS,
   CONTENT_LOCALIZE_V3_CLIENT_TIMEOUT_MS,
+  CONTENT_LOCALIZE_V3_CLIENT_HEADROOM_AFTER_ROUTE_MS,
+  CONTENT_LOCALIZE_V3_FOUR_PHASE_TOTAL_MS,
+  CONTENT_LOCALIZE_V3_REPAIR_EVALUATOR_TIMEOUT_MS,
+  CONTENT_LOCALIZE_V3_REPAIR_WRITER_TIMEOUT_MS,
+  CONTENT_LOCALIZE_V3_RESERVED_WITH_RESPONSE_GUARD_MS,
+  CONTENT_LOCALIZE_V3_ROUTE_HEADROOM_AFTER_GUARD_MS,
   CONTENT_LOCALIZE_V3_ROUTE_BUDGET_MS,
+  CONTENT_LOCALIZE_V3_PLATFORM_HEADROOM_AFTER_CLIENT_MS,
+  CONTENT_LOCALIZE_V3_WRITER_TIMEOUT_MS,
   callProviderWithDeadline,
   readLocalDeadlineProvenance,
 } from '../../ai-request-timing';
 import { hashSummarySourceLocaleText } from '../../cv-summary-source-locale';
+import { SUMMARY_V3_STYLE_M5_ROUTE_MAX_DURATION_S } from '../summary-style-m5-timeout-policy';
 import type { ContentLocalizeM6Snapshot } from '../content-localize-m6';
 import { executeContentLocalizeM6Server } from '../content-localize-m6-server';
 import {
@@ -32,25 +40,25 @@ function snapshot(): ContentLocalizeM6Snapshot {
 
 describe('content-localize-v3 deadline ownership', () => {
   it.each([
-    ['T1 writer', 'provider'],
-    ['T2 primary evaluator', 'verifier'],
-    ['T3 repair writer', 'provider'],
-    ['T4 repair evaluator', 'verifier'],
-  ] as const)('%s timer receives the dedicated 15000ms slice', async (_phase, timeoutStage) => {
+    ['T1 writer', 'provider', CONTENT_LOCALIZE_V3_WRITER_TIMEOUT_MS],
+    ['T2 primary evaluator', 'verifier', CONTENT_LOCALIZE_V3_EVALUATOR_TIMEOUT_MS],
+    ['T3 repair writer', 'provider', CONTENT_LOCALIZE_V3_REPAIR_WRITER_TIMEOUT_MS],
+    ['T4 repair evaluator', 'verifier', CONTENT_LOCALIZE_V3_REPAIR_EVALUATOR_TIMEOUT_MS],
+  ] as const)('%s timer receives its dedicated phase slice', async (_phase, timeoutStage, timeoutMs) => {
     vi.useFakeTimers();
     try {
       const pending = callProviderWithDeadline(
         () => new Promise<never>(() => undefined),
         null,
-        CONTENT_LOCALIZE_V3_PROVIDER_CALL_TIMEOUT_MS,
+        timeoutMs,
         timeoutStage,
       );
       const rejection = pending.catch((error) => error);
-      await vi.advanceTimersByTimeAsync(CONTENT_LOCALIZE_V3_PROVIDER_CALL_TIMEOUT_MS);
+      await vi.advanceTimersByTimeAsync(timeoutMs);
       await expect(rejection).resolves.toMatchObject({
         name: 'AbortError',
         deadlineOwner: timeoutStage === 'verifier' ? 'verifier_transport' : 'provider_transport',
-        configuredTimeoutMs: 15_000,
+        configuredTimeoutMs: timeoutMs,
       });
     } finally {
       vi.useRealTimers();
@@ -64,19 +72,62 @@ describe('content-localize-v3 deadline ownership', () => {
         writer: () => callProviderWithDeadline(
           () => new Promise<never>(() => undefined),
           null,
-          CONTENT_LOCALIZE_V3_PROVIDER_CALL_TIMEOUT_MS,
+          CONTENT_LOCALIZE_V3_WRITER_TIMEOUT_MS,
         ),
         evaluator: async () => ({}),
         repair: async () => ({}),
       });
-      await vi.advanceTimersByTimeAsync(CONTENT_LOCALIZE_V3_PROVIDER_CALL_TIMEOUT_MS);
+      await vi.advanceTimersByTimeAsync(CONTENT_LOCALIZE_V3_WRITER_TIMEOUT_MS);
       const result = await resultPromise;
       expect(result).toMatchObject({ status: 'handled_failure', reason: 'deadline_exceeded' });
       expect((result as { diagnostic: Record<string, unknown> }).diagnostic).toMatchObject({
         deadlineExceeded: true,
         deadlineOwner: 'provider_call',
         deadlinePhase: 'writer',
-        providerCallTimeoutMs: CONTENT_LOCALIZE_V3_PROVIDER_CALL_TIMEOUT_MS,
+        providerCallTimeoutMs: CONTENT_LOCALIZE_V3_WRITER_TIMEOUT_MS,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('T5: the content-localize evaluator timer reaches the server as provider_call', async () => {
+    vi.useFakeTimers();
+    try {
+      const resultPromise = executeContentLocalizeM6Server(snapshot(), {
+        writer: async () => ({
+          operationId: 'deadline-operation', requestId: 'deadline-request', kind: 'summary',
+          sourceLocale: 'de', targetLocale: 'fr', sourceTextHash: snapshot().sourceTextHash,
+          translatedText: 'Un résumé solide.',
+        }),
+        evaluator: () => callProviderWithDeadline(
+          () => new Promise<never>(() => undefined),
+          null,
+          CONTENT_LOCALIZE_V3_EVALUATOR_TIMEOUT_MS,
+          'verifier',
+        ),
+        repair: async () => ({}),
+      });
+      await vi.advanceTimersByTimeAsync(CONTENT_LOCALIZE_V3_EVALUATOR_TIMEOUT_MS);
+      const result = await resultPromise;
+      expect(result).toMatchObject({ status: 'handled_failure', reason: 'deadline_exceeded' });
+      expect((result as { diagnostic: Record<string, unknown> }).diagnostic).toMatchObject({
+        deadlineExceeded: true,
+        deadlineOwner: 'provider_call',
+        deadlinePhase: 'evaluator',
+        providerCallTimeoutMs: CONTENT_LOCALIZE_V3_EVALUATOR_TIMEOUT_MS,
+        candidatePresent: true,
+      });
+      const terminal = buildContentLocalizeV3TerminalDiagnostic({
+        snapshot: snapshot(), operation: 'summary_translate', routeHttpStatus: 504,
+        serverDiagnostic: (result as { diagnostic: Parameters<typeof buildContentLocalizeV3TerminalDiagnostic>[0]['serverDiagnostic'] }).diagnostic,
+        finalDecision: 'deadline_exceeded', applyAuthorized: false, applyAttempted: false,
+        applyCommitted: false, persistenceAttempted: false, persistenceResult: 'not_attempted',
+        raceGuardResult: 'not_evaluated', usageBefore: 11, usageAfter: 11,
+      });
+      expect(terminal).toMatchObject({
+        candidatePresent: true, applyAuthorized: false, persistenceAttempted: false,
+        usageDelta: 0, fallbackUsed: false,
       });
     } finally {
       vi.useRealTimers();
@@ -219,13 +270,21 @@ describe('content-localize-v3 deadline ownership', () => {
   });
 
   it('T6-T12: global timing stays unchanged and all four content phases fit', () => {
-    const fourPhases = CONTENT_LOCALIZE_V3_PROVIDER_CALL_TIMEOUT_MS * 4;
     expect(AI_PROVIDER_CALL_TIMEOUT_MS).toBe(8_000);
-    expect(CONTENT_LOCALIZE_V3_PROVIDER_CALL_TIMEOUT_MS).toBe(15_000);
-    expect(fourPhases + AI_RESPONSE_GUARD_MS).toBe(62_000);
-    expect(fourPhases + AI_RESPONSE_GUARD_MS).toBeLessThan(CONTENT_LOCALIZE_V3_ROUTE_BUDGET_MS);
+    expect(CONTENT_LOCALIZE_V3_WRITER_TIMEOUT_MS).toBe(15_000);
+    expect(CONTENT_LOCALIZE_V3_EVALUATOR_TIMEOUT_MS).toBe(20_000);
+    expect(CONTENT_LOCALIZE_V3_REPAIR_WRITER_TIMEOUT_MS).toBe(15_000);
+    expect(CONTENT_LOCALIZE_V3_REPAIR_EVALUATOR_TIMEOUT_MS).toBe(20_000);
+    expect(CONTENT_LOCALIZE_V3_FOUR_PHASE_TOTAL_MS).toBe(70_000);
+    expect(CONTENT_LOCALIZE_V3_RESERVED_WITH_RESPONSE_GUARD_MS).toBe(72_000);
+    expect(CONTENT_LOCALIZE_V3_RESERVED_WITH_RESPONSE_GUARD_MS).toBeLessThan(CONTENT_LOCALIZE_V3_ROUTE_BUDGET_MS);
+    expect(CONTENT_LOCALIZE_V3_ROUTE_HEADROOM_AFTER_GUARD_MS).toBe(6_000);
     expect(CONTENT_LOCALIZE_V3_ROUTE_BUDGET_MS).toBeLessThan(CONTENT_LOCALIZE_V3_CLIENT_TIMEOUT_MS);
-    expect(CONTENT_LOCALIZE_V3_CLIENT_TIMEOUT_MS).toBeLessThan(90_000);
+    expect(CONTENT_LOCALIZE_V3_CLIENT_HEADROOM_AFTER_ROUTE_MS).toBe(6_000);
+    expect(CONTENT_LOCALIZE_V3_CLIENT_TIMEOUT_MS).toBeLessThan(SUMMARY_V3_STYLE_M5_ROUTE_MAX_DURATION_S * 1_000);
+    expect(CONTENT_LOCALIZE_V3_PLATFORM_HEADROOM_AFTER_CLIENT_MS).toBe(
+      SUMMARY_V3_STYLE_M5_ROUTE_MAX_DURATION_S * 1_000 - CONTENT_LOCALIZE_V3_CLIENT_TIMEOUT_MS,
+    );
     const routeSource = readFileSync('src/app/api/generate/route.ts', 'utf8');
     const pageSource = readFileSync('src/app/cv-builder/page.tsx', 'utf8');
     expect(routeSource).toContain("action === 'content-localize-v3'");
@@ -240,10 +299,10 @@ describe('content-localize-v3 deadline ownership', () => {
       deadlineExceeded: true,
       deadlineOwner: 'provider_call' as const,
       deadlinePhase: 'writer' as const,
-      providerCallTimeoutMs: CONTENT_LOCALIZE_V3_PROVIDER_CALL_TIMEOUT_MS,
+      providerCallTimeoutMs: CONTENT_LOCALIZE_V3_WRITER_TIMEOUT_MS,
       routeBudgetMs: CONTENT_LOCALIZE_V3_ROUTE_BUDGET_MS,
-      providerElapsedMs: CONTENT_LOCALIZE_V3_PROVIDER_CALL_TIMEOUT_MS,
-      routeElapsedMs: CONTENT_LOCALIZE_V3_PROVIDER_CALL_TIMEOUT_MS + 100,
+      providerElapsedMs: CONTENT_LOCALIZE_V3_WRITER_TIMEOUT_MS,
+      routeElapsedMs: CONTENT_LOCALIZE_V3_WRITER_TIMEOUT_MS + 100,
     };
     const diagnostic = buildContentLocalizeV3TerminalDiagnostic({
       snapshot: snapshot(), operation: 'summary_translate', routeHttpStatus: 504,

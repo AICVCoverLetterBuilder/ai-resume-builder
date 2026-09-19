@@ -20,6 +20,8 @@
  *  - Deterministic local fallback returns before the platform can kill us.
  */
 
+import { SUMMARY_V3_STYLE_M5_ROUTE_MAX_DURATION_S } from './ai-core-v3/summary-style-m5-timeout-policy';
+
 /** Client-side AbortController deadline for existing AI operations. */
 export const AI_CLIENT_TIMEOUT_MS = 40_000;
 
@@ -71,21 +73,47 @@ export const AI_SERVER_BUDGET_MS = 22_000;
 export const AI_PROVIDER_CALL_TIMEOUT_MS = 8_000;
 
 /**
- * Content-localize-v3 owns its four-call recovery chain. Keep this provider
- * slice separate from the legacy/global timeout so unrelated AI operations
- * retain their shipped timing contract.
+ * Content-localize-v3 owns four independently bounded provider phases. Keep
+ * these slices separate from the legacy/global timeout so unrelated AI
+ * operations retain their shipped timing contract.
  */
-export const CONTENT_LOCALIZE_V3_PROVIDER_CALL_TIMEOUT_MS = 15_000;
+export const CONTENT_LOCALIZE_V3_WRITER_TIMEOUT_MS = 15_000;
+export const CONTENT_LOCALIZE_V3_EVALUATOR_TIMEOUT_MS = 20_000;
+export const CONTENT_LOCALIZE_V3_REPAIR_WRITER_TIMEOUT_MS = 15_000;
+export const CONTENT_LOCALIZE_V3_REPAIR_EVALUATOR_TIMEOUT_MS = 20_000;
+
+export type ContentLocalizeV3ProviderPhase =
+  | 'writer'
+  | 'evaluator'
+  | 'repair_writer'
+  | 'repair_evaluator';
+
+const CONTENT_LOCALIZE_V3_PROVIDER_TIMEOUTS: Readonly<Record<ContentLocalizeV3ProviderPhase, number>> = Object.freeze({
+  writer: CONTENT_LOCALIZE_V3_WRITER_TIMEOUT_MS,
+  evaluator: CONTENT_LOCALIZE_V3_EVALUATOR_TIMEOUT_MS,
+  repair_writer: CONTENT_LOCALIZE_V3_REPAIR_WRITER_TIMEOUT_MS,
+  repair_evaluator: CONTENT_LOCALIZE_V3_REPAIR_EVALUATOR_TIMEOUT_MS,
+});
+
+/** Single phase-to-timeout authority for content-localize-v3 provider calls. */
+export function contentLocalizeV3ProviderTimeoutMs(phase: ContentLocalizeV3ProviderPhase): number {
+  return CONTENT_LOCALIZE_V3_PROVIDER_TIMEOUTS[phase];
+}
 
 /**
  * Content-localize-v3 owns a four-phase recovery chain. Its route budget is
  * intentionally separate from the legacy 22-second envelope used by the
- * other AI operations: four 15-second provider slices plus response/validation
- * headroom must fit before the platform limit, while both clients share one
+ * other AI operations: four phase-specific provider slices plus the response
+ * guard must fit before the platform limit, while both clients share one
  * operation deadline.
  */
-export const CONTENT_LOCALIZE_V3_ROUTE_BUDGET_MS = 70_000;
-export const CONTENT_LOCALIZE_V3_CLIENT_TIMEOUT_MS = 80_000;
+export const CONTENT_LOCALIZE_V3_ROUTE_BUDGET_MS = 78_000;
+export const CONTENT_LOCALIZE_V3_CLIENT_TIMEOUT_MS = 84_000;
+export const CONTENT_LOCALIZE_V3_FOUR_PHASE_TOTAL_MS =
+  CONTENT_LOCALIZE_V3_WRITER_TIMEOUT_MS
+  + CONTENT_LOCALIZE_V3_EVALUATOR_TIMEOUT_MS
+  + CONTENT_LOCALIZE_V3_REPAIR_WRITER_TIMEOUT_MS
+  + CONTENT_LOCALIZE_V3_REPAIR_EVALUATOR_TIMEOUT_MS;
 
 export function computeContentLocalizeV3Deadline(requestStartedAt: number): number {
   return requestStartedAt + CONTENT_LOCALIZE_V3_ROUTE_BUDGET_MS;
@@ -151,6 +179,15 @@ export const AI_MIN_REPAIR_BUDGET_MS = AI_PROVIDER_CALL_TIMEOUT_MS + 2_000;
  * result is already available (or a structured timeout error).
  */
 export const AI_RESPONSE_GUARD_MS = 2_000;
+
+export const CONTENT_LOCALIZE_V3_RESERVED_WITH_RESPONSE_GUARD_MS =
+  CONTENT_LOCALIZE_V3_FOUR_PHASE_TOTAL_MS + AI_RESPONSE_GUARD_MS;
+export const CONTENT_LOCALIZE_V3_ROUTE_HEADROOM_AFTER_GUARD_MS =
+  CONTENT_LOCALIZE_V3_ROUTE_BUDGET_MS - CONTENT_LOCALIZE_V3_RESERVED_WITH_RESPONSE_GUARD_MS;
+export const CONTENT_LOCALIZE_V3_CLIENT_HEADROOM_AFTER_ROUTE_MS =
+  CONTENT_LOCALIZE_V3_CLIENT_TIMEOUT_MS - CONTENT_LOCALIZE_V3_ROUTE_BUDGET_MS;
+export const CONTENT_LOCALIZE_V3_PLATFORM_HEADROOM_AFTER_CLIENT_MS =
+  SUMMARY_V3_STYLE_M5_ROUTE_MAX_DURATION_S * 1000 - CONTENT_LOCALIZE_V3_CLIENT_TIMEOUT_MS;
 
 /** Safety margin between application budget and platform maxDuration. */
 export const AI_PLATFORM_SAFETY_MARGIN_MS =

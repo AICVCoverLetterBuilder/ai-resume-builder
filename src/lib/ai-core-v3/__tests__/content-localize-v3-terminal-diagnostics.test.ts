@@ -703,7 +703,7 @@ describe('content-localize-v3 terminal diagnostics', () => {
       invoke: async (invocation) => {
         if (invocation.phase === 'writer') return { stop_reason: 'tool_use', content: [{ type: 'tool_use', name: CONTENT_LOCALIZE_V3_PROVIDER_TOOL_NAMES.writer, input: writerOutput(invocation.request as ContentLocalizeM6WriterRequest) }] };
         if ((invocation.request as ContentLocalizeM6EvaluatorRequest).candidateOrigin === 'primary') return { stop_reason: 'tool_use', content: [{ type: 'tool_use', name: CONTENT_LOCALIZE_V3_PROVIDER_TOOL_NAMES.evaluator, input: evaluatorOutput(invocation.request as ContentLocalizeM6EvaluatorRequest, false) }] };
-        if (invocation.phase === 'repair') return { stop_reason: 'tool_use', content: [{ type: 'tool_use', name: CONTENT_LOCALIZE_V3_PROVIDER_TOOL_NAMES.repair, input: writerOutput(invocation.request as ContentLocalizeM6RepairRequest, 'Réparation fidèle.') }] };
+        if (invocation.phase === 'repair_writer') return { stop_reason: 'tool_use', content: [{ type: 'tool_use', name: CONTENT_LOCALIZE_V3_PROVIDER_TOOL_NAMES.repair, input: writerOutput(invocation.request as ContentLocalizeM6RepairRequest, 'Réparation fidèle.') }] };
         return { stop_reason: 'tool_use', content: [] };
       },
     });
