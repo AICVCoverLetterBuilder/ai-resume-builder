@@ -71,6 +71,20 @@ export const AI_SERVER_BUDGET_MS = 22_000;
 export const AI_PROVIDER_CALL_TIMEOUT_MS = 8_000;
 
 /**
+ * Content-localize-v3 owns a four-phase recovery chain.  Its route budget is
+ * intentionally separate from the legacy 22-second envelope used by the
+ * other AI operations: four provider slices (32s) plus response/validation
+ * headroom must fit before the platform limit, while both clients need a
+ * single shared operation deadline.
+ */
+export const CONTENT_LOCALIZE_V3_ROUTE_BUDGET_MS = 44_000;
+export const CONTENT_LOCALIZE_V3_CLIENT_TIMEOUT_MS = 50_000;
+
+export function computeContentLocalizeV3Deadline(requestStartedAt: number): number {
+  return requestStartedAt + CONTENT_LOCALIZE_V3_ROUTE_BUDGET_MS;
+}
+
+/**
  * Experience export localization is one request containing two sequential,
  * independently validated provider calls. These dedicated bounds leave the
  * existing Summary/Bullets recovery contract unchanged.
@@ -226,6 +240,20 @@ export type ProviderDeadlineOwner =
   | 'route_deadline'
   | 'client_abort';
 
+/** Canonical local ownership for content-localize-v3 deadline decisions. */
+export type LocalDeadlineOwner = 'provider_call' | 'route_budget' | 'none' | 'unknown';
+export type LocalDeadlinePhase = 'writer' | 'evaluator' | 'repair_writer' | 'repair_evaluator' | null;
+
+export interface LocalDeadlineProvenance {
+  readonly deadlineExceeded: boolean;
+  readonly deadlineOwner: LocalDeadlineOwner;
+  readonly deadlinePhase: LocalDeadlinePhase;
+  readonly configuredTimeoutMs: number | null;
+  readonly effectiveTimeoutMs: number | null;
+  readonly elapsedMs: number | null;
+  readonly routeElapsedMs: number | null;
+}
+
 /** Finite, non-sensitive timing evidence attached in memory to every provider failure. */
 export interface ProviderTimingEvidence {
   readonly deadlineOwner: ProviderDeadlineOwner | null;
@@ -235,15 +263,29 @@ export interface ProviderTimingEvidence {
   readonly outerBudgetRemainingAtStartMs: number | null;
 }
 
-const providerTimingEvidence = new WeakMap<object, ProviderTimingEvidence>();
+type CanonicalProviderTimingEvidence = ProviderTimingEvidence & {
+  readonly localDeadline: LocalDeadlineProvenance;
+};
+
+// One in-memory authority stores both the legacy transport view and the
+// canonical local deadline decision. Compatibility readers below only project
+// this same record; they never create another owner or decision store.
+const providerTimingEvidence = new WeakMap<object, CanonicalProviderTimingEvidence>();
 
 function finiteTimingInteger(value: number): number {
   return Number.isFinite(value) ? Math.max(0, Math.round(value)) : 0;
 }
 
-function rememberProviderTimingEvidence<T>(error: T, evidence: ProviderTimingEvidence): T {
+function rememberProviderTimingEvidence<T>(
+  error: T,
+  evidence: ProviderTimingEvidence,
+  localDeadline: LocalDeadlineProvenance,
+): T {
   if ((typeof error === 'object' && error !== null) || typeof error === 'function') {
-    providerTimingEvidence.set(error as object, Object.freeze({ ...evidence }));
+    providerTimingEvidence.set(error as object, Object.freeze({
+      ...evidence,
+      localDeadline: Object.freeze({ ...localDeadline }),
+    }));
   }
   return error;
 }
@@ -251,7 +293,20 @@ function rememberProviderTimingEvidence<T>(error: T, evidence: ProviderTimingEvi
 /** Read timing evidence without serializing or mutating the original SDK error. */
 export function readProviderTimingEvidence(error: unknown): ProviderTimingEvidence | null {
   if ((typeof error !== 'object' || error === null) && typeof error !== 'function') return null;
-  return providerTimingEvidence.get(error as object) ?? null;
+  const evidence = providerTimingEvidence.get(error as object);
+  if (!evidence) return null;
+  const { localDeadline: _localDeadline, ...legacyEvidence } = evidence;
+  return legacyEvidence;
+}
+
+/**
+ * Read the one canonical deadline-owner decision used by content-localize-v3.
+ * This view is separate from the legacy transport timing shape so existing
+ * M4/M5 consumers retain their stable serialized evidence contract.
+ */
+export function readLocalDeadlineProvenance(error: unknown): LocalDeadlineProvenance | null {
+  if ((typeof error !== 'object' || error === null) && typeof error !== 'function') return null;
+  return providerTimingEvidence.get(error as object)?.localDeadline ?? null;
 }
 
 export type ProviderDeadlineError = Error & {
@@ -267,6 +322,8 @@ function deadlineError(
   effectiveTimeoutMs: number,
   elapsedMs: number,
   outerBudgetRemainingAtStartMs: number | null,
+  localOwner: LocalDeadlineOwner = 'unknown',
+  localPhase: LocalDeadlinePhase = null,
 ): ProviderDeadlineError {
   const error = Object.assign(new Error(message), {
     name: 'AbortError',
@@ -274,6 +331,15 @@ function deadlineError(
     configuredTimeoutMs,
     effectiveTimeoutMs,
   }) as ProviderDeadlineError;
+  const localDeadline: LocalDeadlineProvenance = {
+    deadlineExceeded: localOwner === 'provider_call' || localOwner === 'route_budget',
+    deadlineOwner: localOwner,
+    deadlinePhase: localPhase,
+    configuredTimeoutMs: finiteTimingInteger(configuredTimeoutMs),
+    effectiveTimeoutMs: finiteTimingInteger(effectiveTimeoutMs),
+    elapsedMs: finiteTimingInteger(elapsedMs),
+    routeElapsedMs: null,
+  };
   return rememberProviderTimingEvidence(error, {
     deadlineOwner: owner,
     configuredTimeoutMs: finiteTimingInteger(configuredTimeoutMs),
@@ -281,7 +347,7 @@ function deadlineError(
     elapsedMs: finiteTimingInteger(elapsedMs),
     outerBudgetRemainingAtStartMs: outerBudgetRemainingAtStartMs === null
       ? null : finiteTimingInteger(outerBudgetRemainingAtStartMs),
-  });
+  }, localDeadline);
 }
 
 /**
@@ -303,7 +369,7 @@ export async function callProviderWithDeadline<T>(
   const elapsedMs = () => Math.max(0, Date.now() - callStartedAt);
   if (cancellationSignal?.aborted) {
     throw deadlineError('client_abort before provider dispatch', 'client_abort', configuredTimeoutMs, 0,
-      elapsedMs(), outerBudgetRemainingAtStartMs);
+      elapsedMs(), outerBudgetRemainingAtStartMs, 'unknown');
   }
   if (!hasProviderBudget(deadlineAt)) {
     throw deadlineError(
@@ -313,6 +379,7 @@ export async function callProviderWithDeadline<T>(
       Math.max(0, deadlineAt == null ? 0 : remainingBudgetMs(deadlineAt)),
       elapsedMs(),
       outerBudgetRemainingAtStartMs,
+      'route_budget',
     );
   }
 
@@ -367,6 +434,7 @@ export async function callProviderWithDeadline<T>(
       effectiveMs,
       elapsedMs(),
       outerBudgetRemainingAtStartMs,
+      routeOwned ? 'route_budget' : 'provider_call',
     );
   };
 
@@ -395,11 +463,20 @@ export async function callProviderWithDeadline<T>(
     void createPromise.then(() => undefined, () => undefined);
     if (clientAborted) {
       throw deadlineError('client_abort during provider transport', 'client_abort', configuredTimeoutMs, effectiveMs,
-        elapsedMs(), outerBudgetRemainingAtStartMs);
+        elapsedMs(), outerBudgetRemainingAtStartMs, 'unknown');
     }
     const existing = readProviderTimingEvidence(err);
     if (existing) throw err;
     if ((typeof err === 'object' && err !== null) || typeof err === 'function') {
+      const localDeadline: LocalDeadlineProvenance = {
+        deadlineExceeded: false,
+        deadlineOwner: 'unknown',
+        deadlinePhase: null,
+        configuredTimeoutMs: finiteTimingInteger(configuredTimeoutMs),
+        effectiveTimeoutMs: finiteTimingInteger(effectiveMs),
+        elapsedMs: finiteTimingInteger(elapsedMs()),
+        routeElapsedMs: null,
+      };
       throw rememberProviderTimingEvidence(err, {
         deadlineOwner: null,
         configuredTimeoutMs: finiteTimingInteger(configuredTimeoutMs),
@@ -407,7 +484,7 @@ export async function callProviderWithDeadline<T>(
         elapsedMs: finiteTimingInteger(elapsedMs()),
         outerBudgetRemainingAtStartMs: outerBudgetRemainingAtStartMs === null
           ? null : finiteTimingInteger(outerBudgetRemainingAtStartMs),
-      });
+      }, localDeadline);
     }
     throw err;
   } finally {

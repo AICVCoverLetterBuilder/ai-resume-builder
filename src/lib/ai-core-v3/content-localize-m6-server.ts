@@ -19,6 +19,12 @@ import {
   type ContentLocalizeV3ServerDiagnostic,
 } from './content-localize-v3-terminal-diagnostics';
 import { readContentLocalizeV3ProviderObservation } from './content-localize-v3-provider';
+import {
+  readLocalDeadlineProvenance,
+  type LocalDeadlineOwner,
+  type LocalDeadlinePhase,
+  type LocalDeadlineProvenance,
+} from '../ai-request-timing';
 
 export type ContentLocalizeM6ServerFailureReason =
   | 'v3_feature_disabled'
@@ -78,6 +84,11 @@ export interface ContentLocalizeM6ServerDependencies {
   readonly writer: (request: ContentLocalizeM6WriterRequest) => Promise<unknown>;
   readonly evaluator: (request: ContentLocalizeM6EvaluatorRequest) => Promise<unknown>;
   readonly repair: (request: ContentLocalizeM6RepairRequest) => Promise<unknown>;
+}
+
+export interface ContentLocalizeM6ServerExecutionOptions {
+  readonly routeStartedAt?: number;
+  readonly routeBudgetMs?: number;
 }
 
 export type ContentLocalizeM6CandidateReceipt = ContentLocalizeM6Identity & Readonly<{
@@ -429,13 +440,51 @@ function candidateReady(
   return Object.freeze(result) as ContentLocalizeM6ServerResult;
 }
 
+interface LocalDeadlineDecision {
+  readonly deadlineExceeded: boolean;
+  readonly deadlineOwner: LocalDeadlineOwner;
+  readonly provenance: LocalDeadlineProvenance | null;
+}
+
+/** The sole server-side reader for deadline ownership and exceeded state. */
+function readDeadlineDecision(error: unknown): LocalDeadlineDecision {
+  const provenance = readLocalDeadlineProvenance(error);
+  if (provenance) {
+    return {
+      deadlineExceeded: provenance.deadlineExceeded,
+      deadlineOwner: provenance.deadlineOwner,
+      provenance,
+    };
+  }
+  return {
+    deadlineExceeded: false,
+    deadlineOwner: 'unknown',
+    provenance: null,
+  };
+}
+
 function isDeadlineFailure(error: unknown): boolean {
-  if (error instanceof Error && error.name === 'AbortError') return true;
-  if (!isRecord(error)) return false;
-  return error.deadlineOwner === 'server_deadline'
-    || error.deadlineOwner === 'route_deadline'
-    || error.deadlineOwner === 'client_abort'
-    || error.code === 'deadline_exceeded';
+  return readDeadlineDecision(error).deadlineExceeded;
+}
+
+function deadlineMetadata(
+  error: unknown,
+  phase: LocalDeadlinePhase,
+  options: ContentLocalizeM6ServerExecutionOptions | undefined,
+): Pick<ContentLocalizeV3ServerDiagnostic, 'deadlineExceeded' | 'deadlineOwner' | 'deadlinePhase' | 'providerCallTimeoutMs' | 'routeBudgetMs' | 'providerElapsedMs' | 'routeElapsedMs'> {
+  const decision = readDeadlineDecision(error);
+  const provenance = decision.provenance;
+  const record = isRecord(error) ? error : null;
+  return {
+    deadlineExceeded: decision.deadlineExceeded,
+    deadlineOwner: decision.deadlineOwner,
+    deadlinePhase: decision.deadlineExceeded ? phase : null,
+    providerCallTimeoutMs: provenance?.configuredTimeoutMs
+      ?? (typeof record?.configuredTimeoutMs === 'number' ? record.configuredTimeoutMs : null),
+    routeBudgetMs: options?.routeBudgetMs ?? null,
+    providerElapsedMs: provenance?.elapsedMs ?? null,
+    routeElapsedMs: options?.routeStartedAt == null ? null : Math.max(0, Date.now() - options.routeStartedAt),
+  };
 }
 
 const SAFE_PROVIDER_ERROR_CODES = new Set([
@@ -477,6 +526,7 @@ function providerFailureMetadata(error: unknown, stage: string): Pick<ContentLoc
 export async function executeContentLocalizeM6Server(
   snapshot: ContentLocalizeM6Snapshot,
   dependencies: ContentLocalizeM6ServerDependencies,
+  options?: ContentLocalizeM6ServerExecutionOptions,
 ): Promise<ContentLocalizeM6ServerResult> {
   const authorized = validateSnapshot(snapshot);
   const diagnostic = { ...createEmptyContentLocalizeV3ServerDiagnostic() };
@@ -489,8 +539,10 @@ export async function executeContentLocalizeM6Server(
     primaryRaw = await dependencies.writer(writerRequest(authorized));
     writerObservation = readContentLocalizeV3ProviderObservation(primaryRaw);
   } catch (error) {
-    const d = { ...diagnostic, ...providerFailureMetadata(error, 'writer_transport'), writer: diagnosticPhaseFromProviderObservation({ result: 'failed' }, true), finalDecision: isDeadlineFailure(error) ? 'deadline_exceeded' as const : 'transport_failure' as const, rejectionReasonCodes: [isDeadlineFailure(error) ? 'deadline_exceeded' : 'writer_failed'] };
-    return handledFailure(isDeadlineFailure(error) ? 'deadline_exceeded' : 'writer_failed', d);
+    const deadline = deadlineMetadata(error, 'writer', options);
+    const reason = isDeadlineFailure(error) ? 'deadline_exceeded' as const : 'writer_failed' as const;
+    const d = { ...diagnostic, ...providerFailureMetadata(error, 'writer_transport'), ...deadline, writer: diagnosticPhaseFromProviderObservation({ result: 'failed' }, true), finalDecision: isDeadlineFailure(error) ? 'deadline_exceeded' as const : 'transport_failure' as const, rejectionReasonCodes: [reason] };
+    return handledFailure(reason, d);
   }
   const primaryWriter = parseWriter(primaryRaw, authorized);
   diagnostic.writer = diagnosticPhaseFromProviderObservation({ ...writerObservation, result: primaryWriter.ok ? 'succeeded' : 'malformed', identityPassed: primaryWriter.identityPassed, toolInputSchemaPassed: primaryWriter.schemaPassed }, true);
@@ -513,8 +565,10 @@ export async function executeContentLocalizeM6Server(
     ));
     primaryEvaluatorObservation = readContentLocalizeV3ProviderObservation(primaryEvaluationRaw);
   } catch (error) {
-    const d = { ...diagnostic, ...providerFailureMetadata(error, 'primary_evaluator_transport'), primaryEvaluator: diagnosticPhaseFromProviderObservation({ result: 'failed' }, true), finalDecision: isDeadlineFailure(error) ? 'deadline_exceeded' as const : 'transport_failure' as const, rejectionReasonCodes: [isDeadlineFailure(error) ? 'deadline_exceeded' : 'evaluator_failed'] };
-    return handledFailure(isDeadlineFailure(error) ? 'deadline_exceeded' : 'evaluator_failed', d);
+    const deadline = deadlineMetadata(error, 'evaluator', options);
+    const reason = isDeadlineFailure(error) ? 'deadline_exceeded' as const : 'evaluator_failed' as const;
+    const d = { ...diagnostic, ...providerFailureMetadata(error, 'primary_evaluator_transport'), ...deadline, primaryEvaluator: diagnosticPhaseFromProviderObservation({ result: 'failed' }, true), finalDecision: isDeadlineFailure(error) ? 'deadline_exceeded' as const : 'transport_failure' as const, rejectionReasonCodes: [reason] };
+    return handledFailure(reason, d);
   }
   const primaryEvaluation = parseEvaluation(primaryEvaluationRaw, authorized, primaryWriter.candidateTextHash);
   diagnostic.primaryEvaluator = diagnosticPhaseFromProviderObservation({ ...primaryEvaluatorObservation, result: primaryEvaluation.ok ? 'succeeded' : 'malformed', identityPassed: primaryEvaluation.identityPassed, toolInputSchemaPassed: primaryEvaluation.schemaPassed }, true);
@@ -539,8 +593,10 @@ export async function executeContentLocalizeM6Server(
     ));
     repairObservation = readContentLocalizeV3ProviderObservation(repairRaw);
   } catch (error) {
-    const d = { ...diagnostic, ...providerFailureMetadata(error, 'repair_writer_transport'), repair: diagnosticPhaseFromProviderObservation({ result: 'failed' }, true), finalDecision: isDeadlineFailure(error) ? 'deadline_exceeded' as const : 'transport_failure' as const, rejectionReasonCodes: [isDeadlineFailure(error) ? 'deadline_exceeded' : 'repair_failed'] };
-    return handledFailure(isDeadlineFailure(error) ? 'deadline_exceeded' : 'repair_failed', d);
+    const deadline = deadlineMetadata(error, 'repair_writer', options);
+    const reason = isDeadlineFailure(error) ? 'deadline_exceeded' as const : 'repair_failed' as const;
+    const d = { ...diagnostic, ...providerFailureMetadata(error, 'repair_writer_transport'), ...deadline, repair: diagnosticPhaseFromProviderObservation({ result: 'failed' }, true), finalDecision: isDeadlineFailure(error) ? 'deadline_exceeded' as const : 'transport_failure' as const, rejectionReasonCodes: [reason] };
+    return handledFailure(reason, d);
   }
   const repairedWriter = parseWriter(repairRaw, authorized);
   diagnostic.repair = diagnosticPhaseFromProviderObservation({ ...repairObservation, result: repairedWriter.ok ? 'succeeded' : 'malformed', identityPassed: repairedWriter.identityPassed, toolInputSchemaPassed: repairedWriter.schemaPassed }, true);
@@ -567,8 +623,10 @@ export async function executeContentLocalizeM6Server(
     ));
     repairEvaluatorObservation = readContentLocalizeV3ProviderObservation(repairEvaluationRaw);
   } catch (error) {
-    const d = { ...diagnostic, ...providerFailureMetadata(error, 'repair_evaluator_transport'), repairEvaluator: diagnosticPhaseFromProviderObservation({ result: 'failed' }, true), finalDecision: isDeadlineFailure(error) ? 'deadline_exceeded' as const : 'transport_failure' as const, rejectionReasonCodes: [isDeadlineFailure(error) ? 'deadline_exceeded' : 'evaluator_failed'] };
-    return handledFailure(isDeadlineFailure(error) ? 'deadline_exceeded' : 'evaluator_failed', d);
+    const deadline = deadlineMetadata(error, 'repair_evaluator', options);
+    const reason = isDeadlineFailure(error) ? 'deadline_exceeded' as const : 'evaluator_failed' as const;
+    const d = { ...diagnostic, ...providerFailureMetadata(error, 'repair_evaluator_transport'), ...deadline, repairEvaluator: diagnosticPhaseFromProviderObservation({ result: 'failed' }, true), finalDecision: isDeadlineFailure(error) ? 'deadline_exceeded' as const : 'transport_failure' as const, rejectionReasonCodes: [reason] };
+    return handledFailure(reason, d);
   }
   const repairEvaluation = parseEvaluation(repairEvaluationRaw, authorized, repairedWriter.candidateTextHash);
   diagnostic.repairEvaluator = diagnosticPhaseFromProviderObservation({ ...repairEvaluatorObservation, result: repairEvaluation.ok ? 'succeeded' : 'malformed', identityPassed: repairEvaluation.identityPassed, toolInputSchemaPassed: repairEvaluation.schemaPassed }, true);

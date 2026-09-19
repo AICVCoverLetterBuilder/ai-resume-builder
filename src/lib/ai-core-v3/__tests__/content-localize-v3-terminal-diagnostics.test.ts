@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { AI_PROVIDER_CALL_TIMEOUT_MS, callProviderWithDeadline } from '../../ai-request-timing';
 import { hashExperienceSourceLocaleText } from '../../cv-experience-source-locale';
 import { hashSummarySourceLocaleText } from '../../cv-summary-source-locale';
 import { fingerprintText } from '../../cv-export-diagnostics';
@@ -315,43 +316,48 @@ describe('content-localize-v3 terminal diagnostics', () => {
   });
 
   it('classifies writer and evaluator deadlines with hashed provider fingerprints', async () => {
-    const deadline = () => {
-      const error = new Error('provider secret-shaped detail must never cross the boundary');
-      error.name = 'AbortError';
-      return error;
-    };
-    const writerTimeout = await executeContentLocalizeM6Server(
-      summarySnapshot(),
-      serverFixture({ writer: async () => { throw deadline(); } }),
-    );
-    expect(writerTimeout).toMatchObject({ status: 'handled_failure', reason: 'deadline_exceeded' });
-    expect(readServerDiagnostic(writerTimeout).providerFailureStage).toBe('writer_transport');
-    expect(readServerDiagnostic(writerTimeout).providerMessageFingerprint).toBeTruthy();
-    expect(assertContentLocalizeV3DiagnosticPrivacy(readServerDiagnostic(writerTimeout))).toEqual([]);
+    vi.useFakeTimers();
+    try {
+      const realDeadline = () => callProviderWithDeadline(() => new Promise<never>(() => undefined));
+      const writerPromise = executeContentLocalizeM6Server(
+        summarySnapshot(),
+        serverFixture({ writer: realDeadline }),
+      );
+      await vi.advanceTimersByTimeAsync(AI_PROVIDER_CALL_TIMEOUT_MS);
+      const writerTimeout = await writerPromise;
+      expect(writerTimeout).toMatchObject({ status: 'handled_failure', reason: 'deadline_exceeded' });
+      expect(readServerDiagnostic(writerTimeout).providerFailureStage).toBe('writer_transport');
+      expect(readServerDiagnostic(writerTimeout).providerMessageFingerprint).toBeTruthy();
+      expect(assertContentLocalizeV3DiagnosticPrivacy(readServerDiagnostic(writerTimeout))).toEqual([]);
 
-    const structuredProviderError = Object.assign(new Error('private provider detail'), {
-      status: 429,
-      error: { code: 'rate_limit' },
-      retryable: true,
-    });
-    const structuredProviderFailure = await executeContentLocalizeM6Server(
-      summarySnapshot(),
-      serverFixture({ writer: async () => { throw structuredProviderError; } }),
-    );
-    expect(readServerDiagnostic(structuredProviderFailure)).toMatchObject({
-      providerHttpStatus: 429,
-      providerErrorCode: 'rate_limit',
-      providerRetryable: true,
-    });
+      const structuredProviderError = Object.assign(new Error('private provider detail'), {
+        status: 429,
+        error: { code: 'rate_limit' },
+        retryable: true,
+      });
+      const structuredProviderFailure = await executeContentLocalizeM6Server(
+        summarySnapshot(),
+        serverFixture({ writer: async () => { throw structuredProviderError; } }),
+      );
+      expect(readServerDiagnostic(structuredProviderFailure)).toMatchObject({
+        providerHttpStatus: 429,
+        providerErrorCode: 'rate_limit',
+        providerRetryable: true,
+      });
 
-    let evaluatorCalls = 0;
-    const evaluatorTimeout = await executeContentLocalizeM6Server(
-      summarySnapshot(),
-      serverFixture({ evaluator: async () => { evaluatorCalls += 1; throw deadline(); } }),
-    );
-    expect(evaluatorTimeout).toMatchObject({ status: 'handled_failure', reason: 'deadline_exceeded' });
-    expect(evaluatorCalls).toBe(1);
-    expect(readServerDiagnostic(evaluatorTimeout).providerFailureStage).toBe('primary_evaluator_transport');
+      let evaluatorCalls = 0;
+      const evaluatorPromise = executeContentLocalizeM6Server(
+        summarySnapshot(),
+        serverFixture({ evaluator: async () => { evaluatorCalls += 1; return realDeadline(); } }),
+      );
+      await vi.advanceTimersByTimeAsync(AI_PROVIDER_CALL_TIMEOUT_MS);
+      const evaluatorTimeout = await evaluatorPromise;
+      expect(evaluatorTimeout).toMatchObject({ status: 'handled_failure', reason: 'deadline_exceeded' });
+      expect(evaluatorCalls).toBe(1);
+      expect(readServerDiagnostic(evaluatorTimeout).providerFailureStage).toBe('primary_evaluator_transport');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('records one client terminal diagnostic with usage delta tied to the commit', async () => {

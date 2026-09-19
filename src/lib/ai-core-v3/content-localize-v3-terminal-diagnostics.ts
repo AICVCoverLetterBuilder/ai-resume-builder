@@ -6,11 +6,11 @@ import { emitCvAiDiagnosticsChanged } from '@/lib/cv-ai-diagnostics-lifecycle';
 export const CONTENT_LOCALIZE_V3_TERMINAL_DIAGNOSTIC_MARKER =
   'CONTENT_LOCALIZE_V3_TERMINAL_DIAGNOSTIC' as const;
 export const CONTENT_LOCALIZE_V3_TERMINAL_DIAGNOSTIC_REVISION =
-  'content-localize-v3-terminal-diagnostic-v1' as const;
+  'content-localize-v3-terminal-diagnostic-v2' as const;
 export const CONTENT_LOCALIZE_V3_TERMINAL_DIAGNOSTIC_STORAGE_KEY =
-  'cvpro-content-localize-v3-terminal-diagnostic-v1' as const;
+  'cvpro-content-localize-v3-terminal-diagnostic-v2' as const;
 export const CONTENT_LOCALIZE_V3_TERMINAL_HISTORY_STORAGE_KEY =
-  'cvpro-content-localize-v3-terminal-history-v1' as const;
+  'cvpro-content-localize-v3-terminal-history-v2' as const;
 export const CONTENT_LOCALIZE_V3_TERMINAL_HISTORY_LIMIT = 5;
 
 export type ContentLocalizeV3DiagnosticOperation = 'summary_translate' | 'experience_translate';
@@ -30,6 +30,9 @@ export type ContentLocalizeV3DiagnosticPhase = Readonly<{
   toolInputSchemaPassed: boolean | null;
   identityPassed: boolean | null;
 }>;
+
+export type ContentLocalizeV3DeadlineOwner = 'provider_call' | 'route_budget' | 'none' | 'unknown';
+export type ContentLocalizeV3DeadlinePhase = 'writer' | 'evaluator' | 'repair_writer' | 'repair_evaluator' | null;
 
 export type ContentLocalizeV3DiagnosticEvaluation = Readonly<{
   accepted: boolean | null;
@@ -63,6 +66,13 @@ export type ContentLocalizeV3ServerDiagnostic = Readonly<{
   providerErrorCode: string | null;
   providerMessageFingerprint: string | null;
   providerRetryable: boolean | null;
+  deadlineExceeded: boolean;
+  deadlineOwner: ContentLocalizeV3DeadlineOwner;
+  deadlinePhase: ContentLocalizeV3DeadlinePhase;
+  providerCallTimeoutMs: number | null;
+  routeBudgetMs: number | null;
+  providerElapsedMs: number | null;
+  routeElapsedMs: number | null;
 }>;
 
 export type ContentLocalizeV3TerminalDiagnostic = Readonly<{
@@ -96,6 +106,13 @@ export type ContentLocalizeV3TerminalDiagnostic = Readonly<{
   providerErrorCode: string | null;
   providerMessageFingerprint: string | null;
   providerRetryable: boolean | null;
+  deadlineExceeded: boolean;
+  deadlineOwner: ContentLocalizeV3DeadlineOwner;
+  deadlinePhase: ContentLocalizeV3DeadlinePhase;
+  providerCallTimeoutMs: number | null;
+  routeBudgetMs: number | null;
+  providerElapsedMs: number | null;
+  routeElapsedMs: number | null;
   candidatePresent: boolean;
   candidateHash: string | null;
   candidateLength: number | null;
@@ -168,6 +185,13 @@ export function createEmptyContentLocalizeV3ServerDiagnostic(): ContentLocalizeV
     providerErrorCode: null,
     providerMessageFingerprint: null,
     providerRetryable: null,
+    deadlineExceeded: false,
+    deadlineOwner: 'none',
+    deadlinePhase: null,
+    providerCallTimeoutMs: null,
+    routeBudgetMs: null,
+    providerElapsedMs: null,
+    routeElapsedMs: null,
   };
 }
 
@@ -243,6 +267,13 @@ export function buildContentLocalizeV3TerminalDiagnostic(input: {
     providerErrorCode: server.providerErrorCode,
     providerMessageFingerprint: server.providerMessageFingerprint,
     providerRetryable: server.providerRetryable,
+    deadlineExceeded: server.deadlineExceeded === true,
+    deadlineOwner: server.deadlineOwner ?? 'unknown',
+    deadlinePhase: server.deadlinePhase ?? null,
+    providerCallTimeoutMs: server.providerCallTimeoutMs ?? null,
+    routeBudgetMs: server.routeBudgetMs ?? null,
+    providerElapsedMs: server.providerElapsedMs ?? null,
+    routeElapsedMs: server.routeElapsedMs ?? null,
     candidatePresent: server.candidatePresent,
     candidateHash: server.candidateHash,
     candidateLength: server.candidateLength,

@@ -47,6 +47,7 @@ import type { AiErrorCode } from '@/lib/ai-error-codes';
 import { validateAiUnitLocalePurity } from '@/lib/cv-ai-unit-locale-purity';
 import {
   AI_PROVIDER_CALL_TIMEOUT_MS,
+  CONTENT_LOCALIZE_V3_ROUTE_BUDGET_MS,
   EXPERIENCE_V3_PROVIDER_STAGE_TIMEOUT_MS,
   EXPERIENCE_LOCALIZATION_TRANSLATION_TIMEOUT_MS,
   EXPERIENCE_LOCALIZATION_VERIFIER_TIMEOUT_MS,
@@ -54,6 +55,7 @@ import {
   computeExperienceV3Deadline,
   computeExperienceV3EnhanceDeadline,
   computeExperienceLocalizationDeadline,
+  computeContentLocalizeV3Deadline,
   computeServerDeadline,
   hasProviderBudget,
   isProviderAbortOrTimeoutError,
@@ -794,6 +796,10 @@ export async function POST(req: NextRequest) {
       deadlineAt = computeExperienceV3Deadline(serverReceivedAt);
     } else if (String(action) === EXPERIENCE_V3_ENHANCE_ACTION) {
       deadlineAt = computeExperienceV3EnhanceDeadline(serverReceivedAt);
+    } else if (
+      action === 'content-localize-v3'
+    ) {
+      deadlineAt = computeContentLocalizeV3Deadline(serverReceivedAt);
     } else if (
       action === 'experience-localize'
       || action === 'export-title-localize'
@@ -2221,6 +2227,10 @@ Rules:
             return response;
           },
         }),
+        {
+          routeStartedAt: serverReceivedAt,
+          routeBudgetMs: CONTENT_LOCALIZE_V3_ROUTE_BUDGET_MS,
+        },
       );
       const status = result.status === 'candidate_ready'
         ? 200

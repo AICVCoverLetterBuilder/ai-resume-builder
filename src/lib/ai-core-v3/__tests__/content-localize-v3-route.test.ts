@@ -244,8 +244,10 @@ describe('M6.4 actual /api/generate route boundary', () => {
     expect(run.calls).toHaveLength(4);
   });
 
-  it('classifies provider AbortError as deadline_exceeded without later semantic calls', async () => {
+  it('keeps provider-originated AbortError as a non-deadline transport failure', async () => {
     const run = await invokeActualRoute({ mode: 'abort' });
-    expect(run.response.status).toBe(504); expect(run.body.reason).toBe('deadline_exceeded'); expect(run.calls).toHaveLength(1);
+    expect(run.response.status).toBe(502); expect(run.body.reason).toBe('writer_failed'); expect(run.calls).toHaveLength(1);
+    expect(run.body.diagnostic.deadlineExceeded).toBe(false);
+    expect(run.body.diagnostic.deadlineOwner).toBe('unknown');
   });
 });

@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { AI_PROVIDER_CALL_TIMEOUT_MS, callProviderWithDeadline } from '../../ai-request-timing';
 import {
   hashExperienceSourceLocaleText,
 } from '../../cv-experience-source-locale';
@@ -153,10 +154,15 @@ function expectFailure(
   expect(result).toEqual({ status: 'handled_failure', reason });
 }
 
-function deadlineError(): Error {
-  const error = new Error('deadline');
-  error.name = 'AbortError';
-  return error;
+async function realDeadlineError(): Promise<Error> {
+  const pending = callProviderWithDeadline(
+    () => new Promise<never>(() => undefined),
+    null,
+    AI_PROVIDER_CALL_TIMEOUT_MS,
+  );
+  const rejection = pending.catch((error) => error as Error);
+  await vi.advanceTimersByTimeAsync(AI_PROVIDER_CALL_TIMEOUT_MS);
+  return await rejection;
 }
 
 describe('M6.4 cross-locale server candidate contract', () => {
@@ -517,38 +523,46 @@ describe('M6.4 cross-locale server candidate contract', () => {
   });
 
   it('stops issuing later steps after writer, evaluator, or repair deadline failure', async () => {
-    const writerDeadline = fixture({ writer: () => { throw deadlineError(); } });
-    expectFailure(await executeContentLocalizeM6Server(snapshot(), writerDeadline.dependencies), 'deadline_exceeded');
-    expect(writerDeadline.calls).toEqual({ writer: expect.any(Array), evaluator: [], repair: [] });
-    expect(writerDeadline.calls.writer).toHaveLength(1);
+    vi.useFakeTimers();
+    try {
+      const writerDeadline = fixture({ writer: async () => { throw await realDeadlineError(); } });
+      expectFailure(await executeContentLocalizeM6Server(snapshot(), writerDeadline.dependencies), 'deadline_exceeded');
+      expect(writerDeadline.calls).toEqual({ writer: expect.any(Array), evaluator: [], repair: [] });
+      expect(writerDeadline.calls.writer).toHaveLength(1);
 
-    const evaluatorDeadline = fixture({ evaluator: () => { throw deadlineError(); } });
-    expectFailure(await executeContentLocalizeM6Server(snapshot(), evaluatorDeadline.dependencies), 'deadline_exceeded');
-    expect(evaluatorDeadline.calls.writer).toHaveLength(1);
-    expect(evaluatorDeadline.calls.evaluator).toHaveLength(1);
-    expect(evaluatorDeadline.calls.repair).toHaveLength(0);
+      const evaluatorDeadline = fixture({ evaluator: async () => { throw await realDeadlineError(); } });
+      expectFailure(await executeContentLocalizeM6Server(snapshot(), evaluatorDeadline.dependencies), 'deadline_exceeded');
+      expect(evaluatorDeadline.calls.writer).toHaveLength(1);
+      expect(evaluatorDeadline.calls.evaluator).toHaveLength(1);
+      expect(evaluatorDeadline.calls.repair).toHaveLength(0);
 
-    const repairDeadline = fixture({
-      evaluator: (request) => evaluatorOutput(request, { accepted: false, reasonCodes: ['semantic_rejection'] }),
-      repair: () => { throw deadlineError(); },
-    });
-    expectFailure(await executeContentLocalizeM6Server(snapshot(), repairDeadline.dependencies), 'deadline_exceeded');
-    expect(repairDeadline.calls.writer).toHaveLength(1);
-    expect(repairDeadline.calls.evaluator).toHaveLength(1);
-    expect(repairDeadline.calls.repair).toHaveLength(1);
+      const repairDeadline = fixture({
+        evaluator: (request) => evaluatorOutput(request, { accepted: false, reasonCodes: ['semantic_rejection'] }),
+        repair: async () => { throw await realDeadlineError(); },
+      });
+      expectFailure(await executeContentLocalizeM6Server(snapshot(), repairDeadline.dependencies), 'deadline_exceeded');
+      expect(repairDeadline.calls.writer).toHaveLength(1);
+      expect(repairDeadline.calls.evaluator).toHaveLength(1);
+      expect(repairDeadline.calls.repair).toHaveLength(1);
 
-    const repairEvaluatorDeadline = fixture({
-      evaluator: (request) => request.candidateOrigin === 'primary'
-        ? evaluatorOutput(request, { accepted: false, reasonCodes: ['semantic_rejection'] })
-        : (() => { throw deadlineError(); })(),
-    });
-    expectFailure(
-      await executeContentLocalizeM6Server(snapshot(), repairEvaluatorDeadline.dependencies),
-      'deadline_exceeded',
-    );
-    expect(repairEvaluatorDeadline.calls.writer).toHaveLength(1);
-    expect(repairEvaluatorDeadline.calls.evaluator).toHaveLength(2);
-    expect(repairEvaluatorDeadline.calls.repair).toHaveLength(1);
+      const repairEvaluatorDeadline = fixture({
+        evaluator: async (request) => {
+          if (request.candidateOrigin === 'primary') {
+            return evaluatorOutput(request, { accepted: false, reasonCodes: ['semantic_rejection'] });
+          }
+          throw await realDeadlineError();
+        },
+      });
+      expectFailure(
+        await executeContentLocalizeM6Server(snapshot(), repairEvaluatorDeadline.dependencies),
+        'deadline_exceeded',
+      );
+      expect(repairEvaluatorDeadline.calls.writer).toHaveLength(1);
+      expect(repairEvaluatorDeadline.calls.evaluator).toHaveLength(2);
+      expect(repairEvaluatorDeadline.calls.repair).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it.each([

@@ -23,6 +23,7 @@ import {
 import { logAiLocaleTransitionDiagnostics } from '@/lib/ai-usage-policy';
 import {
   AI_CLIENT_TIMEOUT_MS,
+  CONTENT_LOCALIZE_V3_CLIENT_TIMEOUT_MS,
   EXPERIENCE_LOCALIZATION_CLIENT_TIMEOUT_MS,
   computeExperienceLocalizationOperationDeadline,
   logAiClientRequestTiming,
@@ -3900,7 +3901,7 @@ export default function CVBuilderPage() {
     latestSummaryRequestIdRef.current = reqCtx.requestId;
     const countBefore = getProAiUsageCount();
     const controller = new AbortController();
-    const timer = scheduleClientAbort(controller, resolveClientAbortTimeoutMs(AI_CLIENT_TIMEOUT_MS));
+    const timer = scheduleClientAbort(controller, resolveClientAbortTimeoutMs(CONTENT_LOCALIZE_V3_CLIENT_TIMEOUT_MS));
     try {
       const outcome = await runContentLocalizeV3ClientOperation({
         snapshot: operation.snapshot,
@@ -4013,7 +4014,7 @@ export default function CVBuilderPage() {
     closeExperienceTranslateDialog();
     const countBefore = getProAiUsageCount();
     const controller = new AbortController();
-    const timer = scheduleClientAbort(controller, resolveClientAbortTimeoutMs(EXPERIENCE_LOCALIZATION_CLIENT_TIMEOUT_MS));
+    const timer = scheduleClientAbort(controller, resolveClientAbortTimeoutMs(CONTENT_LOCALIZE_V3_CLIENT_TIMEOUT_MS));
     try {
       const outcome = await runContentLocalizeV3ExperienceClientOperation({
         snapshot: operation.snapshot,
