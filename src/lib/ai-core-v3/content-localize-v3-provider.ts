@@ -1,5 +1,5 @@
 import {
-  AI_PROVIDER_CALL_TIMEOUT_MS,
+  CONTENT_LOCALIZE_V3_PROVIDER_CALL_TIMEOUT_MS,
   type ProviderCallOptions,
 } from '@/lib/ai-request-timing';
 import type {
@@ -195,7 +195,7 @@ function invocationFor(
     prompt: `M6 logical operation ${CONTENT_LOCALIZE_V3_OPERATION}. Follow the forced structured tool contract exactly.\n\nREQUEST_JSON:\n${JSON.stringify(request)}`,
     system: systemForPhase(phase),
     tool,
-    timeoutMs: AI_PROVIDER_CALL_TIMEOUT_MS,
+    timeoutMs: CONTENT_LOCALIZE_V3_PROVIDER_CALL_TIMEOUT_MS,
     toolChoice: { type: 'tool', name: tool.name, disable_parallel_tool_use: true },
   };
 }

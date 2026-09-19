@@ -71,14 +71,21 @@ export const AI_SERVER_BUDGET_MS = 22_000;
 export const AI_PROVIDER_CALL_TIMEOUT_MS = 8_000;
 
 /**
- * Content-localize-v3 owns a four-phase recovery chain.  Its route budget is
- * intentionally separate from the legacy 22-second envelope used by the
- * other AI operations: four provider slices (32s) plus response/validation
- * headroom must fit before the platform limit, while both clients need a
- * single shared operation deadline.
+ * Content-localize-v3 owns its four-call recovery chain. Keep this provider
+ * slice separate from the legacy/global timeout so unrelated AI operations
+ * retain their shipped timing contract.
  */
-export const CONTENT_LOCALIZE_V3_ROUTE_BUDGET_MS = 44_000;
-export const CONTENT_LOCALIZE_V3_CLIENT_TIMEOUT_MS = 50_000;
+export const CONTENT_LOCALIZE_V3_PROVIDER_CALL_TIMEOUT_MS = 15_000;
+
+/**
+ * Content-localize-v3 owns a four-phase recovery chain. Its route budget is
+ * intentionally separate from the legacy 22-second envelope used by the
+ * other AI operations: four 15-second provider slices plus response/validation
+ * headroom must fit before the platform limit, while both clients share one
+ * operation deadline.
+ */
+export const CONTENT_LOCALIZE_V3_ROUTE_BUDGET_MS = 70_000;
+export const CONTENT_LOCALIZE_V3_CLIENT_TIMEOUT_MS = 80_000;
 
 export function computeContentLocalizeV3Deadline(requestStartedAt: number): number {
   return requestStartedAt + CONTENT_LOCALIZE_V3_ROUTE_BUDGET_MS;
@@ -164,9 +171,13 @@ export function hasRepairBudget(deadlineAt: number | null | undefined, now = Dat
 }
 
 /** True when enough time remains to start *any* provider call. */
-export function hasProviderBudget(deadlineAt: number | null | undefined, now = Date.now()): boolean {
+export function hasProviderBudget(
+  deadlineAt: number | null | undefined,
+  now = Date.now(),
+  configuredTimeoutMs: number = AI_PROVIDER_CALL_TIMEOUT_MS,
+): boolean {
   if (deadlineAt == null) return true;
-  return remainingBudgetMs(deadlineAt, now) >= Math.min(AI_PROVIDER_CALL_TIMEOUT_MS, AI_RESPONSE_GUARD_MS + 1_000);
+  return remainingBudgetMs(deadlineAt, now) >= Math.min(configuredTimeoutMs, AI_RESPONSE_GUARD_MS + 1_000);
 }
 
 /** True when the route should stop awaiting and return immediately. */
@@ -371,7 +382,7 @@ export async function callProviderWithDeadline<T>(
     throw deadlineError('client_abort before provider dispatch', 'client_abort', configuredTimeoutMs, 0,
       elapsedMs(), outerBudgetRemainingAtStartMs, 'unknown');
   }
-  if (!hasProviderBudget(deadlineAt)) {
+  if (!hasProviderBudget(deadlineAt, callStartedAt, configuredTimeoutMs)) {
     throw deadlineError(
       'route_deadline_insufficient before provider dispatch',
       'route_deadline',

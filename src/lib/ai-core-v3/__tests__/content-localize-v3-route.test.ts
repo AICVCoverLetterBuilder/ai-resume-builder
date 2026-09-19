@@ -12,6 +12,7 @@ import {
 } from '../content-localize-v3-provider';
 import type { ContentLocalizeM6EvaluatorRequest, ContentLocalizeM6WriterRequest } from '../content-localize-m6-server';
 import { executeContentLocalizeM6Server } from '../content-localize-m6-server';
+import { CONTENT_LOCALIZE_V3_PROVIDER_CALL_TIMEOUT_MS } from '../../ai-request-timing';
 
 const summaryText = 'Mila builds reliable APIs at Atlas and improved delivery by 20%.';
 const experienceText = 'Led a team of 12 engineers and reduced release time by 30%.';
@@ -80,13 +81,13 @@ async function invokeActualRoute(options: {
     process.env.PRO_SIGNING_KEY = 'm6-route-signing-key';
     delete process.env.ANTHROPIC_AUTH_TOKEN;
     vi.resetModules();
-    const create = vi.fn(async (params: { tools?: Array<{ name?: string; strict?: boolean }>; tool_choice?: { type?: string; name?: string; disable_parallel_tool_use?: boolean }; messages?: Array<{ content?: unknown }> }, requestOptions?: { maxRetries?: number }) => {
+    const create = vi.fn(async (params: { tools?: Array<{ name?: string; strict?: boolean }>; tool_choice?: { type?: string; name?: string; disable_parallel_tool_use?: boolean }; messages?: Array<{ content?: unknown }> }, requestOptions?: { maxRetries?: number; timeout?: number }) => {
       const tool = params.tools?.[0]?.name ?? 'unknown';
       const request = requestFromPrompt(params.messages?.[0]?.content);
       const phase = tool === CONTENT_LOCALIZE_V3_PROVIDER_TOOL_NAMES.writer
         ? 'writer'
         : tool === CONTENT_LOCALIZE_V3_PROVIDER_TOOL_NAMES.repair ? 'repair' : 'evaluator';
-      calls.push({ tool, strict: params.tools?.[0]?.strict, choice: params.tool_choice, invocation: { phase, role: phase === 'evaluator' ? 'evaluator' : 'writer', request: request as ContentLocalizeV3ProviderRequest, prompt: String(params.messages?.[0]?.content), system: '', tool: { name: tool, description: '', strict: true, input_schema: {} }, timeoutMs: 0, toolChoice: { type: 'tool', name: tool, disable_parallel_tool_use: true } } });
+      calls.push({ tool, strict: params.tools?.[0]?.strict, choice: params.tool_choice, invocation: { phase, role: phase === 'evaluator' ? 'evaluator' : 'writer', request: request as ContentLocalizeV3ProviderRequest, prompt: String(params.messages?.[0]?.content), system: '', tool: { name: tool, description: '', strict: true, input_schema: {} }, timeoutMs: requestOptions?.timeout ?? 0, toolChoice: { type: 'tool', name: tool, disable_parallel_tool_use: true } } });
       expect(requestOptions?.maxRetries).toBe(0);
       if (mode === 'abort') throw Object.assign(new Error('aborted'), { name: 'AbortError' });
       if (mode === 'provider-error') throw new Error('provider HTTP 503');
@@ -151,6 +152,10 @@ describe('M6.4 actual /api/generate route boundary', () => {
     expect(run.calls.every((call) => (call.choice as { type?: string }).type === 'tool')).toBe(true);
     expect(run.calls.every((call) => (call.choice as { name?: string }).name === call.tool)).toBe(true);
     expect(run.calls.every((call) => (call.choice as { disable_parallel_tool_use?: boolean }).disable_parallel_tool_use === true)).toBe(true);
+    expect(run.calls.map((call) => call.invocation.timeoutMs)).toEqual([
+      CONTENT_LOCALIZE_V3_PROVIDER_CALL_TIMEOUT_MS,
+      CONTENT_LOCALIZE_V3_PROVIDER_CALL_TIMEOUT_MS,
+    ]);
   });
 
   it('preserves Experience entry identity and excludes title/company ownership', async () => {
@@ -178,6 +183,12 @@ describe('M6.4 actual /api/generate route boundary', () => {
       CONTENT_LOCALIZE_V3_PROVIDER_TOOL_NAMES.evaluator,
       CONTENT_LOCALIZE_V3_PROVIDER_TOOL_NAMES.repair,
       CONTENT_LOCALIZE_V3_PROVIDER_TOOL_NAMES.evaluator,
+    ]);
+    expect(run.calls.map((call) => call.invocation.timeoutMs)).toEqual([
+      CONTENT_LOCALIZE_V3_PROVIDER_CALL_TIMEOUT_MS,
+      CONTENT_LOCALIZE_V3_PROVIDER_CALL_TIMEOUT_MS,
+      CONTENT_LOCALIZE_V3_PROVIDER_CALL_TIMEOUT_MS,
+      CONTENT_LOCALIZE_V3_PROVIDER_CALL_TIMEOUT_MS,
     ]);
     expect(run.calls.every((call) => call.strict === true)).toBe(true);
     expect(run.calls.every((call) => (call.choice as { type?: string }).type === 'tool')).toBe(true);

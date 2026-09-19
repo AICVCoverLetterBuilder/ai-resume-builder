@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import {
   AI_PROVIDER_CALL_TIMEOUT_MS,
   AI_RESPONSE_GUARD_MS,
+  CONTENT_LOCALIZE_V3_PROVIDER_CALL_TIMEOUT_MS,
   CONTENT_LOCALIZE_V3_CLIENT_TIMEOUT_MS,
   CONTENT_LOCALIZE_V3_ROUTE_BUDGET_MS,
   callProviderWithDeadline,
@@ -30,34 +31,52 @@ function snapshot(): ContentLocalizeM6Snapshot {
 }
 
 describe('content-localize-v3 deadline ownership', () => {
-  it('T1: provider timer owns its deadline and emits explicit provenance', async () => {
+  it.each([
+    ['T1 writer', 'provider'],
+    ['T2 primary evaluator', 'verifier'],
+    ['T3 repair writer', 'provider'],
+    ['T4 repair evaluator', 'verifier'],
+  ] as const)('%s timer receives the dedicated 15000ms slice', async (_phase, timeoutStage) => {
     vi.useFakeTimers();
     try {
-      const pending = callProviderWithDeadline(() => new Promise<never>(() => undefined));
+      const pending = callProviderWithDeadline(
+        () => new Promise<never>(() => undefined),
+        null,
+        CONTENT_LOCALIZE_V3_PROVIDER_CALL_TIMEOUT_MS,
+        timeoutStage,
+      );
       const rejection = pending.catch((error) => error);
-      await vi.advanceTimersByTimeAsync(AI_PROVIDER_CALL_TIMEOUT_MS);
-      await expect(rejection).resolves.toMatchObject({ name: 'AbortError', deadlineOwner: 'provider_transport' });
+      await vi.advanceTimersByTimeAsync(CONTENT_LOCALIZE_V3_PROVIDER_CALL_TIMEOUT_MS);
+      await expect(rejection).resolves.toMatchObject({
+        name: 'AbortError',
+        deadlineOwner: timeoutStage === 'verifier' ? 'verifier_transport' : 'provider_transport',
+        configuredTimeoutMs: 15_000,
+      });
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it('A: the real provider timer reaches the server as provider_call', async () => {
+  it('T2/T5: the content-localize writer timer reaches the server as provider_call', async () => {
     vi.useFakeTimers();
     try {
       const resultPromise = executeContentLocalizeM6Server(snapshot(), {
-        writer: () => callProviderWithDeadline(() => new Promise<never>(() => undefined)),
+        writer: () => callProviderWithDeadline(
+          () => new Promise<never>(() => undefined),
+          null,
+          CONTENT_LOCALIZE_V3_PROVIDER_CALL_TIMEOUT_MS,
+        ),
         evaluator: async () => ({}),
         repair: async () => ({}),
       });
-      await vi.advanceTimersByTimeAsync(AI_PROVIDER_CALL_TIMEOUT_MS);
+      await vi.advanceTimersByTimeAsync(CONTENT_LOCALIZE_V3_PROVIDER_CALL_TIMEOUT_MS);
       const result = await resultPromise;
       expect(result).toMatchObject({ status: 'handled_failure', reason: 'deadline_exceeded' });
       expect((result as { diagnostic: Record<string, unknown> }).diagnostic).toMatchObject({
         deadlineExceeded: true,
         deadlineOwner: 'provider_call',
         deadlinePhase: 'writer',
-        providerCallTimeoutMs: AI_PROVIDER_CALL_TIMEOUT_MS,
+        providerCallTimeoutMs: CONTENT_LOCALIZE_V3_PROVIDER_CALL_TIMEOUT_MS,
       });
     } finally {
       vi.useRealTimers();
@@ -88,7 +107,7 @@ describe('content-localize-v3 deadline ownership', () => {
     }
   });
 
-  it('T2/T5: a nearer shared route budget wins deterministically', async () => {
+  it('T3/T4: a nearer shared route budget wins deterministically', async () => {
     vi.useFakeTimers();
     try {
       const start = Date.now();
@@ -103,7 +122,7 @@ describe('content-localize-v3 deadline ownership', () => {
     }
   });
 
-  it('T3/T4: an upstream AbortError without local provenance is transport failure', async () => {
+  it('T13: an upstream AbortError without local provenance is transport failure', async () => {
     const upstreamAbort = Object.assign(new Error('upstream closed'), {
       name: 'AbortError', deadlineExceeded: true, deadlineOwner: 'provider_call',
     });
@@ -116,7 +135,22 @@ describe('content-localize-v3 deadline ownership', () => {
     expect(readLocalDeadlineProvenance(upstreamAbort)).toMatchObject({ deadlineExceeded: false, deadlineOwner: 'unknown' });
   });
 
-  it('D: contradictory raw timeout fields cannot override authoritative unowned evidence', async () => {
+  it('T7: an unrelated provider call retains the global 8000ms timing', async () => {
+    vi.useFakeTimers();
+    try {
+      const pending = callProviderWithDeadline(() => new Promise<never>(() => undefined));
+      const rejection = pending.catch((error) => error);
+      await vi.advanceTimersByTimeAsync(AI_PROVIDER_CALL_TIMEOUT_MS);
+      await expect(rejection).resolves.toMatchObject({
+        name: 'AbortError',
+        configuredTimeoutMs: AI_PROVIDER_CALL_TIMEOUT_MS,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('T14: contradictory raw timeout fields cannot override authoritative unowned evidence', async () => {
     const misleading = Object.assign(new Error('upstream closed'), {
       name: 'AbortError', deadlineExceeded: true, deadlineOwner: 'provider_call',
     });
@@ -141,7 +175,7 @@ describe('content-localize-v3 deadline ownership', () => {
     });
   });
 
-  it('E: raw timeout-shaped fields without canonical provenance are non-deadline', async () => {
+  it('T16: raw timeout-shaped fields without canonical provenance are non-deadline', async () => {
     for (const owner of ['provider_call', 'route_budget'] as const) {
       const rawOnly = Object.assign(new Error(`raw ${owner}`), {
         name: 'AbortError',
@@ -184,8 +218,11 @@ describe('content-localize-v3 deadline ownership', () => {
     }
   });
 
-  it('T6-T10: both clients and all four phases fit the content-localize budget', () => {
-    const fourPhases = AI_PROVIDER_CALL_TIMEOUT_MS * 4;
+  it('T6-T12: global timing stays unchanged and all four content phases fit', () => {
+    const fourPhases = CONTENT_LOCALIZE_V3_PROVIDER_CALL_TIMEOUT_MS * 4;
+    expect(AI_PROVIDER_CALL_TIMEOUT_MS).toBe(8_000);
+    expect(CONTENT_LOCALIZE_V3_PROVIDER_CALL_TIMEOUT_MS).toBe(15_000);
+    expect(fourPhases + AI_RESPONSE_GUARD_MS).toBe(62_000);
     expect(fourPhases + AI_RESPONSE_GUARD_MS).toBeLessThan(CONTENT_LOCALIZE_V3_ROUTE_BUDGET_MS);
     expect(CONTENT_LOCALIZE_V3_ROUTE_BUDGET_MS).toBeLessThan(CONTENT_LOCALIZE_V3_CLIENT_TIMEOUT_MS);
     expect(CONTENT_LOCALIZE_V3_CLIENT_TIMEOUT_MS).toBeLessThan(90_000);
@@ -197,16 +234,16 @@ describe('content-localize-v3 deadline ownership', () => {
     expect(pageSource).toContain('runContentLocalizeV3ExperienceClientOperation');
   });
 
-  it('T11-T13: diagnostics expose bounded ownership and preserve fail-closed invariants', () => {
+  it('T5/T16: diagnostics expose bounded ownership and preserve fail-closed invariants', () => {
     const server = {
       ...createEmptyContentLocalizeV3ServerDiagnostic(),
       deadlineExceeded: true,
       deadlineOwner: 'provider_call' as const,
       deadlinePhase: 'writer' as const,
-      providerCallTimeoutMs: AI_PROVIDER_CALL_TIMEOUT_MS,
+      providerCallTimeoutMs: CONTENT_LOCALIZE_V3_PROVIDER_CALL_TIMEOUT_MS,
       routeBudgetMs: CONTENT_LOCALIZE_V3_ROUTE_BUDGET_MS,
-      providerElapsedMs: 8_000,
-      routeElapsedMs: 8_100,
+      providerElapsedMs: CONTENT_LOCALIZE_V3_PROVIDER_CALL_TIMEOUT_MS,
+      routeElapsedMs: CONTENT_LOCALIZE_V3_PROVIDER_CALL_TIMEOUT_MS + 100,
     };
     const diagnostic = buildContentLocalizeV3TerminalDiagnostic({
       snapshot: snapshot(), operation: 'summary_translate', routeHttpStatus: 504,
