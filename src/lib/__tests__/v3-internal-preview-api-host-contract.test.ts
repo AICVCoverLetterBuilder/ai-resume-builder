@@ -37,7 +37,6 @@ const v3RoutingContract = require('../../../scripts/android-internal-v3-routing-
   enforceAndroidInternalV3RoutingContract: (environment: Environment) => {
     revision: string;
     publicFlag: 'true';
-    serverFlag: 'true';
     summaryStyleOwner: 'm5';
   };
   assertAndroidInternalM5Assets: (blob: string) => {
@@ -162,7 +161,6 @@ function expectEveryChildM5Enabled(childCalls: ChildCall[]) {
   expect(childCalls.length).toBeGreaterThan(0);
   for (const call of childCalls) {
     expect(call.options.env?.NEXT_PUBLIC_AI_CORE_V3_ENABLED).toBe('true');
-    expect(call.options.env?.AI_CORE_V3_ENABLED).toBe('true');
   }
 }
 
@@ -560,33 +558,29 @@ describe('AI Core V3 internal preview API-host build contract', () => {
     assertImportSafe(ANDROID_SCRIPT, 'runAndroidInternalBuild');
   });
 
-  it('makes an omitted AAB562-style environment explicitly M5-owned', () => {
+  it('makes an omitted internal environment explicitly V3-owned through one public selector', () => {
     const environment: Environment = { UNRELATED_SENTINEL: 'preserved' };
     const result = v3RoutingContract.enforceAndroidInternalV3RoutingContract(environment);
 
     expect(result).toEqual({
-      revision: 'android-internal-v3-routing-contract-562-v1',
+      revision: 'android-internal-v3-routing-contract-m9-v1',
       publicFlag: 'true',
-      serverFlag: 'true',
       summaryStyleOwner: 'm5',
     });
     expect(environment).toEqual({
       UNRELATED_SENTINEL: 'preserved',
       NEXT_PUBLIC_AI_CORE_V3_ENABLED: 'true',
-      AI_CORE_V3_ENABLED: 'true',
     });
   });
 
-  it.each([
-    ['public', { NEXT_PUBLIC_AI_CORE_V3_ENABLED: 'false' }, 'invalid_next_public_ai_core_v3_enabled'],
-    ['server', { AI_CORE_V3_ENABLED: 'false' }, 'invalid_ai_core_v3_enabled'],
-  ] as const)('rejects an explicitly disabled %s V3 flag', (_label, environment, code) => {
+  it('rejects an explicitly disabled public V3 selector', () => {
+    const environment = { NEXT_PUBLIC_AI_CORE_V3_ENABLED: 'false' };
     expect(() => v3RoutingContract.enforceAndroidInternalV3RoutingContract(environment))
       .toThrow(v3RoutingContract.AndroidInternalV3RoutingContractError);
     try {
       v3RoutingContract.enforceAndroidInternalV3RoutingContract(environment);
     } catch (error) {
-      expect((error as { code?: string }).code).toBe(code);
+      expect((error as { code?: string }).code).toBe('invalid_next_public_ai_core_v3_enabled');
     }
   });
 
@@ -596,14 +590,14 @@ describe('AI Core V3 internal preview API-host build contract', () => {
       'summary_style',
       'summary_stronger',
       'notApplicableDiagnosticFieldViolations',
-      'AI_CORE_V3_ENABLED:"true"',
+      'NEXT_PUBLIC_AI_CORE_V3_ENABLED:"true"',
     ].join(' ');
     expect(v3RoutingContract.assertAndroidInternalM5Assets(enabled)).toMatchObject({
       compiledPublicFlag: true,
       summaryStyleOwner: 'm5',
     });
     expect(() => v3RoutingContract.assertAndroidInternalM5Assets(
-      enabled.replace('AI_CORE_V3_ENABLED:"true"', 'AI_CORE_V3_ENABLED:runtime.env.NEXT_PUBLIC_AI_CORE_V3_ENABLED'),
+      enabled.replace('NEXT_PUBLIC_AI_CORE_V3_ENABLED:"true"', 'NEXT_PUBLIC_AI_CORE_V3_ENABLED:runtime.env.NEXT_PUBLIC_AI_CORE_V3_ENABLED'),
     )).toThrow(/remained a runtime lookup/u);
     expect(() => v3RoutingContract.assertAndroidInternalM5Assets(
       enabled.replace('m5Operation', 'legacyDiagnostic'),
@@ -657,7 +651,6 @@ describe('AI Core V3 internal preview API-host build contract', () => {
     expectEveryChildM5Enabled(childCalls);
     expect(result.childEnvironment.UNRELATED_SENTINEL).toBe('preserved');
     expect(result.childEnvironment.NEXT_PUBLIC_AI_CORE_V3_ENABLED).toBe('true');
-    expect(result.childEnvironment.AI_CORE_V3_ENABLED).toBe('true');
     expect(result.childEnvironment.NEXT_PUBLIC_BUILD_CHANNEL).toBe('internal');
     expect(result.childEnvironment.NEXT_PUBLIC_ENABLE_AI_TEST_RESET).toBe('true');
     expect(result.childEnvironment.ANDROID_VERSION_CODE).toBe('408');
@@ -686,7 +679,6 @@ describe('AI Core V3 internal preview API-host build contract', () => {
       .toEqual(new Set([PREVIEW]));
     expect(result.childEnvironment.UNRELATED_SENTINEL).toBe('preserved');
     expect(result.childEnvironment.NEXT_PUBLIC_AI_CORE_V3_ENABLED).toBe('true');
-    expect(result.childEnvironment.AI_CORE_V3_ENABLED).toBe('true');
     expect(result.childEnvironment.NEXT_PUBLIC_BUILD_CHANNEL).toBe('internal');
     expect(result.childEnvironment.NEXT_PUBLIC_ENABLE_AI_TEST_RESET).toBe('true');
     expect(result.childEnvironment.SIGNING_SENTINEL).toBe('unchanged');
@@ -716,7 +708,6 @@ describe('AI Core V3 internal preview API-host build contract', () => {
     expectEveryChildM5Enabled(childCalls);
     expect(result.childEnvironment.UNRELATED_SENTINEL).toBe('preserved');
     expect(result.childEnvironment.NEXT_PUBLIC_AI_CORE_V3_ENABLED).toBe('true');
-    expect(result.childEnvironment.AI_CORE_V3_ENABLED).toBe('true');
     expect(result.childEnvironment.NEXT_PUBLIC_BUILD_CHANNEL).toBe('internal');
     expect(result.childEnvironment.NEXT_PUBLIC_ENABLE_AI_TEST_RESET).toBe('true');
     expect(result.childEnvironment.SIGNING_SENTINEL).toBe('unchanged');
@@ -754,7 +745,6 @@ describe('AI Core V3 internal preview API-host build contract', () => {
       .toEqual(new Set([PREVIEW]));
     expect(result.childEnvironment.UNRELATED_SENTINEL).toBe('preserved');
     expect(result.childEnvironment.NEXT_PUBLIC_AI_CORE_V3_ENABLED).toBe('true');
-    expect(result.childEnvironment.AI_CORE_V3_ENABLED).toBe('true');
     expect(result.childEnvironment.NEXT_PUBLIC_BUILD_CHANNEL).toBe('internal');
     expect(result.childEnvironment.NEXT_PUBLIC_ENABLE_AI_TEST_RESET).toBe('true');
     expect(result.childEnvironment.SIGNING_SENTINEL).toBe('unchanged');

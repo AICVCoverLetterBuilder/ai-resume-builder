@@ -286,8 +286,8 @@ describe('M8 Experience V3 Generate deadline ownership', () => {
     vi.stubEnv('ANTHROPIC_API_KEY', 'test-key');
     vi.stubEnv('ANTHROPIC_AUTH_TOKEN', '');
     vi.stubEnv('PRO_SIGNING_KEY', '');
-    vi.stubEnv('AI_CORE_V3_ENABLED', 'true');
-    vi.stubEnv('NEXT_PUBLIC_AI_CORE_V3_ENABLED', '');
+    vi.stubEnv('AI_CORE_V3_ENABLED', 'false');
+    vi.stubEnv('NEXT_PUBLIC_AI_CORE_V3_ENABLED', 'true');
     vi.resetModules();
     const value = manifest();
     anthropicCreateMock

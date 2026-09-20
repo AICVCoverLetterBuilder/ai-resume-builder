@@ -265,7 +265,28 @@ function pageStyleCandidate(body: Record<string, unknown>, text: string): Record
   return {
     kind: 'candidate_ready', style, mode: snapshot.mode,
     candidate: { ...candidate, style, locale: snapshot.requestedLocale },
-    evidence: { snapshotHash: snapshot.snapshotHash, manifestHash: snapshot.manifestHash, candidateHash: candidate.hash, retries: 0, fallbacks: 0, v2Fallthrough: 0 },
+    evidence: {
+      snapshotHash: snapshot.snapshotHash,
+      manifestHash: snapshot.manifestHash,
+      candidateHash: candidate.hash,
+      retries: 0,
+      fallbacks: 0,
+      v2Fallthrough: 0,
+      unsupportedClaimCategory: null,
+      sourceFloorMismatchClass: null,
+      employmentStateContradictionClass: null,
+      employmentOppositeFrameDetected: false,
+      evaluatorNoOpClaimed: false,
+      writerOutputContractFailureClass: null,
+      evaluatorOutputContractFailureClass: null,
+      writerCandidateReachedValidation: true,
+      evaluatorReached: true,
+      safeNoOpConsidered: false,
+      safeNoOpSelected: false,
+      safeNoOpEligibilityReason: 'eligible',
+      roleIdentityResolution: 'not_required',
+      m5ProviderFailure: null,
+    },
   };
 }
 

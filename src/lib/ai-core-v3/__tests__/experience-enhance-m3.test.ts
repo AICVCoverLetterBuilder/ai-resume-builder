@@ -356,11 +356,11 @@ describe('M3 A. routing and feature flag', () => {
     expect(run.requestCount).toBe(0);
   });
 
-  it('6. flag reset restores false', async () => {
-    setAiCoreV3TestOverride(true);
+  it('6. flag reset restores the M9 V3 default', async () => {
+    setAiCoreV3TestOverride(false);
     resetAiCoreV3TestOverride();
     const { isAiCoreV3Enabled } = await import('..');
-    expect(isAiCoreV3Enabled()).toBe(false);
+    expect(isAiCoreV3Enabled()).toBe(true);
   });
 
   it('7. empty source is not applicable to M3', () => {

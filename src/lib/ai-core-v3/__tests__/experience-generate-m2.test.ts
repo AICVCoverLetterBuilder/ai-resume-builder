@@ -727,20 +727,20 @@ describe('M2 E and F. narrow transaction, usage, and regression defaults', () =>
     });
   });
 
-  it('42. feature flag still defaults false', async () => {
+  it('42. M9 feature policy defaults to V3', async () => {
     resetAiCoreV3TestOverride();
     const { isAiCoreV3Enabled } = await import('..');
-    expect(isAiCoreV3Enabled()).toBe(false);
+    expect(isAiCoreV3Enabled()).toBe(true);
   });
 
-  it('43. test reset restores the false default', async () => {
-    setAiCoreV3TestOverride(true);
+  it('43. test reset restores the V3 default', async () => {
+    setAiCoreV3TestOverride(false);
     resetAiCoreV3TestOverride();
     const { isAiCoreV3Enabled } = await import('..');
-    expect(isAiCoreV3Enabled()).toBe(false);
+    expect(isAiCoreV3Enabled()).toBe(true);
   });
 
-  it('44. existing V2 path remains selected by default', () => {
+  it('44. explicit false still keeps the existing V2 path available', () => {
     expect(classifyExperienceV3Routing(makeInput({ enabled: false }))).toBe('not_applicable');
   });
 

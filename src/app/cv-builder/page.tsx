@@ -517,6 +517,9 @@ export default function CVBuilderPage() {
     getAiGate,
     getProAuthObservation,
   } = useApp();
+  const aiCoreV3Enabled = isAiCoreV3Enabled({
+    NEXT_PUBLIC_AI_CORE_V3_ENABLED: process.env.NEXT_PUBLIC_AI_CORE_V3_ENABLED,
+  });
   const [cv, setCv] = useState<CVData>(currentCv || emptyCV());
   const cvRef = useRef<CVData>(cv);
   // This is local current-state synchronization, not an AI transaction owner.
@@ -1713,9 +1716,7 @@ export default function CVBuilderPage() {
       }
       return cvRef.current.summary || '';
     };
-    const summaryV3Enabled = isAiCoreV3Enabled({
-      AI_CORE_V3_ENABLED: process.env.NEXT_PUBLIC_AI_CORE_V3_ENABLED,
-    });
+    const summaryV3Enabled = aiCoreV3Enabled;
     const summaryV3InputAtPress = Object.freeze({
       enabled: summaryV3Enabled,
       operationKind: 'summary_generate' as const,
@@ -2423,9 +2424,7 @@ export default function CVBuilderPage() {
       }
       return currentValue;
     };
-    const experienceV3Enabled = isAiCoreV3Enabled({
-      AI_CORE_V3_ENABLED: process.env.NEXT_PUBLIC_AI_CORE_V3_ENABLED,
-    });
+    const experienceV3Enabled = aiCoreV3Enabled;
     let experienceV3RouteHttpStatus: number | null = null;
     const experienceV3Result = experienceV3Enabled
       ? await runExperienceV3GenerateAdapter({
@@ -3831,6 +3830,10 @@ export default function CVBuilderPage() {
   };
 
   const openSummaryTranslateDialog = () => {
+    if (!aiCoreV3Enabled) {
+      toast.error(aiErrorMessage('ai_feature_unavailable', locale));
+      return;
+    }
     const liveCv = cvRef.current;
     const sourceText = String(liveCv.summary || '');
     if (!sourceText.trim()) {
@@ -3858,6 +3861,11 @@ export default function CVBuilderPage() {
     const intent = summaryTranslateIntent;
     const targetLocale = summaryTranslateTargetLocale;
     if (!intent || !targetLocale) return;
+    if (!aiCoreV3Enabled) {
+      closeSummaryTranslateDialog();
+      toast.error(aiErrorMessage('ai_feature_unavailable', locale));
+      return;
+    }
 
     const liveCvAtConfirm = cvRef.current;
     const currentSourceText = String(liveCvAtConfirm.summary || '');
@@ -3948,6 +3956,10 @@ export default function CVBuilderPage() {
   };
 
   const openExperienceTranslateDialog = (experienceEntryId: string) => {
+    if (!aiCoreV3Enabled) {
+      toast.error(aiErrorMessage('ai_feature_unavailable', locale));
+      return;
+    }
     const liveCv = cvRef.current;
     const entry = liveCv.experience.find((candidate) => candidate.id === experienceEntryId);
     const sourceText = entry?.description || '';
@@ -3970,6 +3982,11 @@ export default function CVBuilderPage() {
     const intent = experienceTranslateIntent;
     const targetLocale = experienceTranslateTargetLocale;
     if (!intent || !targetLocale || experienceTranslateConfirmingRef.current) return;
+    if (!aiCoreV3Enabled) {
+      closeExperienceTranslateDialog();
+      toast.error(aiErrorMessage('ai_feature_unavailable', locale));
+      return;
+    }
     const liveCvAtConfirm = cvRef.current;
     const entry = liveCvAtConfirm.experience.find((candidate) => candidate.id === intent.experienceEntryId);
     const sourceText = entry?.description || '';
@@ -4058,7 +4075,7 @@ export default function CVBuilderPage() {
 
   const handleRewrite = async (style: 'shorter' | 'stronger' | 'professional') => {
     if (rewritingStyle) return;
-    if (isAiCoreV3Enabled({ AI_CORE_V3_ENABLED: process.env.NEXT_PUBLIC_AI_CORE_V3_ENABLED })) {
+    if (aiCoreV3Enabled) {
       await handleSummaryV3Style(style);
       return;
     }

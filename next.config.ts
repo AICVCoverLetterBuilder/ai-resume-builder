@@ -1,6 +1,17 @@
 import type { NextConfig } from "next";
 import { execSync } from "node:child_process";
 import { resolve } from "node:path";
+import { resolveAiCoreV3Mode } from "./src/lib/ai-core-v3/feature-flag";
+
+/**
+ * Compile the one non-secret AI Core routing selector for both client and
+ * server. Absent/true selects the M9 V3 default; false or any invalid nonempty
+ * value compiles the explicit fail-closed V2 rollback.
+ */
+const compiledAiCoreV3Selector = resolveAiCoreV3Mode({
+  NEXT_PUBLIC_AI_CORE_V3_ENABLED: process.env.NEXT_PUBLIC_AI_CORE_V3_ENABLED,
+}) === 'v3_default' ? 'true' : 'false';
+process.env.NEXT_PUBLIC_AI_CORE_V3_ENABLED = compiledAiCoreV3Selector;
 
 /**
  * Compile the internal AI reset gate into a single NEXT_PUBLIC_* value that
@@ -71,6 +82,7 @@ const nextConfig: NextConfig = {
     tsconfigPath: 'tsconfig.build.json',
   },
   env: {
+    NEXT_PUBLIC_AI_CORE_V3_ENABLED: compiledAiCoreV3Selector,
     NEXT_PUBLIC_INTERNAL_AI_RESET_ENABLED: compiled,
     NEXT_PUBLIC_INTERNAL_TEST_PRO_ENTITLEMENT: internalTestProEntitlementEnabled ? 'true' : 'false',
     NEXT_PUBLIC_INTERNAL_TEST_PRO_BOOTSTRAP_CAPABILITY: internalTestProBootstrapCapability,

@@ -897,12 +897,12 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const v3RoutingEnabled = isAiCoreV3Enabled({
+      NEXT_PUBLIC_AI_CORE_V3_ENABLED: process.env.NEXT_PUBLIC_AI_CORE_V3_ENABLED,
+    });
+
     if (action === EXPERIENCE_V3_GENERATE_ACTION) {
-      const v3Enabled = isAiCoreV3Enabled({
-        AI_CORE_V3_ENABLED:
-          process.env.AI_CORE_V3_ENABLED ?? process.env.NEXT_PUBLIC_AI_CORE_V3_ENABLED,
-      });
-      if (!v3Enabled) {
+      if (!v3RoutingEnabled) {
         return jsonResponse({
           ok: false,
           action: EXPERIENCE_V3_GENERATE_ACTION,
@@ -2200,10 +2200,7 @@ Rules:
     }
 
     if (action === CONTENT_LOCALIZE_V3_OPERATION) {
-      const v3Enabled = isAiCoreV3Enabled({
-        AI_CORE_V3_ENABLED: process.env.AI_CORE_V3_ENABLED ?? process.env.NEXT_PUBLIC_AI_CORE_V3_ENABLED,
-      });
-      if (!v3Enabled) {
+      if (!v3RoutingEnabled) {
         const gateFailure = createContentLocalizeM6HandledFailure('v3_feature_disabled');
         return jsonResponse({
           status: gateFailure.status,
@@ -2250,10 +2247,7 @@ Rules:
     if (isSummaryV3StyleRouteAction(action)) {
       // M5.2 owns only the three exact same-locale Summary style operations.
       // The shared adapter delegates domain validation and repair policy to M5.1.
-      const v3Enabled = isAiCoreV3Enabled({
-        AI_CORE_V3_ENABLED: process.env.AI_CORE_V3_ENABLED ?? process.env.NEXT_PUBLIC_AI_CORE_V3_ENABLED,
-      });
-      if (!v3Enabled) {
+      if (!v3RoutingEnabled) {
         return jsonResponse(
           createSummaryV3StyleM5RouteFailure('v3_feature_disabled'),
           { status: 409 },
@@ -2312,11 +2306,7 @@ Rules:
     if (action === SUMMARY_V3_GENERATE_ACTION) {
       // M4 starts at route entry and remains below both maxDuration and the client abort.
       deadlineAt = computeSummaryV3ServerDeadline(serverReceivedAt);
-      const v3Enabled = isAiCoreV3Enabled({
-        AI_CORE_V3_ENABLED:
-          process.env.AI_CORE_V3_ENABLED ?? process.env.NEXT_PUBLIC_AI_CORE_V3_ENABLED,
-      });
-      if (!v3Enabled) {
+      if (!v3RoutingEnabled) {
         return jsonResponse({
           ok: false,
           action: SUMMARY_V3_GENERATE_ACTION,
@@ -2916,11 +2906,7 @@ ${sourceFactsText || '(none)'}`
     }
 
     if (action === EXPERIENCE_V3_ENHANCE_ACTION) {
-      const v3Enabled = isAiCoreV3Enabled({
-        AI_CORE_V3_ENABLED:
-          process.env.AI_CORE_V3_ENABLED ?? process.env.NEXT_PUBLIC_AI_CORE_V3_ENABLED,
-      });
-      if (!v3Enabled) {
+      if (!v3RoutingEnabled) {
         return jsonResponse({
           ok: false,
           action: EXPERIENCE_V3_ENHANCE_ACTION,

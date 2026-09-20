@@ -131,7 +131,7 @@ describe('M2 focused page and route integration', () => {
     let coreModule: typeof import('..') | null = null;
 
     try {
-      process.env.AI_CORE_V3_ENABLED = 'false';
+      process.env.AI_CORE_V3_ENABLED = 'true';
       process.env.NEXT_PUBLIC_AI_CORE_V3_ENABLED = 'false';
       process.env.ANTHROPIC_API_KEY = 'server-disabled-route-test-key';
       delete process.env.ANTHROPIC_AUTH_TOKEN;
@@ -149,7 +149,7 @@ describe('M2 focused page and route integration', () => {
       coreModule = await import('..');
       coreModule.resetAiCoreV3TestOverride();
       expect(coreModule.isAiCoreV3Enabled({
-        AI_CORE_V3_ENABLED: process.env.AI_CORE_V3_ENABLED,
+        NEXT_PUBLIC_AI_CORE_V3_ENABLED: process.env.NEXT_PUBLIC_AI_CORE_V3_ENABLED,
       })).toBe(false);
 
       const manifest = {
@@ -228,7 +228,7 @@ describe('M2 focused page and route integration', () => {
     }
     const restoredCore = await import('..');
     restoredCore.resetAiCoreV3TestOverride();
-    expect(restoredCore.isAiCoreV3Enabled()).toBe(false);
+    expect(restoredCore.isAiCoreV3Enabled()).toBe(true);
     vi.resetModules();
   });
 
@@ -307,7 +307,7 @@ describe('M2 focused page and route integration', () => {
     let coreModule: typeof import('..') | null = null;
 
     try {
-      process.env.AI_CORE_V3_ENABLED = 'true';
+      process.env.AI_CORE_V3_ENABLED = 'false';
       process.env.NEXT_PUBLIC_AI_CORE_V3_ENABLED = 'true';
       process.env.ANTHROPIC_API_KEY = 'enabled-route-test-key';
       delete process.env.ANTHROPIC_AUTH_TOKEN;

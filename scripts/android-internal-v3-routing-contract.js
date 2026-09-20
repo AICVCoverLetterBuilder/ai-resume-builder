@@ -9,9 +9,8 @@
  * bundling before Capacitor packaging can continue.
  */
 const ANDROID_INTERNAL_V3_ROUTING_CONTRACT_REVISION =
-  'android-internal-v3-routing-contract-562-v1';
+  'android-internal-v3-routing-contract-m9-v1';
 const AI_CORE_V3_PUBLIC_FLAG = 'NEXT_PUBLIC_AI_CORE_V3_ENABLED';
-const AI_CORE_V3_SERVER_FLAG = 'AI_CORE_V3_ENABLED';
 const AI_CORE_V3_REQUIRED_VALUE = 'true';
 const ANDROID_INTERNAL_M5_ASSET_MARKERS = Object.freeze([
   'm5Operation',
@@ -43,22 +42,18 @@ function assertMutableEnvironment(environment) {
 
 function enforceAndroidInternalV3RoutingContract(environment) {
   assertMutableEnvironment(environment);
-  for (const name of [AI_CORE_V3_PUBLIC_FLAG, AI_CORE_V3_SERVER_FLAG]) {
-    const declared = normalizedFlag(environment, name);
-    if (declared && declared !== AI_CORE_V3_REQUIRED_VALUE) {
-      throw new AndroidInternalV3RoutingContractError(
-        `invalid_${name.toLowerCase()}`,
-        `${name} must be exactly "true" for an internal Android M5 candidate`,
-      );
-    }
+  const declared = normalizedFlag(environment, AI_CORE_V3_PUBLIC_FLAG);
+  if (declared && declared !== AI_CORE_V3_REQUIRED_VALUE) {
+    throw new AndroidInternalV3RoutingContractError(
+      `invalid_${AI_CORE_V3_PUBLIC_FLAG.toLowerCase()}`,
+      `${AI_CORE_V3_PUBLIC_FLAG} must be exactly "true" for an internal Android M5 candidate`,
+    );
   }
 
   environment[AI_CORE_V3_PUBLIC_FLAG] = AI_CORE_V3_REQUIRED_VALUE;
-  environment[AI_CORE_V3_SERVER_FLAG] = AI_CORE_V3_REQUIRED_VALUE;
   return Object.freeze({
     revision: ANDROID_INTERNAL_V3_ROUTING_CONTRACT_REVISION,
     publicFlag: AI_CORE_V3_REQUIRED_VALUE,
-    serverFlag: AI_CORE_V3_REQUIRED_VALUE,
     summaryStyleOwner: 'm5',
   });
 }
@@ -78,13 +73,13 @@ function assertAndroidInternalM5Assets(blob) {
       );
     }
   }
-  if (blob.includes(AI_CORE_V3_PUBLIC_FLAG)) {
+  if (new RegExp(`(?:process|runtime)\\.env\\.${AI_CORE_V3_PUBLIC_FLAG}`, 'u').test(blob)) {
     throw new AndroidInternalV3RoutingContractError(
       'unresolved_public_v3_flag',
       `${AI_CORE_V3_PUBLIC_FLAG} remained a runtime lookup in Android internal assets`,
     );
   }
-  if (!/(?:["']?AI_CORE_V3_ENABLED["']?)\s*:\s*["']true["']/u.test(blob)) {
+  if (!/(?:["']?NEXT_PUBLIC_AI_CORE_V3_ENABLED["']?)\s*:\s*["']true["']/u.test(blob)) {
     throw new AndroidInternalV3RoutingContractError(
       'm5_route_not_compiled_enabled',
       'Android internal assets do not contain the compiled AI Core V3 enabled route',
@@ -101,7 +96,6 @@ function assertAndroidInternalM5Assets(blob) {
 module.exports = {
   ANDROID_INTERNAL_V3_ROUTING_CONTRACT_REVISION,
   AI_CORE_V3_PUBLIC_FLAG,
-  AI_CORE_V3_SERVER_FLAG,
   AI_CORE_V3_REQUIRED_VALUE,
   ANDROID_INTERNAL_M5_ASSET_MARKERS,
   AndroidInternalV3RoutingContractError,
