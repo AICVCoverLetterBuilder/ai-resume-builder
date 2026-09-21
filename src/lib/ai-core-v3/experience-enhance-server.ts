@@ -14,6 +14,11 @@ import {
 } from './experience-enhance';
 import { immutableCopy } from './immutability';
 import { INTERNAL_AI_RESET_ENABLED } from '../build-channel';
+import { readProviderTimingEvidence } from '../ai-request-timing';
+import {
+  readExperienceV3ProviderDeadlineOwner,
+  rememberExperienceV3ProviderDeadlineOwner,
+} from './experience-v3-production-observability';
 import {
   unavailableExperienceV3DiagnosticEvidence,
   type ExperienceV3ProviderErrorClass,
@@ -142,9 +147,22 @@ export function classifyExperienceV3EnhanceProviderFailure(
   const providerBody = record?.error && typeof record.error === 'object'
     ? record.error as Record<string, unknown>
     : null;
+  const timing = readProviderTimingEvidence(error);
+  const timingOwner = timing?.deadlineOwner;
+  const deadlineOwner = timingOwner === 'provider_transport'
+    || timingOwner === 'verifier_transport'
+    || timingOwner === 'route_deadline'
+    || timingOwner === 'client_abort'
+    ? timingOwner
+    : (record?.deadlineOwner === 'provider_transport'
+      || record?.deadlineOwner === 'verifier_transport'
+      || record?.deadlineOwner === 'route_deadline'
+      || record?.deadlineOwner === 'client_abort'
+      ? record.deadlineOwner
+      : null);
   const rawRequestId = record?.requestID;
   const message = error instanceof Error && error.message.trim() ? error.message : null;
-  return {
+  const evidence = {
     providerFailureStage: resolvedStage,
     providerErrorClass: providerErrorClass(error),
     providerHttpStatus: status,
@@ -156,7 +174,9 @@ export function classifyExperienceV3EnhanceProviderFailure(
     providerRetryable: retryableForType(type),
     providerMessageFingerprint: message ? hashExperienceV3EnhanceValue(message) : null,
     providerStructuralFieldPath: structuralPath(fieldPath),
-  };
+  } as ExperienceV3ProviderFailureEvidence;
+  rememberExperienceV3ProviderDeadlineOwner(evidence, deadlineOwner);
+  return evidence;
 }
 
 /** Backward-compatible writer name; the evidence fields are provider-generic. */
@@ -170,6 +190,10 @@ export class ExperienceV3EnhanceProviderTransportError extends Error {
     super('M3 provider transport failure');
     this.name = 'ExperienceV3EnhanceProviderTransportError';
     this.evidence = immutableCopy(evidence);
+    rememberExperienceV3ProviderDeadlineOwner(
+      this.evidence,
+      readExperienceV3ProviderDeadlineOwner(evidence),
+    );
   }
 }
 
@@ -422,7 +446,7 @@ function diagnosticEvidence(
     items.map((item) => [item.code, (item[key] ?? []).map(hashExperienceV3EnhanceValue)]),
   );
   const units = candidate?.units ?? [];
-  return immutableCopy({
+  const result = immutableCopy({
     candidatePresent: candidate !== null,
     candidateHash: candidate ? hashExperienceV3EnhanceValue(candidate.text) : null,
     candidateUnitCount: candidate ? units.length : null,
@@ -439,6 +463,11 @@ function diagnosticEvidence(
     violationEntryIdHashesByCode: hashIds([...semantic, ...language], 'entryIds'),
     primaryValidationRejectionCode: semantic[0]?.code ?? language[0]?.code ?? null,
   }) as ExperienceV3DiagnosticEvidence;
+  rememberExperienceV3ProviderDeadlineOwner(
+    result,
+    writerFailure ? readExperienceV3ProviderDeadlineOwner(writerFailure) : null,
+  );
+  return result;
 }
 
 function internalRejectionAudit(

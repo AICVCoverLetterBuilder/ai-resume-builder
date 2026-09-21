@@ -124,6 +124,10 @@ import {
   type SummaryV3RouteTerminalFailure,
 } from '@/lib/ai-core-v3/summary-v3-production-observability';
 import {
+  emitExperienceV3TerminalDiagnostic,
+  type ExperienceV3RouteTerminalFailure,
+} from '@/lib/ai-core-v3/experience-v3-production-observability';
+import {
   executeSummaryV3StyleRoute,
   isSummaryV3StyleRouteAction,
   normalizeSummaryV3StyleRouteRequest,
@@ -768,12 +772,26 @@ export async function POST(req: NextRequest) {
   let deadlineAt = computeServerDeadline(serverReceivedAt);
   let summaryV3ActionObserved = false;
   let summaryV3RequestId: unknown = req.headers.get('x-vercel-id');
+  let experienceV3EnhanceActionObserved = false;
+  let experienceV3EnhanceRequestId: unknown = req.headers.get('x-vercel-id');
   const emitSummaryV3RouteFailure = (
     httpStatus: number,
     routeFailure: SummaryV3RouteTerminalFailure,
   ): void => {
     emitSummaryV3TerminalDiagnostic({
       requestId: summaryV3RequestId,
+      httpStatus,
+      elapsedMs: Date.now() - serverReceivedAt,
+      routeFailure,
+    });
+  };
+  const emitExperienceV3RouteFailure = (
+    httpStatus: number,
+    routeFailure: ExperienceV3RouteTerminalFailure,
+  ): void => {
+    if (!experienceV3EnhanceActionObserved) return;
+    emitExperienceV3TerminalDiagnostic({
+      requestId: experienceV3EnhanceRequestId,
       httpStatus,
       elapsedMs: Date.now() - serverReceivedAt,
       routeFailure,
@@ -811,6 +829,8 @@ export async function POST(req: NextRequest) {
     const { action, proToken, freeUserId, requestId, ...params } = body;
     summaryV3ActionObserved = action === SUMMARY_V3_GENERATE_ACTION;
     summaryV3RequestId = req.headers.get('x-vercel-id') ?? requestId;
+    experienceV3EnhanceActionObserved = action === EXPERIENCE_V3_ENHANCE_ACTION;
+    experienceV3EnhanceRequestId = req.headers.get('x-vercel-id') ?? requestId;
     if (String(action) === EXPERIENCE_V3_GENERATE_ACTION) {
       deadlineAt = computeExperienceV3Deadline(serverReceivedAt);
     } else if (String(action) === EXPERIENCE_V3_ENHANCE_ACTION) {
@@ -860,6 +880,11 @@ export async function POST(req: NextRequest) {
           failureFamily: 'rate_limit',
         });
       }
+      emitExperienceV3RouteFailure(429, {
+        phase: 'route_rate_limit',
+        typedFailureCode: 'server_rate_limited',
+        failureFamily: 'rate_limit',
+      });
       return jsonResponse(
         {
           error: `Too many requests. Please try again in ${retryAfter} seconds.`,
@@ -909,6 +934,11 @@ export async function POST(req: NextRequest) {
             failureFamily: 'auth',
           });
         }
+        emitExperienceV3RouteFailure(403, {
+          phase: 'route_auth',
+          typedFailureCode: code,
+          failureFamily: 'auth',
+        });
         return jsonResponse(
           {
             error: 'Pro access required for AI features.',
@@ -931,6 +961,11 @@ export async function POST(req: NextRequest) {
           failureFamily: 'configuration',
         });
       }
+      emitExperienceV3RouteFailure(500, {
+        phase: 'route_configuration',
+        typedFailureCode: 'ai_service_not_configured',
+        failureFamily: 'configuration',
+      });
       return jsonResponse(
         { error: 'AI service is not configured. Please try again later.' },
         { status: 500 }
@@ -2960,6 +2995,11 @@ ${sourceFactsText || '(none)'}`
 
     if (action === EXPERIENCE_V3_ENHANCE_ACTION) {
       if (!v3RoutingEnabled) {
+        emitExperienceV3RouteFailure(409, {
+          phase: 'route_gate',
+          typedFailureCode: 'v3_feature_disabled',
+          failureFamily: 'feature_gate',
+        });
         return jsonResponse({
           ok: false,
           action: EXPERIENCE_V3_ENHANCE_ACTION,
@@ -3048,6 +3088,14 @@ ${sourceFactsText || '(none)'}`
             || result.typedReason === 'validator_exception'
             ? 502
             : 422;
+      if (!result.ok) {
+        emitExperienceV3TerminalDiagnostic({
+          requestId: experienceV3EnhanceRequestId,
+          httpStatus: status,
+          elapsedMs: Date.now() - serverReceivedAt,
+          result,
+        });
+      }
       return jsonResponse(
         result.ok ? result : redactExperienceV3EnhanceFailureForRoute(result),
         { status },
@@ -3434,6 +3482,11 @@ Infer ordinary day-to-day responsibilities from the job title and level. Output 
           failureFamily: 'route_exception',
         });
       }
+      emitExperienceV3RouteFailure(502, {
+        phase: 'route_exception',
+        typedFailureCode: 'generation_incomplete',
+        failureFamily: 'route_exception',
+      });
       return jsonResponse(
         { error: err.message, code: 'generation_validation_failed' },
         { status: 502 },
@@ -3452,6 +3505,11 @@ Infer ordinary day-to-day responsibilities from the job title and level. Output 
         failureFamily: 'route_exception',
       });
     }
+    emitExperienceV3RouteFailure(classified.status, {
+      phase: 'route_exception',
+      typedFailureCode: classified.code,
+      failureFamily: 'route_exception',
+    });
     console.info('[ai-diagnostics]', JSON.stringify({
       timestamp: Date.now(),
       httpStatus: classified.status,
