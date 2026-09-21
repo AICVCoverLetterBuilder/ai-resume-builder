@@ -20,6 +20,11 @@ import {
   rememberExperienceV3ProviderDeadlineOwner,
 } from './experience-v3-production-observability';
 import {
+  experienceV3EnhanceValidationCodesForCategory,
+  experienceV3EnhanceValidationPromptContract,
+  isExperienceV3EnhanceValidationCodeForCategory,
+} from './experience-enhance-validation-contract';
+import {
   unavailableExperienceV3DiagnosticEvidence,
   type ExperienceV3ProviderErrorClass,
   type ExperienceV3ProviderErrorType,
@@ -250,7 +255,10 @@ function evaluatorPhaseSchema(category: EvaluatedCategory) {
           additionalProperties: false,
           required: ['code', 'category', 'detail'],
           properties: {
-            code: { type: 'string' },
+            code: {
+              type: 'string',
+              enum: [...experienceV3EnhanceValidationCodesForCategory(category)],
+            },
             category: { type: 'string', const: category },
             detail: { type: 'string' },
             factIds: { type: 'array', items: { type: 'string' } },
@@ -686,7 +694,7 @@ function validateEnhanceStructure(
 
 function parseViolation(value: unknown, category: EvaluatedCategory): AiCoreV3Violation | null {
   if (!isRecord(value) || !exactKeys(value, ['code', 'category', 'detail'], ['factIds', 'entryIds'])) return null;
-  if (value.category !== category || typeof value.code !== 'string' || !value.code.trim()
+  if (value.category !== category || !isExperienceV3EnhanceValidationCodeForCategory(value.code, category)
     || typeof value.detail !== 'string' || !value.detail.trim()
     || (value.factIds !== undefined && (!Array.isArray(value.factIds) || value.factIds.some((id) => typeof id !== 'string')))
     || (value.entryIds !== undefined && (!Array.isArray(value.entryIds) || value.entryIds.some((id) => typeof id !== 'string')))) return null;
@@ -934,6 +942,7 @@ export function buildExperienceV3EnhanceEvaluatorPrompt(
     `Invoke only the ${EXPERIENCE_V3_ENHANCE_EVALUATOR_TOOL_NAME} tool. Do not emit text, Markdown, code fences, commentary, explanations, headings, or reasoning.`,
     'Its input has exactly operationId, entryId, snapshotHash, locale, phases, and materiality.',
     'phases contains exactly semantic and language_quality; each contains status and structured violations.',
+    experienceV3EnhanceValidationPromptContract(),
     `materiality status is material, no_op, or degraded. A material result requires exactly one kind from: ${EXPERIENCE_V3_ENHANCE_MATERIALITY_KINDS.join(', ')}.`,
     'For no_op or degraded, kind must be null. Include sourceEquivalent and degradationDetected booleans.',
     'Do not return candidate text, corrected units, apply authority, usage authority, persistence authority, or acceptance authority.',

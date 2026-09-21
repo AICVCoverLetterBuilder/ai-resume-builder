@@ -126,11 +126,11 @@ describe('Experience V3 production terminal observability', () => {
     const event = createExperienceV3TerminalDiagnostic({
       requestId: 'semantic-validation-detail', httpStatus: 422, elapsedMs: 4,
       result: {
-        ...failure('validation_rejected', { primaryValidationRejectionCode: 'evaluator_check_fact_retention' }),
+        ...failure('validation_rejected', { primaryValidationRejectionCode: 'source_fact_loss' }),
         validation: validation(
           { category: 'structural', status: 'passed', violations: [] },
           { category: 'semantic', status: 'failed', violations: [
-            { category: 'semantic', code: 'evaluator_check_fact_retention', detail: 'PRIVATE DETAIL' },
+            { category: 'semantic', code: 'source_fact_loss', detail: 'PRIVATE DETAIL' },
             { category: 'semantic', code: 'PRIVATE_UNKNOWN_CODE', detail: 'PRIVATE DETAIL' },
           ] },
           { category: 'language_quality', status: 'passed', violations: [] },
@@ -140,8 +140,8 @@ describe('Experience V3 production terminal observability', () => {
 
     expect(event).toMatchObject({
       validationStage: 'SEMANTIC_GROUNDING_VALIDATION',
-      primaryValidationCode: 'evaluator_check_fact_retention',
-      validationCodes: ['evaluator_check_fact_retention'],
+      primaryValidationCode: 'source_fact_loss',
+      validationCodes: ['source_fact_loss'],
       structuralViolationCount: 0,
       semanticViolationCount: 2,
       languageViolationCount: 0,
@@ -167,11 +167,11 @@ describe('Experience V3 production terminal observability', () => {
     const language = createExperienceV3TerminalDiagnostic({
       requestId: 'language-detail', httpStatus: 422, elapsedMs: 1,
       result: {
-        ...failure('validation_rejected', { primaryValidationRejectionCode: 'malformed_surface' }),
+        ...failure('validation_rejected', { primaryValidationRejectionCode: 'grammar_defect' }),
         validation: validation(
           { category: 'structural', status: 'passed', violations: [] },
           { category: 'semantic', status: 'passed', violations: [] },
-          { category: 'language_quality', status: 'failed', violations: [{ category: 'language_quality', code: 'malformed_surface', detail: 'private' }] },
+          { category: 'language_quality', status: 'failed', violations: [{ category: 'language_quality', code: 'grammar_defect', detail: 'private' }] },
         ),
       },
     });
@@ -193,7 +193,7 @@ describe('Experience V3 production terminal observability', () => {
     });
 
     expect(structural).toMatchObject({ validationStage: 'STRUCTURAL_VALIDATION', primaryValidationCode: 'empty_candidate_text' });
-    expect(language).toMatchObject({ validationStage: 'LANGUAGE_VALIDATION', primaryValidationCode: 'malformed_surface' });
+    expect(language).toMatchObject({ validationStage: 'LANGUAGE_VALIDATION', primaryValidationCode: 'grammar_defect' });
     expect(materiality).toMatchObject({ validationStage: 'MATERIALITY_VALIDATION', materialityFailure: true, noMaterialImprovement: false });
     expect(noOp).toMatchObject({ validationStage: 'NO_MATERIAL_IMPROVEMENT', materialityFailure: false, noMaterialImprovement: true });
   });

@@ -336,7 +336,7 @@ function productionBoundaryResponse(
       phases: {
         structural: { status: 'passed', violations: [] },
         semantic: scenario.rejectValidation
-          ? { status: 'failed', violations: [{ code: 'grounding_failed', category: 'semantic', detail: 'fixture' }] }
+          ? { status: 'failed', violations: [{ code: 'source_fact_loss', category: 'semantic', detail: 'fixture' }] }
           : { status: 'passed', violations: [] },
         language_quality: { status: 'passed', violations: [] },
       },
@@ -601,7 +601,7 @@ async function invokeRejectedRouteWithDefaultGate() {
         semantic: { status: 'passed', violations: [] },
         language_quality: {
           status: 'failed',
-          violations: [{ code: 'malformed_surface', category: 'language_quality', detail: 'private evaluator detail', factIds: [snapshot.manifest.facts[0].factId], entryIds: [snapshot.manifest.entryId] }],
+          violations: [{ code: 'grammar_defect', category: 'language_quality', detail: 'private evaluator detail', factIds: [snapshot.manifest.facts[0].factId], entryIds: [snapshot.manifest.entryId] }],
         },
       },
       materiality: { status: 'material', kind: 'clarity_improvement', sourceEquivalent: false, degradationDetected: false },
@@ -659,8 +659,8 @@ describe('M3 page and route integration', () => {
       writerToolBlockCount: 1, writerExpectedToolCount: 1, writerToolNameMatched: true,
       writerToolInputObject: true, writerToolInputSchemaPassed: true, writerIdentityPassed: true,
       semanticViolationCount: 0, semanticViolationCodes: [], languageQualityViolationCount: 1,
-      languageQualityViolationCodes: ['malformed_surface'], violationFactIdHashesByCode: {},
-      violationEntryIdHashesByCode: {}, primaryValidationRejectionCode: 'malformed_surface',
+      languageQualityViolationCodes: ['grammar_defect'], violationFactIdHashesByCode: {},
+      violationEntryIdHashesByCode: {}, primaryValidationRejectionCode: 'grammar_defect',
       sourceHash: 'v3e-12345678', sourceUnitCount: 3, sourceUnitHashes: ['v3e-12345678'], sourceUnitLengths: [10, 11, 12],
       materialityStatus: 'unknown', materialityKind: null, degradationResult: null, persistenceResult: 'not_attempted',
     } as ExperienceV3TerminalDiagnostic;
@@ -674,7 +674,7 @@ describe('M3 page and route integration', () => {
         evaluatorToolBlockCount: 1, evaluatorExpectedToolCount: 1, evaluatorToolNameMatched: true,
         evaluatorToolInputObject: true, evaluatorToolInputSchemaPassed: true, evaluatorIdentityPassed: true,
         semanticViolations: [], languageQualityViolations: [{
-          code: 'malformed_surface', category: 'language_quality', detail: 'synthetic detail',
+          code: 'grammar_defect', category: 'language_quality', detail: 'synthetic detail',
           factIds: ['fact-1'], entryIds: ['exp-target'],
         }],
       },
@@ -722,7 +722,7 @@ describe('M3 page and route integration', () => {
     expect(run.body.diagnosticEvidence).toMatchObject({
       candidatePresent: true,
       evaluatorStopReason: 'tool_use',
-      languageQualityViolationCodes: ['malformed_surface'],
+      languageQualityViolationCodes: ['grammar_defect'],
     });
     expect(run.body.validation.phases.language_quality).toMatchObject({ status: 'failed', violations: [] });
     expect(run.body).not.toHaveProperty('internalRejectionAudit');

@@ -5,6 +5,11 @@ import type {
   ExperienceV3ProviderFailureStage,
   ExperienceV3ProviderErrorType,
 } from './experience-generate';
+import {
+  EXPERIENCE_V3_ENHANCE_VALIDATION_CODES,
+  isExperienceV3EnhanceValidationCode,
+  isExperienceV3EnhanceValidationCodeForCategory,
+} from './experience-enhance-validation-contract';
 
 export const EXPERIENCE_V3_TERMINAL_EVENT_NAME = 'experience_v3_terminal' as const;
 export const EXPERIENCE_V3_ENHANCE_OBSERVABILITY_ACTION = 'experience_v3_enhance' as const;
@@ -14,7 +19,7 @@ export const EXPERIENCE_V3_ENHANCE_OBSERVABILITY_ACTION = 'experience_v3_enhance
  * the production observability boundary. Provider-supplied detail text and
  * unknown codes are intentionally omitted from the event.
  */
-export const EXPERIENCE_V3_VALIDATION_CODE_ALLOWLIST = [
+export const EXPERIENCE_V3_STRUCTURAL_VALIDATION_CODE_ALLOWLIST = [
   'invalid_manifest_shape',
   'missing_fact_id',
   'duplicate_fact_id',
@@ -33,31 +38,16 @@ export const EXPERIENCE_V3_VALIDATION_CODE_ALLOWLIST = [
   'invalid_validator_result',
   'validator_reported_failure',
   'validator_exception',
-  'malformed_surface',
-  'evaluator_check_fact_retention',
-  'unsupported_claim',
-  'lost_source_fact',
-  'missing_fact',
-  'invalid_language',
-  'invalid_native_surface',
-  'role_identity',
-  'employment_state_contradiction',
-  'duty_coverage',
-  'source_fact_preservation',
-  'unsupported_authority',
-  'unsupported_metric',
-  'unsupported_tool',
-  'unsupported_achievement',
-  'unsupported_scope',
-  'unsupported_result',
-  'unsupported_escalation',
-  'unsupported_quantifier',
-  'cross_entry_leakage',
-  'role_company_mutation',
-  'date_mutation',
 ] as const;
 
-const experienceV3ValidationCodeAllowlist = new Set<string>(EXPERIENCE_V3_VALIDATION_CODE_ALLOWLIST);
+export const EXPERIENCE_V3_VALIDATION_CODE_ALLOWLIST = [
+  ...EXPERIENCE_V3_STRUCTURAL_VALIDATION_CODE_ALLOWLIST,
+  ...EXPERIENCE_V3_ENHANCE_VALIDATION_CODES,
+] as const;
+
+const experienceV3StructuralValidationCodeAllowlist = new Set<string>(
+  EXPERIENCE_V3_STRUCTURAL_VALIDATION_CODE_ALLOWLIST,
+);
 
 export type ExperienceV3ValidationStage =
   | 'STRUCTURAL_VALIDATION'
@@ -192,12 +182,18 @@ function providerEvidence(result: ExperienceV3EnhanceFailureResponse): ProviderE
   return (result.diagnosticEvidence ?? {}) as ProviderEvidence;
 }
 
-function safeValidationCodes(violations: readonly unknown[] | undefined): readonly string[] {
+function safeValidationCodes(
+  violations: readonly unknown[] | undefined,
+  category: 'structural' | 'semantic' | 'language_quality',
+): readonly string[] {
   if (!violations) return [];
   return violations.flatMap((violation) => {
     if (!violation || typeof violation !== 'object' || Array.isArray(violation)) return [];
     const code = (violation as Record<string, unknown>).code;
-    return typeof code === 'string' && experienceV3ValidationCodeAllowlist.has(code) ? [code] : [];
+    if (category === 'structural') {
+      return typeof code === 'string' && experienceV3StructuralValidationCodeAllowlist.has(code) ? [code] : [];
+    }
+    return isExperienceV3EnhanceValidationCodeForCategory(code, category) ? [code] : [];
   });
 }
 
@@ -231,13 +227,14 @@ function validationDetail(result: ExperienceV3EnhanceFailureResponse): {
   const structuralViolations = validation.phases.structural?.violations ?? [];
   const semanticViolations = validation.phases.semantic?.violations ?? [];
   const languageViolations = validation.phases.language_quality?.violations ?? [];
-  const structuralCodes = safeValidationCodes(structuralViolations);
-  const semanticCodes = safeValidationCodes(semanticViolations);
-  const languageCodes = safeValidationCodes(languageViolations);
+  const structuralCodes = safeValidationCodes(structuralViolations, 'structural');
+  const semanticCodes = safeValidationCodes(semanticViolations, 'semantic');
+  const languageCodes = safeValidationCodes(languageViolations, 'language_quality');
   const validationCodes = uniqueCodes([...structuralCodes, ...semanticCodes, ...languageCodes]);
   const evidenceCode = result.diagnosticEvidence?.primaryValidationRejectionCode;
   const primaryValidationCode = typeof evidenceCode === 'string'
-    && experienceV3ValidationCodeAllowlist.has(evidenceCode)
+    && (experienceV3StructuralValidationCodeAllowlist.has(evidenceCode)
+      || isExperienceV3EnhanceValidationCode(evidenceCode))
     ? evidenceCode
     : validationCodes[0] ?? null;
   const validationStage = validation.phases.structural?.status === 'failed'

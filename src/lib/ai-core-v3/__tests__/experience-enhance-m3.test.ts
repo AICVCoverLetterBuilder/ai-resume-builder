@@ -153,7 +153,9 @@ function evaluatorJson(
   const languageStatus = options.languageStatus ?? 'passed';
   const materialStatus = options.materialStatus ?? 'material';
   const violations = (status: 'passed' | 'failed', category: 'semantic' | 'language_quality') => status === 'passed' ? [] : [{
-    code: options.code ?? `${category}_rejected`, category, detail: 'Independent evaluator rejected the candidate.',
+    code: options.code ?? (category === 'semantic' ? 'unsupported_claim' : 'grammar_defect'),
+    category,
+    detail: 'Independent evaluator rejected the candidate.',
     factIds: [...snapshot.requiredFactIds], entryIds: [snapshot.entryId],
   }];
   return JSON.stringify({
@@ -538,32 +540,32 @@ describe('M3 C. writer, evaluator, and validation', () => {
   });
 
   it.each([
-    ['40. unsupported metric or achievement is rejected', 'invented_metric'],
-    ['41. unsupported tool, certification, or leadership claim is rejected', 'invented_tool_or_leadership'],
+    ['40. unsupported metric or achievement is rejected', 'unsupported_claim'],
+    ['41. unsupported tool, certification, or leadership claim is rejected', 'unsupported_claim'],
     ['42. responsibility escalation or universal claim is rejected', 'responsibility_escalation'],
-    ['43. cross-entry fact leakage is rejected', 'cross_entry_fact'],
+    ['43. cross-entry fact leakage is rejected', 'cross_entry_leakage'],
   ])('%s', async (_name, code) => {
     const run = await runHarness({ server: { evaluator: { semanticStatus: 'failed', code } } });
     expect([run.result.kind, run.usageCallCount]).toEqual(['handled_failure', 0]);
   });
 
   it('44. wrong target language or script is rejected', async () => {
-    const run = await runHarness({ server: { evaluator: { languageStatus: 'failed', code: 'wrong_target_script' } } });
+    const run = await runHarness({ server: { evaluator: { languageStatus: 'failed', code: 'target_script_mismatch' } } });
     expect(run.result.kind).toBe('handled_failure');
   });
 
   it('45. wrong employment tense is rejected', async () => {
-    const run = await runHarness({ server: { evaluator: { languageStatus: 'failed', code: 'wrong_employment_tense' } } });
+    const run = await runHarness({ server: { evaluator: { languageStatus: 'failed', code: 'employment_tense_mismatch' } } });
     expect(run.result.kind).toBe('handled_failure');
   });
 
   it('46. wrong CV perspective or form is rejected', async () => {
-    const run = await runHarness({ server: { evaluator: { languageStatus: 'failed', code: 'wrong_cv_perspective' } } });
+    const run = await runHarness({ server: { evaluator: { languageStatus: 'failed', code: 'cv_perspective_mismatch' } } });
     expect(run.result.kind).toBe('handled_failure');
   });
 
   it('47. language-quality failure is rejected', async () => {
-    const run = await runHarness({ server: { evaluator: { languageStatus: 'failed', code: 'malformed_surface' } } });
+    const run = await runHarness({ server: { evaluator: { languageStatus: 'failed', code: 'grammar_defect' } } });
     expect([run.result.kind, run.writeCount]).toEqual(['handled_failure', 0]);
   });
 
@@ -594,13 +596,13 @@ describe('M3 C. writer, evaluator, and validation', () => {
     const source = 'Prüft Unterlagen.\nDokumentiert Abweichungen.';
     const run = await runHarness({
       input: makeInput({ cv, requestedLocale: 'de', uiLocale: 'de', storedContentLocale: 'de', exactVisibleDescription: source }),
-      server: { writerUnits: ['Unterlagen abprüfe.', 'Abweichungen weiterdokumentierte.'], evaluator: { languageStatus: 'failed', code: 'malformed_surface' } },
+      server: { writerUnits: ['Unterlagen abprüfe.', 'Abweichungen weiterdokumentierte.'], evaluator: { languageStatus: 'failed', code: 'grammar_defect' } },
     });
     expect([run.result.kind, run.writeCount]).toEqual(['handled_failure', 0]);
   });
 
   it('rejects malformed non-German language output without replacement prose', async () => {
-    const run = await runHarness({ server: { evaluator: { languageStatus: 'failed', code: 'malformed_surface' } } });
+    const run = await runHarness({ server: { evaluator: { languageStatus: 'failed', code: 'grammar_defect' } } });
     expect([run.result.kind, run.writeCount]).toEqual(['handled_failure', 0]);
   });
 });
@@ -863,7 +865,7 @@ describe('M3 terminal observability', () => {
     });
     diagnostics.clearExperienceAiDiagnosticsForTests();
     const run = await runHarness({
-      server: { evaluator: { languageStatus: 'failed', code: 'malformed_surface' } },
+      server: { evaluator: { languageStatus: 'failed', code: 'grammar_defect' } },
     });
     expect(run.result.kind).toBe('handled_failure');
     if (run.result.kind !== 'handled_failure') return;
@@ -878,8 +880,8 @@ describe('M3 terminal observability', () => {
       evaluatorIdentityPassed: true,
       semanticViolationCount: 0,
       languageQualityViolationCount: 1,
-      languageQualityViolationCodes: ['malformed_surface'],
-      primaryValidationRejectionCode: 'malformed_surface',
+      languageQualityViolationCodes: ['grammar_defect'],
+      primaryValidationRejectionCode: 'grammar_defect',
       applyAuthorized: false,
       applyAttempted: false,
       applyCommitted: false,
@@ -891,11 +893,11 @@ describe('M3 terminal observability', () => {
     expect(run.result.internalRejectionAudit?.candidate.units.map((unit) => unit.text)).toEqual([...IMPROVED]);
     expect(run.result.internalRejectionAudit?.evaluator.evaluatorStopReason).toBe('tool_use');
     expect(run.result.internalRejectionAudit?.evaluator.languageQualityViolations.map((violation) => violation.code))
-      .toEqual(['malformed_surface']);
+      .toEqual(['grammar_defect']);
     diagnostics.routeExperienceV3PageTerminal(run.result, { onSuccess: vi.fn(), onFailure: vi.fn() });
     expect(diagnostics.getLatestExperienceAiDiagnosticRecord()).toMatchObject({
       candidatePresent: true,
-      languageQualityViolationCodes: ['malformed_surface'],
+      languageQualityViolationCodes: ['grammar_defect'],
     });
     expect(diagnostics.getLatestExperienceV3InternalRejectionAudit()?.candidate.units.map((unit) => unit.text))
       .toEqual([...IMPROVED]);
