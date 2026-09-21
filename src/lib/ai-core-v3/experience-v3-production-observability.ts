@@ -9,6 +9,65 @@ import type {
 export const EXPERIENCE_V3_TERMINAL_EVENT_NAME = 'experience_v3_terminal' as const;
 export const EXPERIENCE_V3_ENHANCE_OBSERVABILITY_ACTION = 'experience_v3_enhance' as const;
 
+/**
+ * Only codes already used by the V3 validator/evaluator contracts may cross
+ * the production observability boundary. Provider-supplied detail text and
+ * unknown codes are intentionally omitted from the event.
+ */
+export const EXPERIENCE_V3_VALIDATION_CODE_ALLOWLIST = [
+  'invalid_manifest_shape',
+  'missing_fact_id',
+  'duplicate_fact_id',
+  'invalid_employment_state',
+  'invalid_dates',
+  'missing_entry_id',
+  'empty_enhance_source',
+  'operation_id_mismatch',
+  'snapshot_hash_mismatch',
+  'operation_kind_mismatch',
+  'target_locale_mismatch',
+  'empty_candidate_text',
+  'fact_unit_count_mismatch',
+  'fact_id_coverage_mismatch',
+  'candidate_unit_mismatch',
+  'invalid_validator_result',
+  'validator_reported_failure',
+  'validator_exception',
+  'malformed_surface',
+  'evaluator_check_fact_retention',
+  'unsupported_claim',
+  'lost_source_fact',
+  'missing_fact',
+  'invalid_language',
+  'invalid_native_surface',
+  'role_identity',
+  'employment_state_contradiction',
+  'duty_coverage',
+  'source_fact_preservation',
+  'unsupported_authority',
+  'unsupported_metric',
+  'unsupported_tool',
+  'unsupported_achievement',
+  'unsupported_scope',
+  'unsupported_result',
+  'unsupported_escalation',
+  'unsupported_quantifier',
+  'cross_entry_leakage',
+  'role_company_mutation',
+  'date_mutation',
+] as const;
+
+const experienceV3ValidationCodeAllowlist = new Set<string>(EXPERIENCE_V3_VALIDATION_CODE_ALLOWLIST);
+
+export type ExperienceV3ValidationStage =
+  | 'STRUCTURAL_VALIDATION'
+  | 'SEMANTIC_GROUNDING_VALIDATION'
+  | 'LANGUAGE_VALIDATION'
+  | 'MATERIALITY_VALIDATION'
+  | 'NO_MATERIAL_IMPROVEMENT'
+  | 'OTHER_TYPED_VALIDATION'
+  | null;
+
 export type ExperienceV3TerminalPhase =
   | 'request_validation'
   | 'route_gate'
@@ -63,6 +122,14 @@ export interface ExperienceV3TerminalDiagnosticEvent {
   readonly timeoutOwner: ExperienceV3TimeoutOwner;
   readonly outputContractFailureClass: string | null;
   readonly validationRejected: boolean | null;
+  readonly validationStage: ExperienceV3ValidationStage;
+  readonly primaryValidationCode: string | null;
+  readonly validationCodes: readonly string[];
+  readonly structuralViolationCount: number | null;
+  readonly semanticViolationCount: number | null;
+  readonly languageViolationCount: number | null;
+  readonly materialityFailure: boolean | null;
+  readonly noMaterialImprovement: boolean | null;
   readonly usageCommitted: false;
 }
 
@@ -123,6 +190,79 @@ function safeElapsedMs(value: unknown): number {
 
 function providerEvidence(result: ExperienceV3EnhanceFailureResponse): ProviderEvidence {
   return (result.diagnosticEvidence ?? {}) as ProviderEvidence;
+}
+
+function safeValidationCodes(violations: readonly unknown[] | undefined): readonly string[] {
+  if (!violations) return [];
+  return violations.flatMap((violation) => {
+    if (!violation || typeof violation !== 'object' || Array.isArray(violation)) return [];
+    const code = (violation as Record<string, unknown>).code;
+    return typeof code === 'string' && experienceV3ValidationCodeAllowlist.has(code) ? [code] : [];
+  });
+}
+
+function uniqueCodes(codes: readonly string[]): readonly string[] {
+  return [...new Set(codes)];
+}
+
+function validationDetail(result: ExperienceV3EnhanceFailureResponse): {
+  readonly validationStage: ExperienceV3ValidationStage;
+  readonly primaryValidationCode: string | null;
+  readonly validationCodes: readonly string[];
+  readonly structuralViolationCount: number | null;
+  readonly semanticViolationCount: number | null;
+  readonly languageViolationCount: number | null;
+  readonly materialityFailure: boolean | null;
+  readonly noMaterialImprovement: boolean | null;
+} {
+  const validation = result.validation;
+  if (!validation) {
+    return {
+      validationStage: null,
+      primaryValidationCode: null,
+      validationCodes: [],
+      structuralViolationCount: null,
+      semanticViolationCount: null,
+      languageViolationCount: null,
+      materialityFailure: null,
+      noMaterialImprovement: null,
+    };
+  }
+  const structuralViolations = validation.phases.structural?.violations ?? [];
+  const semanticViolations = validation.phases.semantic?.violations ?? [];
+  const languageViolations = validation.phases.language_quality?.violations ?? [];
+  const structuralCodes = safeValidationCodes(structuralViolations);
+  const semanticCodes = safeValidationCodes(semanticViolations);
+  const languageCodes = safeValidationCodes(languageViolations);
+  const validationCodes = uniqueCodes([...structuralCodes, ...semanticCodes, ...languageCodes]);
+  const evidenceCode = result.diagnosticEvidence?.primaryValidationRejectionCode;
+  const primaryValidationCode = typeof evidenceCode === 'string'
+    && experienceV3ValidationCodeAllowlist.has(evidenceCode)
+    ? evidenceCode
+    : validationCodes[0] ?? null;
+  const validationStage = validation.phases.structural?.status === 'failed'
+    ? 'STRUCTURAL_VALIDATION' as const
+    : validation.phases.semantic?.status === 'failed'
+      ? 'SEMANTIC_GROUNDING_VALIDATION' as const
+      : validation.phases.language_quality?.status === 'failed'
+        ? 'LANGUAGE_VALIDATION' as const
+        : result.typedReason === 'materiality_degraded'
+          ? 'MATERIALITY_VALIDATION' as const
+          : result.typedReason === 'no_material_improvement'
+            ? 'NO_MATERIAL_IMPROVEMENT' as const
+            : result.typedReason === 'validation_rejected' || validation.decision === 'reject'
+              ? 'OTHER_TYPED_VALIDATION' as const
+              : null;
+  return {
+    validationStage,
+    primaryValidationCode,
+    validationCodes,
+    structuralViolationCount: structuralViolations.length,
+    semanticViolationCount: semanticViolations.length,
+    languageViolationCount: languageViolations.length,
+    materialityFailure: result.typedReason === 'materiality_degraded',
+    noMaterialImprovement: result.typedReason === 'no_material_improvement',
+  };
 }
 
 function timeoutOwner(value: ProviderDeadlineOwner | null): ExperienceV3TimeoutOwner {
@@ -231,6 +371,14 @@ export function createExperienceV3TerminalDiagnostic(
       timeoutOwner: null,
       outputContractFailureClass: null,
       validationRejected: false,
+      validationStage: null,
+      primaryValidationCode: null,
+      validationCodes: [],
+      structuralViolationCount: null,
+      semanticViolationCount: null,
+      languageViolationCount: null,
+      materialityFailure: null,
+      noMaterialImprovement: null,
       usageCommitted: false,
     };
   }
@@ -242,6 +390,7 @@ export function createExperienceV3TerminalDiagnostic(
     : null;
   const classification = phaseForResult(result, evidence, deadline);
   const reached = reachedState(result, classification.phase);
+  const detail = validationDetail(result);
   const typedTimeout = evidence.providerErrorType === 'timeout';
   const owner = typedTimeout ? timeoutOwner(deadline) : null;
   return {
@@ -276,6 +425,7 @@ export function createExperienceV3TerminalDiagnostic(
       ? safeCode(evidence.providerErrorCode ?? evidence.providerErrorType ?? result.typedReason, 'output_contract_failure')
       : null,
     validationRejected: classification.family === 'validation',
+    ...detail,
     usageCommitted: false,
   };
 }

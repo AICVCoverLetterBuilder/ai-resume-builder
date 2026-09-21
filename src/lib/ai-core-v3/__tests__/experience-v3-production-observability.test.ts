@@ -6,6 +6,7 @@ import {
   emitExperienceV3TerminalDiagnostic,
   rememberExperienceV3ProviderDeadlineOwner,
 } from '../experience-v3-production-observability';
+import type { AggregateValidationResult } from '../validators';
 
 function failure(
   typedReason: string,
@@ -25,6 +26,17 @@ function failure(
     rememberExperienceV3ProviderDeadlineOwner(result.diagnosticEvidence, providerDeadlineOwner as 'provider_transport' | 'verifier_transport' | 'route_deadline' | 'client_abort');
   }
   return result;
+}
+
+function validation(
+  structural: AggregateValidationResult['phases']['structural'],
+  semantic: AggregateValidationResult['phases']['semantic'],
+  language: AggregateValidationResult['phases']['language_quality'],
+): AggregateValidationResult {
+  const violations = [...structural.violations, ...semantic.violations, ...language.violations];
+  return { decision: violations.length ? 'reject' : 'accept', phases: {
+    structural, semantic, language_quality: language,
+  }, violations };
 }
 
 describe('Experience V3 production terminal observability', () => {
@@ -108,6 +120,82 @@ describe('Experience V3 production terminal observability', () => {
     expect(output).toMatchObject({ phase: 'initial_writer', failureFamily: 'output_contract', outputContractFailureClass: 'writer_tool_missing' });
     expect(structural).toMatchObject({ phase: 'validation', failureFamily: 'validation', validationRejected: true });
     expect(semantic).toMatchObject({ phase: 'validation', failureFamily: 'validation', validationRejected: true });
+  });
+
+  it('projects typed validation stages and allowlisted codes without content', () => {
+    const event = createExperienceV3TerminalDiagnostic({
+      requestId: 'semantic-validation-detail', httpStatus: 422, elapsedMs: 4,
+      result: {
+        ...failure('validation_rejected', { primaryValidationRejectionCode: 'evaluator_check_fact_retention' }),
+        validation: validation(
+          { category: 'structural', status: 'passed', violations: [] },
+          { category: 'semantic', status: 'failed', violations: [
+            { category: 'semantic', code: 'evaluator_check_fact_retention', detail: 'PRIVATE DETAIL' },
+            { category: 'semantic', code: 'PRIVATE_UNKNOWN_CODE', detail: 'PRIVATE DETAIL' },
+          ] },
+          { category: 'language_quality', status: 'passed', violations: [] },
+        ),
+      },
+    });
+
+    expect(event).toMatchObject({
+      validationStage: 'SEMANTIC_GROUNDING_VALIDATION',
+      primaryValidationCode: 'evaluator_check_fact_retention',
+      validationCodes: ['evaluator_check_fact_retention'],
+      structuralViolationCount: 0,
+      semanticViolationCount: 2,
+      languageViolationCount: 0,
+      materialityFailure: false,
+      noMaterialImprovement: false,
+    });
+    expect(JSON.stringify(event)).not.toContain('PRIVATE DETAIL');
+    expect(JSON.stringify(event)).not.toContain('PRIVATE_UNKNOWN_CODE');
+  });
+
+  it('distinguishes structural, language, materiality, and no-op evidence deterministically', () => {
+    const structural = createExperienceV3TerminalDiagnostic({
+      requestId: 'structural-detail', httpStatus: 422, elapsedMs: 1,
+      result: {
+        ...failure('structural_validation_failed', { primaryValidationRejectionCode: 'empty_candidate_text' }),
+        validation: validation(
+          { category: 'structural', status: 'failed', violations: [{ category: 'structural', code: 'empty_candidate_text', detail: 'private' }] },
+          { category: 'semantic', status: 'not_evaluated', violations: [] },
+          { category: 'language_quality', status: 'not_evaluated', violations: [] },
+        ),
+      },
+    });
+    const language = createExperienceV3TerminalDiagnostic({
+      requestId: 'language-detail', httpStatus: 422, elapsedMs: 1,
+      result: {
+        ...failure('validation_rejected', { primaryValidationRejectionCode: 'malformed_surface' }),
+        validation: validation(
+          { category: 'structural', status: 'passed', violations: [] },
+          { category: 'semantic', status: 'passed', violations: [] },
+          { category: 'language_quality', status: 'failed', violations: [{ category: 'language_quality', code: 'malformed_surface', detail: 'private' }] },
+        ),
+      },
+    });
+    const materiality = createExperienceV3TerminalDiagnostic({
+      requestId: 'materiality-detail', httpStatus: 422, elapsedMs: 1,
+      result: { ...failure('materiality_degraded'), validation: validation(
+        { category: 'structural', status: 'passed', violations: [] },
+        { category: 'semantic', status: 'passed', violations: [] },
+        { category: 'language_quality', status: 'passed', violations: [] },
+      ) },
+    });
+    const noOp = createExperienceV3TerminalDiagnostic({
+      requestId: 'no-op-detail', httpStatus: 422, elapsedMs: 1,
+      result: { ...failure('no_material_improvement'), validation: validation(
+        { category: 'structural', status: 'passed', violations: [] },
+        { category: 'semantic', status: 'passed', violations: [] },
+        { category: 'language_quality', status: 'passed', violations: [] },
+      ) },
+    });
+
+    expect(structural).toMatchObject({ validationStage: 'STRUCTURAL_VALIDATION', primaryValidationCode: 'empty_candidate_text' });
+    expect(language).toMatchObject({ validationStage: 'LANGUAGE_VALIDATION', primaryValidationCode: 'malformed_surface' });
+    expect(materiality).toMatchObject({ validationStage: 'MATERIALITY_VALIDATION', materialityFailure: true, noMaterialImprovement: false });
+    expect(noOp).toMatchObject({ validationStage: 'NO_MATERIAL_IMPROVEMENT', materialityFailure: false, noMaterialImprovement: true });
   });
 
   it('classifies forced-tool response extraction as output-contract evidence', () => {
