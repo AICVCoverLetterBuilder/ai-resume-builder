@@ -141,6 +141,11 @@ export const EXPERIENCE_V3_PROVIDER_STAGE_TIMEOUT_MS = 15_000;
 export const EXPERIENCE_V3_ROUTE_OVERHEAD_MS = 6_000;
 export const EXPERIENCE_V3_ROUTE_APPLICATION_BUDGET_MS =
   EXPERIENCE_V3_PROVIDER_STAGE_TIMEOUT_MS * 2 + EXPERIENCE_V3_ROUTE_OVERHEAD_MS;
+export const EXPERIENCE_V3_ENHANCE_DISPATCH_SAFETY_MS = 500;
+export const EXPERIENCE_V3_ENHANCE_POST_EVALUATOR_RESERVE_MS =
+  EXPERIENCE_V3_ROUTE_OVERHEAD_MS - EXPERIENCE_V3_ENHANCE_DISPATCH_SAFETY_MS;
+export const EXPERIENCE_V3_ENHANCE_EVALUATOR_MAX_TIMEOUT_MS =
+  EXPERIENCE_V3_ROUTE_APPLICATION_BUDGET_MS - EXPERIENCE_V3_ROUTE_OVERHEAD_MS;
 
 /** Shared application deadline for the two-stage Experience V3 operations. */
 export function computeExperienceV3Deadline(requestStartedAt: number): number {
@@ -179,6 +184,7 @@ export const AI_MIN_REPAIR_BUDGET_MS = AI_PROVIDER_CALL_TIMEOUT_MS + 2_000;
  * result is already available (or a structured timeout error).
  */
 export const AI_RESPONSE_GUARD_MS = 2_000;
+const AI_PROVIDER_MINIMUM_TIMEOUT_MS = 1_000;
 
 export const CONTENT_LOCALIZE_V3_RESERVED_WITH_RESPONSE_GUARD_MS =
   CONTENT_LOCALIZE_V3_FOUR_PHASE_TOTAL_MS + AI_RESPONSE_GUARD_MS;
@@ -214,7 +220,10 @@ export function hasProviderBudget(
   configuredTimeoutMs: number = AI_PROVIDER_CALL_TIMEOUT_MS,
 ): boolean {
   if (deadlineAt == null) return true;
-  return remainingBudgetMs(deadlineAt, now) >= Math.min(configuredTimeoutMs, AI_RESPONSE_GUARD_MS + 1_000);
+  return remainingBudgetMs(deadlineAt, now) >= Math.min(
+    configuredTimeoutMs,
+    AI_RESPONSE_GUARD_MS + AI_PROVIDER_MINIMUM_TIMEOUT_MS,
+  );
 }
 
 /** True when the route should stop awaiting and return immediately. */
@@ -399,6 +408,39 @@ function deadlineError(
 }
 
 /**
+ * Gives only the Experience Enhance evaluator the writer's unused portion of
+ * the existing 36-second route budget. The writer cap and outer deadline stay
+ * unchanged, while the six-second orchestration reserve remains unavailable
+ * to the provider call (5.5 seconds after evaluation plus 0.5 seconds before
+ * dispatch). A late evaluator start fails before provider dispatch instead of
+ * borrowing from that reserve.
+ */
+export function computeExperienceV3EnhanceEvaluatorTimeoutMs(
+  deadlineAt: number,
+  now = Date.now(),
+): number {
+  const outerBudgetRemainingAtStartMs = Math.max(0, remainingBudgetMs(deadlineAt, now));
+  const availableEvaluatorMs = Math.floor(
+    outerBudgetRemainingAtStartMs
+      - EXPERIENCE_V3_ENHANCE_POST_EVALUATOR_RESERVE_MS
+      - EXPERIENCE_V3_ENHANCE_DISPATCH_SAFETY_MS,
+  );
+  if (availableEvaluatorMs < AI_PROVIDER_MINIMUM_TIMEOUT_MS) {
+    throw deadlineError(
+      'route_deadline_insufficient before Experience Enhance evaluator dispatch',
+      'route_deadline',
+      EXPERIENCE_V3_ENHANCE_EVALUATOR_MAX_TIMEOUT_MS,
+      Math.max(0, availableEvaluatorMs),
+      0,
+      outerBudgetRemainingAtStartMs,
+      'route_budget',
+      'evaluator',
+    );
+  }
+  return Math.min(EXPERIENCE_V3_ENHANCE_EVALUATOR_MAX_TIMEOUT_MS, availableEvaluatorMs);
+}
+
+/**
  * Runs one provider call under a hard AbortSignal + timeout, with SDK retries
  * disabled. The underlying request is cancelled when the slice expires so the
  * serverless function can continue to deterministic fallback immediately.
@@ -433,11 +475,17 @@ export async function callProviderWithDeadline<T>(
 
   const timeoutMs = deadlineAt == null
     ? configuredTimeoutMs
-    : Math.max(1_000, Math.min(configuredTimeoutMs, remainingBudgetMs(deadlineAt) - 500));
+    : Math.max(
+      AI_PROVIDER_MINIMUM_TIMEOUT_MS,
+      Math.min(configuredTimeoutMs, remainingBudgetMs(deadlineAt) - 500),
+    );
   // Clamp further when the shared application deadline is closer than the slice.
   const effectiveMs = deadlineAt == null
     ? timeoutMs
-    : Math.max(1_000, Math.min(timeoutMs, remainingBudgetMs(deadlineAt) - AI_RESPONSE_GUARD_MS));
+    : Math.max(
+      AI_PROVIDER_MINIMUM_TIMEOUT_MS,
+      Math.min(timeoutMs, remainingBudgetMs(deadlineAt) - AI_RESPONSE_GUARD_MS),
+    );
   const controller = new AbortController();
   let sliceTimer: ReturnType<typeof setTimeout> | undefined;
   let clientAborted = false;

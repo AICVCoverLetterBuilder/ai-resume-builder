@@ -45,11 +45,15 @@ import {
   AI_PROVIDER_CALL_TIMEOUT_MS,
   AI_SERVER_BUDGET_MS,
   EXPERIENCE_V3_PROVIDER_STAGE_TIMEOUT_MS,
+  EXPERIENCE_V3_ENHANCE_DISPATCH_SAFETY_MS,
+  EXPERIENCE_V3_ENHANCE_EVALUATOR_MAX_TIMEOUT_MS,
+  EXPERIENCE_V3_ENHANCE_POST_EVALUATOR_RESERVE_MS,
   EXPERIENCE_V3_ROUTE_APPLICATION_BUDGET_MS,
   EXPERIENCE_LOCALIZATION_SERVER_BUDGET_MS,
   EXPERIENCE_LOCALIZATION_VERIFIER_TIMEOUT_MS,
   callProviderWithDeadline,
   computeExperienceV3EnhanceDeadline,
+  computeExperienceV3EnhanceEvaluatorTimeoutMs,
   computeExperienceLocalizationDeadline,
   computeServerDeadline,
 } from '@/lib/ai-request-timing';
@@ -174,6 +178,7 @@ function evaluatorJson(
 }
 
 interface ServerOptions {
+  sharedEnhanceDeadline?: boolean;
   writerThrows?: boolean;
   writerError?: unknown;
   writerDelayMs?: number;
@@ -216,6 +221,9 @@ async function serverResponse(
   options: ServerOptions = {},
   counts = { writer: 0, evaluator: 0 },
 ): Promise<ExperienceV3EnhanceResponse> {
+  const sharedDeadlineAt = options.sharedEnhanceDeadline
+    ? computeExperienceV3EnhanceDeadline(Date.now())
+    : null;
   return executeExperienceV3EnhanceServer({ manifest: snapshot.manifest }, {
     generate: async () => {
       counts.writer += 1;
@@ -229,7 +237,7 @@ async function serverResponse(
           await new Promise((resolve) => setTimeout(resolve, options.writerDelayMs));
             return response;
           },
-          computeExperienceLocalizationDeadline(Date.now()),
+          sharedDeadlineAt ?? computeExperienceLocalizationDeadline(Date.now()),
           options.writerTimeoutMs ?? EXPERIENCE_V3_PROVIDER_STAGE_TIMEOUT_MS,
           'provider',
         );
@@ -248,8 +256,10 @@ async function serverResponse(
             await new Promise((resolve) => setTimeout(resolve, options.evaluatorDelayMs));
             return response;
           },
-          computeExperienceV3EnhanceDeadline(Date.now()),
-          options.evaluatorTimeoutMs ?? EXPERIENCE_V3_PROVIDER_STAGE_TIMEOUT_MS,
+          sharedDeadlineAt ?? computeExperienceV3EnhanceDeadline(Date.now()),
+          options.evaluatorTimeoutMs ?? (sharedDeadlineAt === null
+            ? EXPERIENCE_V3_PROVIDER_STAGE_TIMEOUT_MS
+            : computeExperienceV3EnhanceEvaluatorTimeoutMs(sharedDeadlineAt)),
           'verifier',
         );
       }
@@ -1306,13 +1316,13 @@ describe('M4 M3 evaluator timeout budget', () => {
     expect(create).toHaveBeenCalledTimes(1);
   });
 
-  it('proves the production M3 evaluator uses the dedicated 15000ms authority and aligned outer budget', () => {
+  it('proves the production M3 evaluator reuses writer slack inside the unchanged outer budget', () => {
     const route = fs.readFileSync(path.resolve('src/app/api/generate/route.ts'), 'utf8');
     const m3Start = route.indexOf("if (action === EXPERIENCE_V3_ENHANCE_ACTION)");
     const m3End = route.indexOf("if (action === 'bullets')", m3Start);
     const m3 = route.slice(m3Start, m3End);
     expect(route).toContain("if (action === EXPERIENCE_V3_ENHANCE_ACTION)");
-    expect(m3).toMatch(/deadlineAt,\s*undefined,\s*EXPERIENCE_V3_PROVIDER_STAGE_TIMEOUT_MS,\s*'verifier'/u);
+    expect(m3).toMatch(/deadlineAt,\s*undefined,\s*computeExperienceV3EnhanceEvaluatorTimeoutMs\(deadlineAt\),\s*'verifier'/u);
     expect(m3).toMatch(/EXPERIENCE_V3_PROVIDER_STAGE_TIMEOUT_MS,\s*'provider'/u);
     expect(route).toContain('computeExperienceV3EnhanceDeadline(serverReceivedAt)');
     expect(EXPERIENCE_V3_PROVIDER_STAGE_TIMEOUT_MS).toBe(15_000);
@@ -1320,6 +1330,9 @@ describe('M4 M3 evaluator timeout budget', () => {
     expect(EXPERIENCE_V3_ROUTE_APPLICATION_BUDGET_MS)
       .toBeGreaterThanOrEqual(EXPERIENCE_V3_PROVIDER_STAGE_TIMEOUT_MS * 2 + 6_000);
     expect(EXPERIENCE_V3_ROUTE_APPLICATION_BUDGET_MS).toBeLessThan(90_000);
+    expect(EXPERIENCE_V3_ENHANCE_EVALUATOR_MAX_TIMEOUT_MS).toBe(30_000);
+    expect(EXPERIENCE_V3_ENHANCE_POST_EVALUATOR_RESERVE_MS).toBe(5_500);
+    expect(EXPERIENCE_V3_ENHANCE_DISPATCH_SAFETY_MS).toBe(500);
     expect(EXPERIENCE_LOCALIZATION_VERIFIER_TIMEOUT_MS).toBe(11_500);
     expect(EXPERIENCE_LOCALIZATION_SERVER_BUDGET_MS).toBe(27_000);
     expect(EXPERIENCE_LOCALIZATION_SERVER_BUDGET_MS)
@@ -1369,6 +1382,134 @@ describe('M4 M3 evaluator timeout budget', () => {
   });
 });
 
+describe('M9 Experience V3 Enhance evaluator slack budget', () => {
+  const start = 1_700_000_000_000;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(start);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('reproduces the physical initial-evaluator boundary and reuses writer slack without retry or V2 fallback', async () => {
+    const oldEvaluatorTransport = vi.fn();
+    const newEvaluatorTransport = vi.fn();
+    const oldPending = runHarness({
+      server: {
+        sharedEnhanceDeadline: true,
+        writerDelayMs: 5_000,
+        evaluatorDelayMs: 16_000,
+        evaluatorTimeoutMs: EXPERIENCE_V3_PROVIDER_STAGE_TIMEOUT_MS,
+        evaluatorTransportObserved: oldEvaluatorTransport,
+      },
+    });
+    const newPending = runHarness({
+      server: {
+        sharedEnhanceDeadline: true,
+        writerDelayMs: 5_000,
+        evaluatorDelayMs: 16_000,
+        evaluatorTransportObserved: newEvaluatorTransport,
+      },
+    });
+
+    await vi.advanceTimersByTimeAsync(20_001);
+    const oldRun = await oldPending;
+    await vi.advanceTimersByTimeAsync(1_000);
+    const newRun = await newPending;
+
+    expect(oldRun.result).toMatchObject({ kind: 'handled_failure', typedReason: 'evaluator_timeout' });
+    expect([oldRun.writerCount, oldRun.evaluatorCount, oldRun.writeCount, oldRun.usageCallCount])
+      .toEqual([1, 1, 0, 0]);
+    expect(newEvaluatorTransport).toHaveBeenCalledWith(expect.objectContaining({
+      timeout: 25_000,
+      maxRetries: 0,
+    }));
+    expect(oldEvaluatorTransport).toHaveBeenCalledWith(expect.objectContaining({
+      timeout: EXPERIENCE_V3_PROVIDER_STAGE_TIMEOUT_MS,
+      maxRetries: 0,
+    }));
+    expect(newRun.result.kind).toBe('handled_success');
+    expect([newRun.writerCount, newRun.evaluatorCount, newRun.writeCount, newRun.persistCount, newRun.usageCallCount, newRun.usage])
+      .toEqual([1, 1, 1, 1, 1, 10]);
+    if (newRun.result.kind === 'handled_success') {
+      expect(newRun.result.diagnostic).toMatchObject({
+        applyCommitted: true,
+        usageDelta: 1,
+        v2FallthroughCount: 0,
+      });
+    }
+  });
+
+  it('keeps a writer near its cap inside the outer deadline with the full terminal reserve', async () => {
+    const evaluatorTransport = vi.fn();
+    const pending = runHarness({
+      server: {
+        sharedEnhanceDeadline: true,
+        writerDelayMs: 14_900,
+        evaluatorDelayMs: 1,
+        evaluatorTransportObserved: evaluatorTransport,
+      },
+    });
+
+    await vi.advanceTimersByTimeAsync(14_901);
+    const run = await pending;
+
+    expect(evaluatorTransport).toHaveBeenCalledWith(expect.objectContaining({
+      timeout: 15_100,
+      maxRetries: 0,
+    }));
+    expect(14_900 + 15_100
+      + EXPERIENCE_V3_ENHANCE_POST_EVALUATOR_RESERVE_MS
+      + EXPERIENCE_V3_ENHANCE_DISPATCH_SAFETY_MS)
+      .toBe(EXPERIENCE_V3_ROUTE_APPLICATION_BUDGET_MS);
+    expect(run.result.kind).toBe('handled_success');
+  });
+
+  it('fails closed when the evaluator exceeds its new available dynamic window', async () => {
+    const evaluatorTransport = vi.fn();
+    const pending = runHarness({
+      server: {
+        sharedEnhanceDeadline: true,
+        writerDelayMs: 5_000,
+        evaluatorDelayMs: 25_001,
+        evaluatorTransportObserved: evaluatorTransport,
+      },
+    });
+
+    await vi.advanceTimersByTimeAsync(30_001);
+    const run = await pending;
+
+    expect(evaluatorTransport).toHaveBeenCalledWith(expect.objectContaining({
+      timeout: 25_000,
+      maxRetries: 0,
+    }));
+    expect(run.result).toMatchObject({ kind: 'handled_failure', typedReason: 'evaluator_timeout' });
+    expect([run.writerCount, run.evaluatorCount, run.writeCount, run.persistCount, run.usageCallCount, run.usage])
+      .toEqual([1, 1, 0, 0, 0, 9]);
+    if (run.result.kind === 'handled_failure') {
+      expect(run.result.diagnostic).toMatchObject({
+        usageDelta: 0,
+        applyAttempted: false,
+        applyCommitted: false,
+        v2FallthroughCount: 0,
+      });
+    }
+  });
+
+  it('rejects evaluator dispatch rather than consuming the reserved terminal window', () => {
+    const deadlineAt = computeExperienceV3EnhanceDeadline(start);
+    const latestSafeStart = deadlineAt
+      - EXPERIENCE_V3_ENHANCE_POST_EVALUATOR_RESERVE_MS
+      - EXPERIENCE_V3_ENHANCE_DISPATCH_SAFETY_MS
+      - 999;
+    expect(() => computeExperienceV3EnhanceEvaluatorTimeoutMs(deadlineAt, latestSafeStart))
+      .toThrow('route_deadline_insufficient before Experience Enhance evaluator dispatch');
+  });
+});
+
 describe('M4 M3 writer timeout budget', () => {
   const start = 1_700_000_000_000;
 
@@ -1409,14 +1550,14 @@ describe('M4 M3 writer timeout budget', () => {
     }
   });
 
-  it('uses one dedicated 15000ms authority for both production M3 provider stages', () => {
+  it('keeps the writer on 15000ms while only the production M3 evaluator reuses slack', () => {
     const route = fs.readFileSync(path.resolve('src/app/api/generate/route.ts'), 'utf8');
     const m3Start = route.indexOf("if (action === EXPERIENCE_V3_ENHANCE_ACTION)");
     const m3End = route.indexOf("if (action === 'bullets')", m3Start);
     const m3 = route.slice(m3Start, m3End);
     expect(route).not.toContain('EXPERIENCE_V3_ENHANCE_WRITER_TIMEOUT_MS');
     expect(m3).toMatch(/generate:[\s\S]*?EXPERIENCE_V3_PROVIDER_STAGE_TIMEOUT_MS,\s*'provider'/u);
-    expect(m3).toMatch(/evaluate:[\s\S]*?EXPERIENCE_V3_PROVIDER_STAGE_TIMEOUT_MS,\s*'verifier'/u);
+    expect(m3).toMatch(/evaluate:[\s\S]*?computeExperienceV3EnhanceEvaluatorTimeoutMs\(deadlineAt\),\s*'verifier'/u);
     expect(EXPERIENCE_LOCALIZATION_VERIFIER_TIMEOUT_MS).toBe(11_500);
     expect(EXPERIENCE_LOCALIZATION_SERVER_BUDGET_MS).toBe(27_000);
     expect(EXPERIENCE_V3_ROUTE_APPLICATION_BUDGET_MS)
