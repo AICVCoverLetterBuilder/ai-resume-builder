@@ -5,6 +5,7 @@ import {
   type ProviderCallOptions,
 } from '../../ai-request-timing';
 import {
+  classifySummaryV3ProviderFailure,
   SUMMARY_V3_INITIAL_EVALUATOR_HARD_MAX_MS,
   SUMMARY_V3_INITIAL_EVALUATOR_TIMEOUT_MS,
   SUMMARY_V3_INITIAL_WRITER_TIMEOUT_MS,
@@ -52,32 +53,32 @@ describe('M8 AAB582 initial-evaluator provider timeout repair', () => {
     expect(SUMMARY_V3_POST_EVALUATOR_RESERVE_MS).toBe(4_000);
     expect(SUMMARY_V3_POST_EVALUATOR_RESERVE_MS).toBe(SUMMARY_V3_POST_PROCESSING_HEADROOM_MS);
     expect(SUMMARY_V3_EVALUATOR_DISPATCH_SAFETY_MS).toBe(1);
-    expect(SUMMARY_V3_INITIAL_EVALUATOR_HARD_MAX_MS).toBe(33_999);
+    expect(SUMMARY_V3_INITIAL_EVALUATOR_HARD_MAX_MS).toBe(41_999);
     expect(SUMMARY_V3_INITIAL_EVALUATOR_HARD_MAX_MS + SUMMARY_V3_POST_EVALUATOR_RESERVE_MS)
       .toBe(SUMMARY_V3_SERVER_BUDGET_MS - SUMMARY_V3_EVALUATOR_DISPATCH_SAFETY_MS);
     expect(SUMMARY_V3_INITIAL_WRITER_TIMEOUT_MS).toBeLessThan(SUMMARY_V3_SERVER_BUDGET_MS);
     expect(SUMMARY_V3_SERVER_BUDGET_MS).toBeLessThan(SUMMARY_V3_ROUTE_MAX_DURATION_S * 1_000);
-    expect(SUMMARY_V3_ROUTE_MAX_DURATION_S).toBe(45);
+    expect(SUMMARY_V3_ROUTE_MAX_DURATION_S).toBe(50);
   });
 
   it('reuses early-writer slack while leaving the explicit post-evaluator reserve', () => {
-    expect(computeSummaryV3EvaluatorTimeoutMs(SUMMARY_V3_SERVER_BUDGET_MS, 0)).toBe(33_999);
-    expect(computeSummaryV3EvaluatorTimeoutMs(SUMMARY_V3_SERVER_BUDGET_MS, 5_489)).toBe(28_510);
-    expect(computeSummaryV3EvaluatorTimeoutMs(SUMMARY_V3_SERVER_BUDGET_MS, 12_999)).toBe(21_000);
-    expect(computeSummaryV3EvaluatorTimeoutMs(SUMMARY_V3_SERVER_BUDGET_MS, 13_000)).toBe(20_999);
-    expect(computeSummaryV3EvaluatorTimeoutMs(SUMMARY_V3_SERVER_BUDGET_MS, 34_001)).toBeNull();
+    expect(computeSummaryV3EvaluatorTimeoutMs(SUMMARY_V3_SERVER_BUDGET_MS, 0)).toBe(41_999);
+    expect(computeSummaryV3EvaluatorTimeoutMs(SUMMARY_V3_SERVER_BUDGET_MS, 5_489)).toBe(36_510);
+    expect(computeSummaryV3EvaluatorTimeoutMs(SUMMARY_V3_SERVER_BUDGET_MS, 12_999)).toBe(29_000);
+    expect(computeSummaryV3EvaluatorTimeoutMs(SUMMARY_V3_SERVER_BUDGET_MS, 13_000)).toBe(28_999);
+    expect(computeSummaryV3EvaluatorTimeoutMs(SUMMARY_V3_SERVER_BUDGET_MS, 42_001)).toBeNull();
   });
 
   it('accepts the physical-like evaluator at 19,999ms and the repaired 20,001ms case', async () => {
     vi.useFakeTimers();
     try {
       const physicalLike = await runEvaluator(5_489, 19_999);
-      expect(physicalLike.timeoutMs).toBe(28_510);
+      expect(physicalLike.timeoutMs).toBe(36_510);
       expect(physicalLike.result).toBe('resolved');
       expect(physicalLike.create).toHaveBeenCalledTimes(1);
 
       const repairedBoundary = await runEvaluator(5_489, 20_001);
-      expect(repairedBoundary.timeoutMs).toBe(28_510);
+      expect(repairedBoundary.timeoutMs).toBe(36_510);
       expect(repairedBoundary.result).toBe('resolved');
       expect(repairedBoundary.create).toHaveBeenCalledTimes(1);
     } finally {
@@ -89,17 +90,17 @@ describe('M8 AAB582 initial-evaluator provider timeout repair', () => {
     vi.useFakeTimers();
     try {
       const below = await runEvaluator(5_489, 28_509);
-      expect(below.timeoutMs).toBe(28_510);
+      expect(below.timeoutMs).toBe(36_510);
       expect(below.result).toBe('resolved');
 
-      const above = await runEvaluator(5_489, 28_512);
-      expect(above.timeoutMs).toBe(28_510);
+      const above = await runEvaluator(5_489, 36_512);
+      expect(above.timeoutMs).toBe(36_510);
       expect(above.result).toBe('rejected');
       expect(above.error).toMatchObject({ name: 'AbortError', deadlineOwner: 'verifier_transport',
-        configuredTimeoutMs: 28_510, effectiveTimeoutMs: 28_510 });
+        configuredTimeoutMs: 36_510, effectiveTimeoutMs: 36_510 });
       expect(readProviderTimingEvidence(above.error)).toMatchObject({
-        configuredTimeoutMs: 28_510, effectiveTimeoutMs: 28_510,
-        outerBudgetRemainingAtStartMs: 32_511,
+        configuredTimeoutMs: 36_510, effectiveTimeoutMs: 36_510,
+        outerBudgetRemainingAtStartMs: 40_511,
       });
     } finally {
       vi.useRealTimers();
@@ -110,12 +111,12 @@ describe('M8 AAB582 initial-evaluator provider timeout repair', () => {
     vi.useFakeTimers();
     try {
       const nearMax = await runEvaluator(12_999, 20_999);
-      expect(nearMax.timeoutMs).toBe(21_000);
+      expect(nearMax.timeoutMs).toBe(29_000);
       expect(nearMax.result).toBe('resolved');
       expect(nearMax.create).toHaveBeenCalledTimes(1);
 
-      const overNearMax = await runEvaluator(13_000, 21_001);
-      expect(overNearMax.timeoutMs).toBe(20_999);
+      const overNearMax = await runEvaluator(13_000, 29_001);
+      expect(overNearMax.timeoutMs).toBe(28_999);
       expect(overNearMax.result).toBe('rejected');
       expect(overNearMax.create).toHaveBeenCalledTimes(1);
       expect(overNearMax.error).toMatchObject({ name: 'AbortError', deadlineOwner: 'verifier_transport' });
@@ -125,7 +126,68 @@ describe('M8 AAB582 initial-evaluator provider timeout repair', () => {
   });
 
   it('fails closed without dispatch when the explicit reserve leaves no provider window', () => {
-    expect(computeSummaryV3EvaluatorTimeoutMs(38_000, 37_001)).toBeNull();
-    expect(computeSummaryV3EvaluatorTimeoutMs(38_000, 37_000)).toBeNull();
+    expect(computeSummaryV3EvaluatorTimeoutMs(SUMMARY_V3_SERVER_BUDGET_MS, 45_001)).toBeNull();
+    expect(computeSummaryV3EvaluatorTimeoutMs(SUMMARY_V3_SERVER_BUDGET_MS, 45_000)).toBeNull();
+  });
+
+  it('M9 physical regression: old evaluator window fails while the bounded new window succeeds', async () => {
+    vi.useFakeTimers();
+    try {
+      const writerElapsedMs = 13_000;
+      const evaluatorDelayMs = 25_000;
+      vi.setSystemTime(writerElapsedMs);
+
+      const oldTimeoutMs = computeSummaryV3EvaluatorTimeoutMs(38_000, writerElapsedMs);
+      expect(oldTimeoutMs).toBe(20_999);
+      const oldCreate = vi.fn(async () => {
+        await delay(evaluatorDelayMs);
+        return 'evaluator-ok';
+      });
+      const oldPending = callProviderWithDeadline(oldCreate, 38_000, oldTimeoutMs ?? 0, 'verifier')
+        .then(() => ({ status: 'resolved' as const }))
+        .catch((error: unknown) => ({ status: 'rejected' as const, error }));
+      await vi.advanceTimersByTimeAsync(evaluatorDelayMs);
+      const oldOutcome = await oldPending;
+      expect(oldOutcome.status).toBe('rejected');
+      expect(oldCreate).toHaveBeenCalledTimes(1);
+
+      vi.setSystemTime(writerElapsedMs);
+      const newTimeoutMs = computeSummaryV3EvaluatorTimeoutMs(SUMMARY_V3_SERVER_BUDGET_MS, writerElapsedMs);
+      expect(newTimeoutMs).toBe(28_999);
+      const newCreate = vi.fn(async () => {
+        await delay(evaluatorDelayMs);
+        return 'evaluator-ok';
+      });
+      const newPending = callProviderWithDeadline(newCreate, SUMMARY_V3_SERVER_BUDGET_MS, newTimeoutMs ?? 0, 'verifier')
+        .then(() => ({ status: 'resolved' as const }))
+        .catch((error: unknown) => ({ status: 'rejected' as const, error }));
+      await vi.advanceTimersByTimeAsync(evaluatorDelayMs);
+      const newOutcome = await newPending;
+      expect(newOutcome.status).toBe('resolved');
+      expect(newCreate).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps a genuine post-fix evaluator timeout typed and usage-safe', async () => {
+    vi.useFakeTimers();
+    try {
+      const writerElapsedMs = 13_000;
+      const timeoutMs = computeSummaryV3EvaluatorTimeoutMs(SUMMARY_V3_SERVER_BUDGET_MS, writerElapsedMs);
+      expect(timeoutMs).toBe(28_999);
+      vi.setSystemTime(writerElapsedMs);
+      const pending = callProviderWithDeadline(() => new Promise<never>(() => undefined), SUMMARY_V3_SERVER_BUDGET_MS,
+        timeoutMs ?? 0, 'verifier').catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync((timeoutMs ?? 0) + 1);
+      const error = await pending;
+      expect(error).toMatchObject({ name: 'AbortError', deadlineOwner: 'verifier_transport' });
+      expect(classifySummaryV3ProviderFailure(error, 'initial_evaluator', 'sdk_request')).toMatchObject({
+        phase: 'initial_evaluator', providerErrorType: 'timeout', providerHttpResponseReceived: null,
+      });
+      expect(readProviderTimingEvidence(error)).toMatchObject({ configuredTimeoutMs: 28_999, effectiveTimeoutMs: 28_999 });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -134,9 +134,9 @@ describe('/api/generate route maxDuration preserves existing budgets and admits 
     expect(AI_PLATFORM_MAX_DURATION_S * 1000 - AI_SERVER_BUDGET_MS).toBeGreaterThanOrEqual(6_000);
     expect(AI_SERVER_BUDGET_MS).toBe(22_000);
     // Summary M4 alone consumes the new route allowance.
-    expect(SUMMARY_V3_ROUTE_MAX_DURATION_S).toBe(45);
-    expect(SUMMARY_V3_SERVER_BUDGET_MS).toBe(38_000);
-    expect(SUMMARY_V3_ROUTE_MAX_DURATION_S * 1_000 - SUMMARY_V3_SERVER_BUDGET_MS).toBeGreaterThanOrEqual(5_000);
+    expect(SUMMARY_V3_ROUTE_MAX_DURATION_S).toBe(50);
+    expect(SUMMARY_V3_SERVER_BUDGET_MS).toBe(46_000);
+    expect(SUMMARY_V3_ROUTE_MAX_DURATION_S * 1_000 - SUMMARY_V3_SERVER_BUDGET_MS).toBeGreaterThanOrEqual(4_000);
     expect(SUMMARY_V3_STYLE_M5_ROUTE_MAX_DURATION_S).toBe(90);
     expect(SUMMARY_V3_STYLE_M5_OVERALL_SERVER_BUDGET_MS).toBe(75_000);
     expect(SUMMARY_V3_STYLE_M5_ROUTE_MAX_DURATION_S * 1_000

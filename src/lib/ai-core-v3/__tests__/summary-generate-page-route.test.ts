@@ -664,14 +664,14 @@ describe('M4 Summary timeout budget closure', () => {
     );
     expect(SUMMARY_V3_INITIAL_EVALUATOR_TIMEOUT_MS).toBe(20_000);
     expect(AI_PROVIDER_CALL_TIMEOUT_MS).toBe(8_000);
-    expect(SUMMARY_V3_SERVER_BUDGET_MS).toBe(38_000);
+    expect(SUMMARY_V3_SERVER_BUDGET_MS).toBe(46_000);
     expect(SUMMARY_V3_POST_PROCESSING_HEADROOM_MS).toBe(4_000);
-    expect(SUMMARY_V3_ROUTE_MAX_DURATION_S).toBe(45);
-    expect(computeSummaryV3ServerDeadline(1_000)).toBe(39_000);
+    expect(SUMMARY_V3_ROUTE_MAX_DURATION_S).toBe(50);
+    expect(computeSummaryV3ServerDeadline(1_000)).toBe(47_000);
     expect(SUMMARY_V3_INITIAL_WRITER_TIMEOUT_MS + SUMMARY_V3_INITIAL_EVALUATOR_TIMEOUT_MS
       + SUMMARY_V3_POST_PROCESSING_HEADROOM_MS).toBe(37_000);
     expect(37_000).toBeLessThan(SUMMARY_V3_SERVER_BUDGET_MS);
-    expect(SUMMARY_V3_ROUTE_MAX_DURATION_S * 1_000 - SUMMARY_V3_SERVER_BUDGET_MS).toBeGreaterThanOrEqual(5_000);
+    expect(SUMMARY_V3_ROUTE_MAX_DURATION_S * 1_000 - SUMMARY_V3_SERVER_BUDGET_MS).toBeGreaterThanOrEqual(4_000);
     expect(SUMMARY_V3_M4_CLIENT_TIMEOUT_MS - SUMMARY_V3_ROUTE_MAX_DURATION_S * 1_000).toBeGreaterThanOrEqual(10_000);
     expect(AI_PLATFORM_MAX_DURATION_S).toBe(30);
     expect(AI_CLIENT_TIMEOUT_MS).toBe(40_000);
@@ -766,7 +766,7 @@ describe('M4 Summary timeout budget closure', () => {
     }
   });
 
-  it('uses the M4-specific 38000ms outer budget from route entry without introducing a second deadline', async () => {
+  it('uses the M4-specific 46000ms outer budget from route entry without introducing a second deadline', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
     try {
@@ -788,7 +788,7 @@ describe('M4 Summary timeout budget closure', () => {
       const run = await pending;
       expect(run.response.status).toBe(200);
       expect(Date.now()).toBe(33_998);
-      expect(run.requests.map((request) => request.requestOptions?.timeout)).toEqual([13_000, 19_998]);
+      expect(run.requests.map((request) => request.requestOptions?.timeout)).toEqual([13_000, 27_998]);
     } finally {
       vi.useRealTimers();
     }
@@ -805,7 +805,7 @@ describe('M4 Summary timeout budget closure', () => {
       await vi.advanceTimersByTimeAsync(11_499);
       const run = await pending;
       expect(run.response.status).toBe(200);
-      expect(run.requests.map((request) => request.requestOptions?.timeout)).toEqual([13_000, 22_500]);
+      expect(run.requests.map((request) => request.requestOptions?.timeout)).toEqual([13_000, 30_500]);
       expect(run.body.candidate).toBeDefined();
     } finally {
       vi.useRealTimers();

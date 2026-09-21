@@ -50,12 +50,16 @@ export const SUMMARY_V3_WRITER_UNIT_CONTRACT = [
  * Keep one explicit reserve after evaluator and terminal work. The writer
  * retains its proven 13_000ms hard maximum; an evaluator that starts early
  * may consume the unused writer slack, but never the post-evaluator reserve.
+ * The production AAB602 trace reached the former 38_000ms envelope with the
+ * evaluator still running. The bounded 46_000ms envelope remains below the
+ * 60_000ms Summary client abort and the 90_000ms Vercel function ceiling.
  */
 /** Historical fixed evaluator slice retained for frozen evidence and controls. */
 export const SUMMARY_V3_INITIAL_EVALUATOR_TIMEOUT_MS = 20_000;
 export const SUMMARY_V3_POST_PROCESSING_HEADROOM_MS = 4_000;
-export const SUMMARY_V3_SERVER_BUDGET_MS = 38_000;
-export const SUMMARY_V3_INITIAL_WRITER_RESERVE_MS = 1_000;
+export const SUMMARY_V3_SERVER_BUDGET_MS = 46_000;
+/** Preserves the shipped 13_000ms writer cap while assigning new slack to the evaluator. */
+export const SUMMARY_V3_INITIAL_WRITER_RESERVE_MS = 9_000;
 export const SUMMARY_V3_INITIAL_WRITER_TIMEOUT_MS =
   SUMMARY_V3_SERVER_BUDGET_MS
   - SUMMARY_V3_INITIAL_EVALUATOR_TIMEOUT_MS
@@ -92,7 +96,7 @@ export function computeSummaryV3EvaluatorTimeoutMs(
 }
 
 /** Must stay synchronized with the static Next route export. */
-export const SUMMARY_V3_ROUTE_MAX_DURATION_S = 45;
+export const SUMMARY_V3_ROUTE_MAX_DURATION_S = 50;
 export const SUMMARY_V3_PLATFORM_HEADROOM_MS =
   SUMMARY_V3_ROUTE_MAX_DURATION_S * 1_000 - SUMMARY_V3_SERVER_BUDGET_MS;
 

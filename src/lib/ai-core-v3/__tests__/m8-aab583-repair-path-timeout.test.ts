@@ -123,7 +123,7 @@ async function runRepairPath(options: RepairPathOptions = {}) {
 
 describe('M8 AAB583 Generate repair-path evaluator timeout ownership', () => {
   it('uses one evaluator authority and leaves the repair writer independently at 8000ms', () => {
-    expect(computeSummaryV3EvaluatorTimeoutMs(SUMMARY_V3_SERVER_BUDGET_MS, 24_409)).toBe(9_590);
+    expect(computeSummaryV3EvaluatorTimeoutMs(SUMMARY_V3_SERVER_BUDGET_MS, 24_409)).toBe(17_590);
     expect(computeSummaryV3EvaluatorTimeoutMs(SUMMARY_V3_SERVER_BUDGET_MS, 0)).toBe(SUMMARY_V3_INITIAL_EVALUATOR_HARD_MAX_MS);
     expect(SUMMARY_V3_INITIAL_WRITER_TIMEOUT_MS).toBe(13_000);
   });
@@ -152,7 +152,7 @@ describe('M8 AAB583 Generate repair-path evaluator timeout ownership', () => {
       expect(run.response.status).toBe(200);
       expect(run.body).toMatchObject({ ok: true, repairAttempted: true });
       expect(starts.map((value) => value.split('@')[0])).toEqual(['initial_writer', 'initial_evaluator', 'repair_writer', 'post_repair_evaluator']);
-      expect(run.requests.map((request) => request.timeout)).toEqual([13_000, 21_999, 8_000, 9_590]);
+      expect(run.requests.map((request) => request.timeout)).toEqual([13_000, 29_999, 8_000, 17_590]);
       expect(run.requests.every((request) => request.maxRetries === 0)).toBe(true);
       expect(run.writerCalls).toBe(2);
       expect(run.evaluatorCalls).toBe(2);
@@ -169,7 +169,7 @@ describe('M8 AAB583 Generate repair-path evaluator timeout ownership', () => {
       const phasePromises = new Map(['initial_writer', 'initial_evaluator', 'repair_writer', 'post_repair_evaluator']
         .map((phase) => [phase, new Promise<void>((resolve) => { phaseResolvers.set(phase, resolve); })] as const));
       const pending = runRepairPath({
-        initialWriterDelayMs: 12_000, initialEvaluatorDelayMs: 8_000, repairWriterDelayMs: 4_409, repairEvaluatorDelayMs: 9_591,
+        initialWriterDelayMs: 12_000, initialEvaluatorDelayMs: 8_000, repairWriterDelayMs: 4_409, repairEvaluatorDelayMs: 17_591,
         onPhaseStarted: (phase) => { phaseResolvers.get(phase)?.(); },
       });
       await phasePromises.get('initial_writer');
@@ -179,15 +179,15 @@ describe('M8 AAB583 Generate repair-path evaluator timeout ownership', () => {
       await phasePromises.get('repair_writer');
       await vi.advanceTimersByTimeAsync(4_409);
       await phasePromises.get('post_repair_evaluator');
-      await vi.advanceTimersByTimeAsync(9_591);
+      await vi.advanceTimersByTimeAsync(17_591);
       const run = await pending;
       expect(run.response.status).toBe(502);
       expect(run.body).toMatchObject({ ok: false, typedReason: 'repair_validator_exception', repairAttempted: true,
         m4ProviderFailure: { phase: 'post_repair_evaluator', providerErrorType: 'timeout', providerDeadlineOwner: 'verifier_transport',
-          providerConfiguredTimeoutMs: 9_590, providerEffectiveTimeoutMs: 9_590 } });
+          providerConfiguredTimeoutMs: 17_590, providerEffectiveTimeoutMs: 17_590 } });
       expect(run.writerCalls).toBe(2);
       expect(run.evaluatorCalls).toBe(2);
-      expect(run.requests.map((request) => request.timeout)).toEqual([13_000, 21_999, 8_000, 9_590]);
+      expect(run.requests.map((request) => request.timeout)).toEqual([13_000, 29_999, 8_000, 17_590]);
       expect(run.requests.every((request) => request.maxRetries === 0)).toBe(true);
     } finally {
       vi.useRealTimers();
@@ -195,7 +195,7 @@ describe('M8 AAB583 Generate repair-path evaluator timeout ownership', () => {
   });
 
   it('fails closed without dispatch when the terminal reserve leaves no evaluator window', () => {
-    expect(computeSummaryV3EvaluatorTimeoutMs(SUMMARY_V3_SERVER_BUDGET_MS, 37_000)).toBeNull();
-    expect(computeSummaryV3EvaluatorTimeoutMs(SUMMARY_V3_SERVER_BUDGET_MS, 37_001)).toBeNull();
+    expect(computeSummaryV3EvaluatorTimeoutMs(SUMMARY_V3_SERVER_BUDGET_MS, 45_000)).toBeNull();
+    expect(computeSummaryV3EvaluatorTimeoutMs(SUMMARY_V3_SERVER_BUDGET_MS, 45_001)).toBeNull();
   });
 });

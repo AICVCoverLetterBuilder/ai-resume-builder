@@ -1793,17 +1793,17 @@ describe('M4 AAB 552 evaluator latency and timing-evidence closure', () => {
     expect(SUMMARY_V3_INITIAL_WRITER_TIMEOUT_MS).toBe(13_000);
     expect(SUMMARY_V3_INITIAL_EVALUATOR_TIMEOUT_MS).toBe(20_000);
     expect(AI_PROVIDER_CALL_TIMEOUT_MS).toBe(8_000);
-    expect(SUMMARY_V3_SERVER_BUDGET_MS).toBe(38_000);
+    expect(SUMMARY_V3_SERVER_BUDGET_MS).toBe(46_000);
     expect(SUMMARY_V3_POST_PROCESSING_HEADROOM_MS).toBe(4_000);
-    expect(SUMMARY_V3_INITIAL_WRITER_RESERVE_MS).toBe(1_000);
-    expect(SUMMARY_V3_ROUTE_MAX_DURATION_S).toBe(45);
-    expect(SUMMARY_V3_PLATFORM_HEADROOM_MS).toBe(7_000);
+    expect(SUMMARY_V3_INITIAL_WRITER_RESERVE_MS).toBe(9_000);
+    expect(SUMMARY_V3_ROUTE_MAX_DURATION_S).toBe(50);
+    expect(SUMMARY_V3_PLATFORM_HEADROOM_MS).toBe(4_000);
     expect(AI_PLATFORM_MAX_DURATION_S).toBe(30);
     expect(AI_CLIENT_TIMEOUT_MS).toBe(40_000);
     expect(SUMMARY_V3_M4_CLIENT_TIMEOUT_MS).toBe(60_000);
     expect(SUMMARY_V3_INITIAL_WRITER_TIMEOUT_MS + SUMMARY_V3_INITIAL_EVALUATOR_TIMEOUT_MS
-      + SUMMARY_V3_POST_PROCESSING_HEADROOM_MS + SUMMARY_V3_INITIAL_WRITER_RESERVE_MS).toBe(38_000);
-    expect(38_000).toBeLessThanOrEqual(SUMMARY_V3_SERVER_BUDGET_MS);
+      + SUMMARY_V3_POST_PROCESSING_HEADROOM_MS + SUMMARY_V3_INITIAL_WRITER_RESERVE_MS).toBe(46_000);
+    expect(46_000).toBeLessThanOrEqual(SUMMARY_V3_SERVER_BUDGET_MS);
     expect(SUMMARY_V3_SERVER_BUDGET_MS).toBeLessThan(SUMMARY_V3_ROUTE_MAX_DURATION_S * 1_000);
     expect(SUMMARY_V3_ROUTE_MAX_DURATION_S * 1_000).toBeLessThan(SUMMARY_V3_M4_CLIENT_TIMEOUT_MS);
     expect(hashSummaryV3Value(SUMMARY_V3_WRITER_TOOL)).toBe('v3s-c785acd3');
@@ -1989,13 +1989,13 @@ describe('M4 AAB 552 evaluator latency and timing-evidence closure', () => {
       const error = await pending;
       expect(readProviderTimingEvidence(error)).toEqual({
         deadlineOwner: 'verifier_transport', configuredTimeoutMs: 20_000, effectiveTimeoutMs: 20_000,
-        elapsedMs: 20_000, outerBudgetRemainingAtStartMs: 38_000,
+        elapsedMs: 20_000, outerBudgetRemainingAtStartMs: 46_000,
       });
       expect(classifySummaryV3ProviderFailure(error, 'initial_evaluator', 'sdk_request')).toMatchObject({
         providerMessageFingerprint: hashSummaryV3Value('verifier_transport_timeout after 20000ms'),
         providerDeadlineOwner: 'verifier_transport', providerConfiguredTimeoutMs: 20_000,
         providerEffectiveTimeoutMs: 20_000, providerElapsedMs: 20_000,
-        providerOuterBudgetRemainingAtStartMs: 38_000,
+        providerOuterBudgetRemainingAtStartMs: 46_000,
       });
     } finally { vi.useRealTimers(); }
   });
