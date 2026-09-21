@@ -386,12 +386,22 @@ async function forcedToolDirectRoute(options: {
     messages?: Array<{ role?: string; content?: unknown }>;
     requestOptions?: { timeout?: number; maxRetries?: number; signal?: AbortSignal };
   }> = [];
+  const terminalEvents: Array<Record<string, unknown>> = [];
   let writerCalls = 0;
   let evaluatorCalls = 0;
   try {
     process.env.AI_CORE_V3_ENABLED = 'true'; process.env.NEXT_PUBLIC_AI_CORE_V3_ENABLED = 'true';
     process.env.ANTHROPIC_API_KEY = 'm4-route-key'; delete process.env.ANTHROPIC_AUTH_TOKEN;
     vi.resetModules();
+    vi.spyOn(console, 'info').mockImplementation((message: unknown) => {
+      if (typeof message !== 'string') return;
+      try {
+        const parsed = JSON.parse(message) as Record<string, unknown>;
+        if (parsed.event === 'summary_v3_terminal') terminalEvents.push(parsed);
+      } catch {
+        // Existing non-JSON diagnostics are outside this focused event assertion.
+      }
+    });
     const create = vi.fn(async (
       params: { tools?: unknown[]; tool_choice?: unknown; system?: unknown; messages?: Array<{ role?: string; content?: unknown }> },
       requestOptions?: { timeout?: number; maxRetries?: number; signal?: AbortSignal },
@@ -438,7 +448,7 @@ async function forcedToolDirectRoute(options: {
       body: JSON.stringify({ action: SUMMARY_V3_GENERATE_ACTION, proToken: 'token', requestId: 'route-m4', manifest }) });
     const { POST, maxDuration } = await import('@/app/api/generate/route');
     const response = await POST(request as Parameters<typeof POST>[0]);
-    return { response, body: await response.json(), requests, maxDuration };
+    return { response, body: await response.json(), requests, maxDuration, terminalEvents };
   } finally {
     vi.restoreAllMocks(); vi.doUnmock('@anthropic-ai/sdk'); vi.doUnmock('@/lib/pro-token'); vi.resetModules();
     for (const key of keys) { if (saved[key] === undefined) delete process.env[key]; else process.env[key] = saved[key]; }
@@ -590,6 +600,7 @@ describe('M4 actual page routing and direct server gate', () => {
     expect(run.requests[1].tools).toHaveLength(1);
     expect(run.requests[1].tool_choice).toEqual({ type: 'tool', name: SUMMARY_V3_EVALUATOR_TOOL_NAME, disable_parallel_tool_use: true });
     expect(run.body.providerOutput).toBeDefined();
+    expect(run.terminalEvents).toHaveLength(0);
   });
 
   it('21b. initial and repair route requests send the identical revised duration contract', async () => {
@@ -616,6 +627,12 @@ describe('M4 actual page routing and direct server gate', () => {
     expect(run.response.status).toBe(502);
     expect(run.body).toMatchObject({ ok: false, typedReason: 'writer_tool_missing' });
     expect(run.requests).toHaveLength(1);
+    expect(run.terminalEvents).toEqual([expect.objectContaining({
+      event: 'summary_v3_terminal', httpStatus: 502, phase: 'initial_writer',
+      typedFailureCode: 'writer_tool_missing', failureFamily: 'output_contract',
+      providerReached: true, providerAttemptCount: 1, providerResponseReceived: true,
+      timeoutPhase: null, usageCommitted: false,
+    })]);
   });
 
   it('23. route transport catch returns safe phase evidence without raw SDK details', async () => {
@@ -627,6 +644,14 @@ describe('M4 actual page routing and direct server gate', () => {
     expect(JSON.stringify(run.body)).not.toContain('raw route provider message');
     expect(JSON.stringify(run.body)).not.toContain('raw-route-request-id');
     expect(run.requests).toHaveLength(1);
+    expect(run.terminalEvents).toHaveLength(1);
+    expect(run.terminalEvents[0]).toMatchObject({
+      event: 'summary_v3_terminal', httpStatus: 502, phase: 'initial_writer',
+      typedFailureCode: 'provider_request_failed', failureFamily: 'provider_transport',
+      timeoutPhase: null, usageCommitted: false,
+    });
+    expect(JSON.stringify(run.terminalEvents[0])).not.toContain('raw route provider message');
+    expect(JSON.stringify(run.terminalEvents[0])).not.toContain('raw-route-request-id');
   });
 });
 
@@ -830,6 +855,10 @@ describe('M4 Summary timeout budget closure', () => {
       expect(run.body.repairAttempted).toBe(false);
       expect(run.body.apply).toBeUndefined();
       expect(run.body.incrementUsage).toBeUndefined();
+      expect(run.terminalEvents).toEqual([expect.objectContaining({
+        httpStatus: 502, phase: 'initial_writer', typedFailureCode: 'provider_request_failed',
+        failureFamily: 'provider_transport', timeoutPhase: 'initial_writer', usageCommitted: false,
+      })]);
     } finally {
       vi.useRealTimers();
     }

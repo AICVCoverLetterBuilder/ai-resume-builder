@@ -120,6 +120,10 @@ import type {
   SummaryV3ProviderPhase,
 } from '@/lib/ai-core-v3/summary-generate';
 import {
+  emitSummaryV3TerminalDiagnostic,
+  type SummaryV3RouteTerminalFailure,
+} from '@/lib/ai-core-v3/summary-v3-production-observability';
+import {
   executeSummaryV3StyleRoute,
   isSummaryV3StyleRouteAction,
   normalizeSummaryV3StyleRouteRequest,
@@ -762,6 +766,19 @@ export async function POST(req: NextRequest) {
   // validation cannot silently eat the budget that must stay under Vercel.
   const serverReceivedAt = Date.now();
   let deadlineAt = computeServerDeadline(serverReceivedAt);
+  let summaryV3ActionObserved = false;
+  let summaryV3RequestId: unknown = req.headers.get('x-vercel-id');
+  const emitSummaryV3RouteFailure = (
+    httpStatus: number,
+    routeFailure: SummaryV3RouteTerminalFailure,
+  ): void => {
+    emitSummaryV3TerminalDiagnostic({
+      requestId: summaryV3RequestId,
+      httpStatus,
+      elapsedMs: Date.now() - serverReceivedAt,
+      routeFailure,
+    });
+  };
 
   // Resolve CORS origin from the request once, used in all jsonResponse calls
   const _corsOrigin = resolveCorsOrigin(req.headers.get('origin'));
@@ -792,6 +809,8 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     const { action, proToken, freeUserId, requestId, ...params } = body;
+    summaryV3ActionObserved = action === SUMMARY_V3_GENERATE_ACTION;
+    summaryV3RequestId = req.headers.get('x-vercel-id') ?? requestId;
     if (String(action) === EXPERIENCE_V3_GENERATE_ACTION) {
       deadlineAt = computeExperienceV3Deadline(serverReceivedAt);
     } else if (String(action) === EXPERIENCE_V3_ENHANCE_ACTION) {
@@ -834,6 +853,13 @@ export async function POST(req: NextRequest) {
         countAfter: limiterCount,
         retryAfterSec: retryAfter,
       }));
+      if (summaryV3ActionObserved) {
+        emitSummaryV3RouteFailure(429, {
+          phase: 'route_rate_limit',
+          typedFailureCode: 'server_rate_limited',
+          failureFamily: 'rate_limit',
+        });
+      }
       return jsonResponse(
         {
           error: `Too many requests. Please try again in ${retryAfter} seconds.`,
@@ -876,6 +902,13 @@ export async function POST(req: NextRequest) {
             serverDeploymentSourceMarker: marker && /^[a-f0-9]{7,40}$/.test(marker) ? marker : null,
           };
         }
+        if (summaryV3ActionObserved) {
+          emitSummaryV3RouteFailure(403, {
+            phase: 'route_auth',
+            typedFailureCode: code,
+            failureFamily: 'auth',
+          });
+        }
         return jsonResponse(
           {
             error: 'Pro access required for AI features.',
@@ -891,6 +924,13 @@ export async function POST(req: NextRequest) {
     // (AI Improvements has a fallback to offline templates, so it doesn't require this)
     const hasApiKey = !!(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);
     if (action !== 'bullets' && !hasApiKey) {
+      if (summaryV3ActionObserved) {
+        emitSummaryV3RouteFailure(500, {
+          phase: 'route_configuration',
+          typedFailureCode: 'ai_service_not_configured',
+          failureFamily: 'configuration',
+        });
+      }
       return jsonResponse(
         { error: 'AI service is not configured. Please try again later.' },
         { status: 500 }
@@ -2307,6 +2347,11 @@ Rules:
       // M4 starts at route entry and remains below both maxDuration and the client abort.
       deadlineAt = computeSummaryV3ServerDeadline(serverReceivedAt);
       if (!v3RoutingEnabled) {
+        emitSummaryV3RouteFailure(409, {
+          phase: 'route_gate',
+          typedFailureCode: 'v3_feature_disabled',
+          failureFamily: 'feature_gate',
+        });
         return jsonResponse({
           ok: false,
           action: SUMMARY_V3_GENERATE_ACTION,
@@ -2389,6 +2434,14 @@ Rules:
             : /provider|evaluator|validator|^writer_/u.test(result.typedReason)
             ? 502
             : 422;
+      if (!result.ok) {
+        emitSummaryV3TerminalDiagnostic({
+          requestId: summaryV3RequestId,
+          httpStatus: status,
+          elapsedMs: Date.now() - serverReceivedAt,
+          result,
+        });
+      }
       return jsonResponse(result, { status });
     }
 
@@ -3374,6 +3427,13 @@ Infer ordinary day-to-day responsibilities from the job title and level. Output 
     return jsonResponse({ error: 'Unknown action', code: 'generation_validation_failed' }, { status: 400 });
   } catch (err) {
     if (err instanceof CoverLetterGenerationIncompleteError) {
+      if (summaryV3ActionObserved) {
+        emitSummaryV3RouteFailure(502, {
+          phase: 'route_exception',
+          typedFailureCode: 'generation_incomplete',
+          failureFamily: 'route_exception',
+        });
+      }
       return jsonResponse(
         { error: err.message, code: 'generation_validation_failed' },
         { status: 502 },
@@ -3385,6 +3445,13 @@ Infer ordinary day-to-day responsibilities from the job title and level. Output 
       console.error('[AI Generate Error Stack]', err.stack);
     }
     const classified = classifyProviderError(err);
+    if (summaryV3ActionObserved) {
+      emitSummaryV3RouteFailure(classified.status, {
+        phase: 'route_exception',
+        typedFailureCode: classified.code,
+        failureFamily: 'route_exception',
+      });
+    }
     console.info('[ai-diagnostics]', JSON.stringify({
       timestamp: Date.now(),
       httpStatus: classified.status,

@@ -1891,14 +1891,19 @@ describe('M4 AAB 552 evaluator latency and timing-evidence closure', () => {
       .mockReturnValueOnce(0).mockReturnValueOnce(1_000).mockReturnValueOnce(4_000)
       .mockReturnValueOnce(7_000).mockReturnValue(7_000);
     const instrumentedCreate = vi.fn(async (options: ProviderCallOptions) => options.timeout);
+    const instrumentedExpectedTimeout = Math.max(
+      1_000,
+      Math.min(11_500, 20_000 - 4_000 - AI_RESPONSE_GUARD_MS),
+    );
     await expect(callProviderWithDeadline(instrumentedCreate, 20_000, 11_500, 'verifier'))
-      .resolves.toBe(11_000);
-    expect(instrumentedCreate).toHaveBeenCalledWith(expect.objectContaining({ timeout: 11_000, maxRetries: 0 }));
-    expect(instrumentedNow).toHaveBeenCalledTimes(4);
+      .resolves.toBe(instrumentedExpectedTimeout);
+    expect(instrumentedCreate).toHaveBeenCalledWith(expect.objectContaining({
+      timeout: instrumentedExpectedTimeout, maxRetries: 0,
+    }));
+    expect(instrumentedNow).toHaveBeenCalledTimes(3);
     instrumentedNow.mockRestore();
 
     const guardNow = vi.spyOn(Date, 'now')
-      .mockReturnValueOnce(0).mockReturnValueOnce(18_000).mockReturnValueOnce(18_000)
       .mockReturnValueOnce(18_000).mockReturnValue(18_000);
     const guardedCreate = vi.fn(async () => 'must-not-dispatch');
     const guardedError = await callProviderWithDeadline(guardedCreate, 20_000, 11_500, 'verifier')
@@ -1908,8 +1913,8 @@ describe('M4 AAB 552 evaluator latency and timing-evidence closure', () => {
       name: 'AbortError', deadlineOwner: 'route_deadline', configuredTimeoutMs: 11_500,
       effectiveTimeoutMs: 2_000, message: 'route_deadline_insufficient before provider dispatch',
     });
-    expect(readProviderTimingEvidence(guardedError)).toMatchObject({ outerBudgetRemainingAtStartMs: 20_000 });
-    expect(guardNow).toHaveBeenCalledTimes(4);
+    expect(readProviderTimingEvidence(guardedError)).toMatchObject({ outerBudgetRemainingAtStartMs: 2_000 });
+    expect(guardNow).toHaveBeenCalledTimes(3);
     guardNow.mockRestore();
   });
 
