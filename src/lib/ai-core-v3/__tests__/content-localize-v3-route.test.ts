@@ -66,7 +66,7 @@ function evaluatorOutput(request: ContentLocalizeM6EvaluatorRequest, accepted: b
   };
 }
 
-type ProviderMode = 'pass' | 'reject-primary' | 'reject-repair' | 'malformed-writer' | 'malformed-repair' | 'identity-drift' | 'accepted-false' | 'accepted-true-false-criterion' | 'provider-error' | 'abort';
+type ProviderMode = 'pass' | 'reject-primary' | 'reject-repair' | 'malformed-writer' | 'malformed-repair' | 'identity-drift' | 'accepted-false' | 'accepted-true-false-criterion' | 'provider-error' | 'abort' | 'deadline';
 
 async function invokeActualRoute(options: {
   snapshot?: ContentLocalizeM6Snapshot;
@@ -78,14 +78,26 @@ async function invokeActualRoute(options: {
   const keys = ['AI_CORE_V3_ENABLED', 'NEXT_PUBLIC_AI_CORE_V3_ENABLED', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'PRO_SIGNING_KEY'] as const;
   const saved = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
   const calls: Array<{ tool: string; strict: boolean | undefined; choice: unknown; invocation: ContentLocalizeV3ProviderInvocation }> = [];
+  const terminalEvents: Array<Record<string, unknown>> = [];
   const mode = options.mode ?? 'pass';
+  const usesFakeTimers = mode === 'deadline';
   try {
+    if (usesFakeTimers) vi.useFakeTimers();
     process.env.AI_CORE_V3_ENABLED = options.enabled === false ? 'false' : 'true';
     process.env.NEXT_PUBLIC_AI_CORE_V3_ENABLED = process.env.AI_CORE_V3_ENABLED;
     process.env.ANTHROPIC_API_KEY = 'm6-route-deterministic-test-key';
     process.env.PRO_SIGNING_KEY = 'm6-route-signing-key';
     delete process.env.ANTHROPIC_AUTH_TOKEN;
     vi.resetModules();
+    vi.spyOn(console, 'info').mockImplementation((...args: unknown[]) => {
+      if (args.length !== 1 || typeof args[0] !== 'string') return;
+      try {
+        const parsed = JSON.parse(args[0]) as Record<string, unknown>;
+        if (parsed.event === 'content_localize_v3_terminal') terminalEvents.push(parsed);
+      } catch {
+        // Non-JSON route diagnostics are outside this event contract.
+      }
+    });
     const create = vi.fn(async (params: { tools?: Array<{ name?: string; strict?: boolean }>; tool_choice?: { type?: string; name?: string; disable_parallel_tool_use?: boolean }; messages?: Array<{ content?: unknown }> }, requestOptions?: { maxRetries?: number; timeout?: number }) => {
       const tool = params.tools?.[0]?.name ?? 'unknown';
       const request = requestFromPrompt(params.messages?.[0]?.content);
@@ -98,6 +110,7 @@ async function invokeActualRoute(options: {
             : 'evaluator';
       calls.push({ tool, strict: params.tools?.[0]?.strict, choice: params.tool_choice, invocation: { phase, role: phase === 'evaluator' || phase === 'repair_evaluator' ? 'evaluator' : 'writer', request: request as ContentLocalizeV3ProviderRequest, prompt: String(params.messages?.[0]?.content), system: '', tool: { name: tool, description: '', strict: true, input_schema: {} }, timeoutMs: requestOptions?.timeout ?? 0, toolChoice: { type: 'tool', name: tool, disable_parallel_tool_use: true } } });
       expect(requestOptions?.maxRetries).toBe(0);
+      if (mode === 'deadline') return await new Promise<never>(() => undefined);
       if (mode === 'abort') throw Object.assign(new Error('aborted'), { name: 'AbortError' });
       if (mode === 'provider-error') throw new Error('provider HTTP 503');
       if (mode === 'malformed-writer' && phase === 'writer') return { stop_reason: 'tool_use', content: [{ type: 'text', text: 'malformed' }] };
@@ -125,9 +138,12 @@ async function invokeActualRoute(options: {
     const body = options.malformedJson
       ? '{bad'
       : JSON.stringify({ action: CONTENT_LOCALIZE_V3_OPERATION, proToken: options.auth === 'invalid' ? 'invalid' : 'valid', snapshot: options.snapshot ?? summarySnapshot() });
-    const response = await POST(new Request('http://localhost/api/generate', { method: 'POST', headers: { 'content-type': 'application/json' }, body }) as Parameters<typeof POST>[0]);
-    return { response, body: await response.json(), calls };
+    const responsePromise = POST(new Request('http://localhost/api/generate', { method: 'POST', headers: { 'content-type': 'application/json' }, body }) as Parameters<typeof POST>[0]);
+    if (usesFakeTimers) await vi.advanceTimersByTimeAsync(CONTENT_LOCALIZE_V3_WRITER_TIMEOUT_MS + 1);
+    const response = await responsePromise;
+    return { response, body: await response.json(), calls, terminalEvents };
   } finally {
+    if (usesFakeTimers) vi.useRealTimers();
     vi.restoreAllMocks(); vi.doUnmock('@anthropic-ai/sdk'); vi.doUnmock('@/lib/pro-token'); vi.resetModules();
     for (const key of keys) { if (saved[key] === undefined) delete process.env[key]; else process.env[key] = saved[key]; }
   }
@@ -156,6 +172,7 @@ describe('M6.4 actual /api/generate route boundary', () => {
   it('dispatches a valid Summary through the shared auth/provider boundary', async () => {
     const run = await invokeActualRoute({});
     expect(run.response.status).toBe(200); expect(run.body.status).toBe('candidate_ready');
+    expect(run.terminalEvents).toHaveLength(0);
     expect(run.calls.map((call) => call.tool)).toEqual([CONTENT_LOCALIZE_V3_PROVIDER_TOOL_NAMES.writer, CONTENT_LOCALIZE_V3_PROVIDER_TOOL_NAMES.evaluator]);
     expect(run.calls.every((call) => call.strict === true)).toBe(true);
     expect(run.calls.every((call) => (call.choice as { type?: string }).type === 'tool')).toBe(true);
@@ -216,6 +233,34 @@ describe('M6.4 actual /api/generate route boundary', () => {
     expect(run.calls[0]?.strict).toBe(true); expect(run.calls[0]?.choice).toMatchObject({ type: 'tool', disable_parallel_tool_use: true });
   });
 
+  it('preserves the typed writer-timeout 504 response and emits exactly one terminal event', async () => {
+    const run = await invokeActualRoute({ mode: 'deadline', snapshot: experienceSnapshot() });
+    expect(run.response.status).toBe(504);
+    expect(Object.keys(run.body)).toEqual(['status', 'reason', 'diagnostic']);
+    expect(run.body).toMatchObject({
+      status: 'handled_failure',
+      reason: 'deadline_exceeded',
+      diagnostic: {
+        deadlineExceeded: true,
+        deadlineOwner: 'provider_call',
+        deadlinePhase: 'writer',
+      },
+    });
+    expect(run.terminalEvents).toHaveLength(1);
+    expect(run.terminalEvents[0]).toMatchObject({
+      event: 'content_localize_v3_terminal',
+      action: 'content-localize-v3',
+      httpStatus: 504,
+      snapshotKind: 'experience_description',
+      sourceLocale: 'en',
+      targetLocale: 'ja',
+      phase: 'initial_writer',
+      typedFailureCode: 'deadline_exceeded',
+      timeoutPhase: 'initial_writer',
+      timeoutOwner: 'provider',
+    });
+  });
+
   it('blocks missing/invalid Pro authorization before provider invocation', async () => {
     const run = await invokeActualRoute({ auth: 'invalid' });
     expect(run.response.status).toBe(403); expect(run.body.code).toBe('invalid_pro_token'); expect(run.calls).toHaveLength(0);
@@ -227,6 +272,10 @@ describe('M6.4 actual /api/generate route boundary', () => {
     expect(run.body).toMatchObject({ status: 'handled_failure', reason: 'v3_feature_disabled' });
     expect(run.body).toHaveProperty('diagnostic');
     expect(run.calls).toHaveLength(0);
+    expect(run.terminalEvents).toHaveLength(1);
+    expect(run.terminalEvents[0]).toMatchObject({
+      action: 'content-localize-v3', phase: 'route_gate', typedFailureCode: 'v3_feature_disabled',
+    });
   });
 
   it('blocks malformed JSON before provider invocation', async () => {

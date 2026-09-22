@@ -149,6 +149,10 @@ import {
   executeContentLocalizeM6Server,
 } from '@/lib/ai-core-v3/content-localize-m6-server';
 import type { ContentLocalizeM6Snapshot } from '@/lib/ai-core-v3/content-localize-m6';
+import {
+  emitContentLocalizeV3ProductionTerminalEvent,
+  type ContentLocalizeV3RouteTerminalFailure,
+} from '@/lib/ai-core-v3/content-localize-v3-production-observability';
 
 /**
  * Explicit Vercel serverless function execution budget (seconds).
@@ -775,6 +779,9 @@ export async function POST(req: NextRequest) {
   let summaryV3RequestId: unknown = req.headers.get('x-vercel-id');
   let experienceV3EnhanceActionObserved = false;
   let experienceV3EnhanceRequestId: unknown = req.headers.get('x-vercel-id');
+  let contentLocalizeV3ActionObserved = false;
+  let contentLocalizeV3RequestId: unknown = req.headers.get('x-vercel-id');
+  let contentLocalizeV3Snapshot: unknown = null;
   const emitSummaryV3RouteFailure = (
     httpStatus: number,
     routeFailure: SummaryV3RouteTerminalFailure,
@@ -793,6 +800,19 @@ export async function POST(req: NextRequest) {
     if (!experienceV3EnhanceActionObserved) return;
     emitExperienceV3TerminalDiagnostic({
       requestId: experienceV3EnhanceRequestId,
+      httpStatus,
+      elapsedMs: Date.now() - serverReceivedAt,
+      routeFailure,
+    });
+  };
+  const emitContentLocalizeV3RouteFailure = (
+    httpStatus: number,
+    routeFailure: ContentLocalizeV3RouteTerminalFailure,
+  ): void => {
+    if (!contentLocalizeV3ActionObserved) return;
+    emitContentLocalizeV3ProductionTerminalEvent({
+      requestId: contentLocalizeV3RequestId,
+      snapshot: contentLocalizeV3Snapshot,
       httpStatus,
       elapsedMs: Date.now() - serverReceivedAt,
       routeFailure,
@@ -832,6 +852,9 @@ export async function POST(req: NextRequest) {
     summaryV3RequestId = req.headers.get('x-vercel-id') ?? requestId;
     experienceV3EnhanceActionObserved = action === EXPERIENCE_V3_ENHANCE_ACTION;
     experienceV3EnhanceRequestId = req.headers.get('x-vercel-id') ?? requestId;
+    contentLocalizeV3ActionObserved = action === CONTENT_LOCALIZE_V3_OPERATION;
+    contentLocalizeV3RequestId = req.headers.get('x-vercel-id') ?? requestId;
+    contentLocalizeV3Snapshot = params.snapshot;
     if (String(action) === EXPERIENCE_V3_GENERATE_ACTION) {
       deadlineAt = computeExperienceV3Deadline(serverReceivedAt);
     } else if (String(action) === EXPERIENCE_V3_ENHANCE_ACTION) {
@@ -882,6 +905,11 @@ export async function POST(req: NextRequest) {
         });
       }
       emitExperienceV3RouteFailure(429, {
+        phase: 'route_rate_limit',
+        typedFailureCode: 'server_rate_limited',
+        failureFamily: 'rate_limit',
+      });
+      emitContentLocalizeV3RouteFailure(429, {
         phase: 'route_rate_limit',
         typedFailureCode: 'server_rate_limited',
         failureFamily: 'rate_limit',
@@ -940,6 +968,11 @@ export async function POST(req: NextRequest) {
           typedFailureCode: code,
           failureFamily: 'auth',
         });
+        emitContentLocalizeV3RouteFailure(403, {
+          phase: 'route_auth',
+          typedFailureCode: code,
+          failureFamily: 'auth',
+        });
         return jsonResponse(
           {
             error: 'Pro access required for AI features.',
@@ -963,6 +996,11 @@ export async function POST(req: NextRequest) {
         });
       }
       emitExperienceV3RouteFailure(500, {
+        phase: 'route_configuration',
+        typedFailureCode: 'ai_service_not_configured',
+        failureFamily: 'configuration',
+      });
+      emitContentLocalizeV3RouteFailure(500, {
         phase: 'route_configuration',
         typedFailureCode: 'ai_service_not_configured',
         failureFamily: 'configuration',
@@ -2278,6 +2316,18 @@ Rules:
     if (action === CONTENT_LOCALIZE_V3_OPERATION) {
       if (!v3RoutingEnabled) {
         const gateFailure = createContentLocalizeM6HandledFailure('v3_feature_disabled');
+        emitContentLocalizeV3ProductionTerminalEvent({
+          requestId: contentLocalizeV3RequestId,
+          snapshot: contentLocalizeV3Snapshot,
+          httpStatus: 409,
+          elapsedMs: Date.now() - serverReceivedAt,
+          result: gateFailure,
+          routeFailure: {
+            phase: 'route_gate',
+            typedFailureCode: gateFailure.reason,
+            failureFamily: 'feature_gate',
+          },
+        });
         return jsonResponse({
           status: gateFailure.status,
           reason: gateFailure.reason,
@@ -2312,6 +2362,15 @@ Rules:
           : result.reason === 'invalid_authorization_snapshot' || result.reason === 'candidate_rejected'
             ? 422
             : 502;
+      if (result.status === 'handled_failure') {
+        emitContentLocalizeV3ProductionTerminalEvent({
+          requestId: contentLocalizeV3RequestId,
+          snapshot: contentLocalizeV3Snapshot,
+          httpStatus: status,
+          elapsedMs: Date.now() - serverReceivedAt,
+          result,
+        });
+      }
       return jsonResponse(
         result.status === 'candidate_ready'
           ? { status: result.status, receipt: result.receipt, diagnostic: result.diagnostic }
@@ -3488,6 +3547,11 @@ Infer ordinary day-to-day responsibilities from the job title and level. Output 
         typedFailureCode: 'generation_incomplete',
         failureFamily: 'route_exception',
       });
+      emitContentLocalizeV3RouteFailure(502, {
+        phase: 'unknown_runtime',
+        typedFailureCode: 'generation_incomplete',
+        failureFamily: 'runtime',
+      });
       return jsonResponse(
         { error: err.message, code: 'generation_validation_failed' },
         { status: 502 },
@@ -3510,6 +3574,11 @@ Infer ordinary day-to-day responsibilities from the job title and level. Output 
       phase: 'route_exception',
       typedFailureCode: classified.code,
       failureFamily: 'route_exception',
+    });
+    emitContentLocalizeV3RouteFailure(classified.status, {
+      phase: 'unknown_runtime',
+      typedFailureCode: classified.code,
+      failureFamily: 'runtime',
     });
     console.info('[ai-diagnostics]', JSON.stringify({
       timestamp: Date.now(),
