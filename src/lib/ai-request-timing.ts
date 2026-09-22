@@ -109,6 +109,15 @@ export function contentLocalizeV3ProviderTimeoutMs(phase: ContentLocalizeV3Provi
  */
 export const CONTENT_LOCALIZE_V3_ROUTE_BUDGET_MS = 78_000;
 export const CONTENT_LOCALIZE_V3_CLIENT_TIMEOUT_MS = 84_000;
+/**
+ * Bounded cap for the initial Content Localize evaluator. The cap is below
+ * the 41-second fast-writer safe envelope (78s route budget minus 15s repair
+ * writer, 20s repair evaluator and 2s response guard), while still allowing
+ * the physically proven ~30s evaluator path to finish when the writer releases
+ * enough budget.
+ */
+export const CONTENT_LOCALIZE_V3_INITIAL_EVALUATOR_MAX_TIMEOUT_MS = 30_000;
+export const CONTENT_LOCALIZE_V3_OTHER_REQUIRED_RESERVE_MS = 0;
 export const CONTENT_LOCALIZE_V3_FOUR_PHASE_TOTAL_MS =
   CONTENT_LOCALIZE_V3_WRITER_TIMEOUT_MS
   + CONTENT_LOCALIZE_V3_EVALUATOR_TIMEOUT_MS
@@ -185,6 +194,38 @@ export const AI_MIN_REPAIR_BUDGET_MS = AI_PROVIDER_CALL_TIMEOUT_MS + 2_000;
  */
 export const AI_RESPONSE_GUARD_MS = 2_000;
 const AI_PROVIDER_MINIMUM_TIMEOUT_MS = 1_000;
+
+/**
+ * Sole dynamic timeout owner for the initial Content Localize evaluator.
+ * Remaining outer budget is reduced by the unchanged repair and response
+ * reserves, then bounded by the local evaluator cap. A late writer therefore
+ * releases less evaluator time, while a fast writer may release more than the
+ * old fixed 20-second slice without borrowing from downstream work.
+ */
+export function computeContentLocalizeV3InitialEvaluatorTimeoutMs(
+  deadlineAt: number,
+  now = Date.now(),
+): number {
+  const remaining = Math.max(0, remainingBudgetMs(deadlineAt, now));
+  const downstreamReserve = CONTENT_LOCALIZE_V3_REPAIR_WRITER_TIMEOUT_MS
+    + CONTENT_LOCALIZE_V3_REPAIR_EVALUATOR_TIMEOUT_MS
+    + AI_RESPONSE_GUARD_MS
+    + CONTENT_LOCALIZE_V3_OTHER_REQUIRED_RESERVE_MS;
+  const available = Math.floor(remaining - downstreamReserve);
+  if (available < AI_PROVIDER_MINIMUM_TIMEOUT_MS) {
+    throw deadlineError(
+      'route_deadline_insufficient before Content Localize evaluator dispatch',
+      'route_deadline',
+      CONTENT_LOCALIZE_V3_INITIAL_EVALUATOR_MAX_TIMEOUT_MS,
+      Math.max(0, available),
+      0,
+      remaining,
+      'route_budget',
+      'evaluator',
+    );
+  }
+  return Math.min(CONTENT_LOCALIZE_V3_INITIAL_EVALUATOR_MAX_TIMEOUT_MS, available);
+}
 
 export const CONTENT_LOCALIZE_V3_RESERVED_WITH_RESPONSE_GUARD_MS =
   CONTENT_LOCALIZE_V3_FOUR_PHASE_TOTAL_MS + AI_RESPONSE_GUARD_MS;

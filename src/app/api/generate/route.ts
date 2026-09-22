@@ -47,6 +47,7 @@ import type { AiErrorCode } from '@/lib/ai-error-codes';
 import { validateAiUnitLocalePurity } from '@/lib/cv-ai-unit-locale-purity';
 import {
   AI_PROVIDER_CALL_TIMEOUT_MS,
+  computeContentLocalizeV3InitialEvaluatorTimeoutMs,
   CONTENT_LOCALIZE_V3_ROUTE_BUDGET_MS,
   EXPERIENCE_V3_PROVIDER_STAGE_TIMEOUT_MS,
   EXPERIENCE_LOCALIZATION_TRANSLATION_TIMEOUT_MS,
@@ -2338,6 +2339,9 @@ Rules:
         params.snapshot as ContentLocalizeM6Snapshot,
         createContentLocalizeV3ProviderDependencies({
           invoke: async (invocation: ContentLocalizeV3ProviderInvocation) => {
+            const configuredTimeoutMs = invocation.phase === 'evaluator'
+              ? computeContentLocalizeV3InitialEvaluatorTimeoutMs(deadlineAt)
+              : invocation.timeoutMs;
             const response = await callWithRetry({
               model: MODEL,
               max_tokens: invocation.role === 'writer' ? 1800 : 1400,
@@ -2346,7 +2350,7 @@ Rules:
               tools: [invocation.tool as NonNullable<Parameters<Anthropic['messages']['create']>[0]['tools']>[number]],
               tool_choice: invocation.toolChoice,
               messages: [{ role: 'user', content: invocation.prompt }],
-            }, deadlineAt, undefined, invocation.timeoutMs, invocation.role === 'writer' ? 'provider' : 'verifier', req.signal, false);
+            }, deadlineAt, undefined, configuredTimeoutMs, invocation.role === 'writer' ? 'provider' : 'verifier', req.signal, false);
             return response;
           },
         }),

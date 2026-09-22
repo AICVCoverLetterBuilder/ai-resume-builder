@@ -13,7 +13,7 @@ import {
 import type { ContentLocalizeM6EvaluatorRequest, ContentLocalizeM6WriterRequest } from '../content-localize-m6-server';
 import { executeContentLocalizeM6Server } from '../content-localize-m6-server';
 import {
-  CONTENT_LOCALIZE_V3_EVALUATOR_TIMEOUT_MS,
+  CONTENT_LOCALIZE_V3_INITIAL_EVALUATOR_MAX_TIMEOUT_MS,
   CONTENT_LOCALIZE_V3_REPAIR_EVALUATOR_TIMEOUT_MS,
   CONTENT_LOCALIZE_V3_REPAIR_WRITER_TIMEOUT_MS,
   CONTENT_LOCALIZE_V3_WRITER_TIMEOUT_MS,
@@ -180,7 +180,7 @@ describe('M6.4 actual /api/generate route boundary', () => {
     expect(run.calls.every((call) => (call.choice as { disable_parallel_tool_use?: boolean }).disable_parallel_tool_use === true)).toBe(true);
     expect(run.calls.map((call) => call.invocation.timeoutMs)).toEqual([
       CONTENT_LOCALIZE_V3_WRITER_TIMEOUT_MS,
-      CONTENT_LOCALIZE_V3_EVALUATOR_TIMEOUT_MS,
+      CONTENT_LOCALIZE_V3_INITIAL_EVALUATOR_MAX_TIMEOUT_MS,
     ]);
   });
 
@@ -212,7 +212,7 @@ describe('M6.4 actual /api/generate route boundary', () => {
     ]);
     expect(run.calls.map((call) => call.invocation.timeoutMs)).toEqual([
       CONTENT_LOCALIZE_V3_WRITER_TIMEOUT_MS,
-      CONTENT_LOCALIZE_V3_EVALUATOR_TIMEOUT_MS,
+      CONTENT_LOCALIZE_V3_INITIAL_EVALUATOR_MAX_TIMEOUT_MS,
       CONTENT_LOCALIZE_V3_REPAIR_WRITER_TIMEOUT_MS,
       CONTENT_LOCALIZE_V3_REPAIR_EVALUATOR_TIMEOUT_MS,
     ]);
