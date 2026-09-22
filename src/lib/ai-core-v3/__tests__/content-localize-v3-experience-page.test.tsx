@@ -745,6 +745,39 @@ describe('M6.6 rendered Experience Translate integration', () => {
     expect([...target.options].find((option) => option.value === 'de')?.disabled).toBe(true);
   });
 
+  it('M9 physical Experience Translate en-to-de dispatches once after target confirm', async () => {
+    const source = 'Receives incoming goods and prepares orders for dispatch.';
+    page.cv = cvForExperience();
+    page.cv.experience[0] = {
+      ...page.cv.experience[0],
+      description: source,
+      originalUserDescription: source,
+      canonicalDescription: source,
+      descriptionSourceLocale: undefined,
+      descriptionSourceLocaleTextHash: undefined,
+    };
+    page.apiFetch.mockReset().mockImplementation(async (_url: string, options: { body: Record<string, unknown> }) => {
+      const snapshot = options.body.snapshot as ContentLocalizeM6ExperienceSnapshot;
+      return { data: candidateReady(snapshot, 'Nimmt eingehende Waren entgegen und bereitet Bestellungen vor.'), response: { status: 200, ok: true, headers: { get: () => null } } };
+    });
+    enableRenderedV3();
+    await renderExperiencePage();
+    fireEvent.click(screen.getByTestId('experience-translate-experience-one'));
+    fireEvent.change(screen.getByLabelText(translations.sr.common.targetLanguage), { target: { value: 'de' } });
+    fireEvent.click(document.querySelector('[data-content-localize-confirm]')!);
+    await waitFor(() => expect(page.apiFetch).toHaveBeenCalledTimes(1));
+    const body = page.apiFetch.mock.calls[0][1].body as Record<string, unknown>;
+    const snapshot = body.snapshot as ContentLocalizeM6ExperienceSnapshot;
+    expect(body.action).toBe('content-localize-v3');
+    expect(snapshot.kind).toBe('experience_description');
+    expect(snapshot.experienceEntryId).toBe('experience-one');
+    expect(snapshot.sourceLocale).toBe('en');
+    expect(snapshot.targetLocale).toBe('de');
+    expect(page.cv?.experience.find((entry) => entry.id === 'experience-one')?.description).toContain('Nimmt');
+    expect(page.usage).toBe(1);
+    expect(toastSpy.success).toHaveBeenCalledTimes(1);
+  });
+
   it('cancel, blank source, stale dialog, unsupported and same-locale choices have zero effects', async () => {
     page.cv = cvForExperience(); page.usage = 0; page.writes = 0; page.apiFetch.mockReset();
     await renderExperiencePage();
@@ -828,6 +861,7 @@ describe('M6.6 rendered Experience Translate integration', () => {
     expect(page.apiFetch).not.toHaveBeenCalled();
     expect(page.writes).toBe(0);
     expect(page.usage).toBe(0);
+    expect(toastSpy.error).toHaveBeenCalledTimes(1);
     expect(screen.getByDisplayValue('Fresh user edit before authorization.')).toBeTruthy();
   });
 

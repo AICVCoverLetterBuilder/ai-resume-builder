@@ -4001,11 +4001,32 @@ export default function CVBuilderPage() {
       && entry?.descriptionSourceLocaleTextHash === intent.boundSourceTextHash;
     if (!sourceIsCurrent || !entry || !source.locale || targetLocale === source.locale) {
       closeExperienceTranslateDialog();
+      toast.error(aiErrorMessage(
+        !sourceIsCurrent || !entry
+          ? 'ai_request_stale'
+          : 'generation_validation_failed',
+        locale,
+      ));
       return;
     }
     const proToken = getCurrentProTokenOrToast(() => setSummaryAiModal(true));
     if (!proToken) return;
     const reqCtx = beginAiClientRequest('experience_translate', targetLocale);
+    // Legacy AAB602 entries may have a confidently detectable current source
+    // locale but no persisted descriptionSourceLocale binding. Keep the stale
+    // source/hash guard above authoritative, then supply that exact validated
+    // binding only to the immutable request snapshot. This is request
+    // construction state, not a durable CV mutation or a second source owner.
+    const requestCv: CVData = {
+      ...liveCvAtConfirm,
+      experience: liveCvAtConfirm.experience.map((candidate) => candidate.id === intent.experienceEntryId
+        ? {
+          ...candidate,
+          descriptionSourceLocale: source.locale!,
+          descriptionSourceLocaleTextHash: hashExperienceSourceLocaleText(sourceText),
+        }
+        : candidate),
+    };
     const operation = createContentLocalizeM6Operation({
       operationId: reqCtx.requestId,
       requestId: reqCtx.requestId,
@@ -4013,10 +4034,11 @@ export default function CVBuilderPage() {
       experienceEntryId: intent.experienceEntryId,
       targetLocale,
       confirmed: true,
-      cv: liveCvAtConfirm,
+      cv: requestCv,
     });
     if (operation.status !== 'request_ready' || operation.snapshot.kind !== 'experience_description') {
       closeExperienceTranslateDialog();
+      toast.error(aiErrorMessage('generation_validation_failed', locale));
       return;
     }
 
