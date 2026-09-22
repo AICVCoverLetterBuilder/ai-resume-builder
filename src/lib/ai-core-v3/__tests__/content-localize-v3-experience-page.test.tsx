@@ -308,6 +308,12 @@ describe('M6.6 rendered Experience Translate integration', () => {
     toastSpy.error.mockReset();
   });
 
+  it('M9 translation success feedback is defined for every supported locale', () => {
+    for (const { code } of languages) {
+      expect(translations[code].cv.translationSuccess?.trim(), code).toBeTruthy();
+    }
+  });
+
   afterEach(() => {
     cleanup();
     delete process.env.NEXT_PUBLIC_AI_CORE_V3_ENABLED;
@@ -776,6 +782,7 @@ describe('M6.6 rendered Experience Translate integration', () => {
     expect(page.cv?.experience.find((entry) => entry.id === 'experience-one')?.description).toContain('Nimmt');
     expect(page.usage).toBe(1);
     expect(toastSpy.success).toHaveBeenCalledTimes(1);
+    expect(toastSpy.success).toHaveBeenCalledWith(translations.sr.cv.translationSuccess);
   });
 
   it('cancel, blank source, stale dialog, unsupported and same-locale choices have zero effects', async () => {

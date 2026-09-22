@@ -256,6 +256,7 @@ export type TranslationKeys = {
       saved: string;
       draftSaved: string;
       genSuccess: string;
+      translationSuccess?: string;
       bulletsSuccess: string;
       rewriteSuccess: string;
       levels: {
@@ -2752,4 +2753,24 @@ const ja: TranslationKeys = {
   about: { hero: { badge: 'Google Play & App Store 説明', title: 'CV Pro AI', description: '数分でプロ品質のCVを作成。まずは無料で始めて、必要になったら一度だけアップグレードできます。', ageRating: '年齢区分: 3+', languages: '12言語', privacyFirst: 'プライバシー重視' }, description: { title: 'アプリについて', paragraphs: ['CV Pro AIは、AIを活用したCV・職務経歴書・添え状の作成ツールです。', 'Android（Google Play）とiPhone（Apple App Store）でご利用いただけます。', '要約文の作成、実績の言い換え、求人内容に合わせた調整を、複数言語で一貫した品質で行えます。', 'ローカライズは全対応言語で統一された体験を提供する前提で設計されており、英語表示への依存を避けています。'] }, features: { title: '無料プランとPro', free: { label: '無料', items: ['標準テンプレート3枚', '添え状ダウンロード1件', '再生成1回', 'AI要約生成', '12言語すべてに対応', 'DOCX書き出し'], disabledItems: ['AI文章改善ツール', '求人内容分析', 'プレミアムテンプレート10枚', '添え状を無制限に生成'] }, pro: { label: 'Pro', price: '$3.99', items: ['プレミアムテンプレート10枚（＋無料3枚）', '添え状を無制限に生成', '再生成も無制限', 'AI文章改善ツール', '求人内容分析', '優先サポート'], footer: '買い切りです。サブスクリプションや自動更新はありません。' } }, aiDisclosure: { title: 'AIの利用について', items: ['本アプリは履歴書要約、箇条書き項目、添え状の生成に外部AIサービスを利用します。', '入力された内容は、必要な文章を生成する目的に限って処理されます。', 'AI生成テキストには不正確な表現が含まれる可能性があるため、提出前の確認が必要です。', 'AIを使う機能は画面上で明確に表示されます。'] }, ageAndContent: { title: '年齢区分とコンテンツ注意', ageRating: '年齢区分: 3+', ageRatingDesc: '全年齢向けです。成人向けコンテンツは含みません。', disclaimer: 'AIが生成した文章には、事実誤認、文法上の不自然さ、応募先に合わない表現が含まれる場合があります。送信前に必ず内容を確認し、必要に応じて修正してください。', noLiability: 'CV Pro AIは履歴書と添え状の作成を支援するツールであり、採用結果や面接獲得を保証するものではありません。', privacy: 'CVデータはユーザーの端末上にローカル保存されます。個人情報を広告目的で販売・共有することはありません。' }, languages: { title: '対応言語', list: ['English', 'Deutsch', 'Español', 'Français', 'Italiano', 'العربية', 'Srpski', 'Hrvatski', 'Русский', 'Português (Brasil)', 'हिन्दी', '日本語'] }, restorePurchase: { title: '購入を復元', description: '以前にProを購入済みで、この端末でアクセスを復元したい場合は、料金ページの復元ボタンをご利用ください。問題がある場合は help.cvappai@gmail.com までご連絡ください。' }, legal: { title: '法的情報', privacyPolicy: 'プライバシー', termsOfService: '利用規約', contact: 'お問い合わせ', viewPricing: '料金を見る' } }
 };
 
-export const translations: Record<Locale, TranslationKeys> = { en, de, es, fr, it, ar, sr, hr, ru, 'pt-BR': ptBR, hi, ja };
+const translationSuccessByLocale: Record<Locale, string> = {
+  en: 'Translation applied!',
+  de: 'Übersetzung angewendet!',
+  es: '¡Traducción aplicada!',
+  fr: 'Traduction appliquée !',
+  it: 'Traduzione applicata!',
+  ar: 'تم تطبيق الترجمة!',
+  sr: 'Prevod je primenjen!',
+  hr: 'Prijevod je primijenjen!',
+  ru: 'Перевод применён!',
+  'pt-BR': 'Tradução aplicada!',
+  hi: 'अनुवाद लागू किया गया!',
+  ja: '翻訳を適用しました！',
+};
+
+const translationRecords: Record<Locale, TranslationKeys> = { en, de, es, fr, it, ar, sr, hr, ru, 'pt-BR': ptBR, hi, ja };
+for (const locale of languages.map(({ code }) => code)) {
+  translationRecords[locale].cv.translationSuccess = translationSuccessByLocale[locale];
+}
+
+export const translations: Record<Locale, TranslationKeys> = translationRecords;

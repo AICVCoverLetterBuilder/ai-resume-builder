@@ -4087,7 +4087,7 @@ export default function CVBuilderPage() {
           : { code: terminalErrorCode ?? 'generation_validation_failed', httpStatus: outcome.status },
         responseSource: outcome.kind === 'committed' ? 'provider' : 'blocked',
       });
-      if (outcome.kind === 'committed') toast.success(t.cv.genSuccess);
+      if (outcome.kind === 'committed') toast.success(t.cv.translationSuccess ?? t.common.success);
       else if (outcome.reason !== 'operation_superseded') toast.error(aiErrorMessage(terminalErrorCode ?? 'generation_validation_failed', locale));
     } finally {
       clearTimeout(timer);
