@@ -16,6 +16,7 @@ import {
   EXPERIENCE_V3_ENHANCE_EVALUATOR_TOOL_NAME,
   EXPERIENCE_V3_ENHANCE_WRITER_TOOL_NAME,
   buildExperienceV3EnhanceEvaluatorPrompt,
+  buildExperienceV3EnhanceWriterPrompt,
   executeExperienceV3EnhanceServer,
   parseExperienceV3EnhanceEvaluatorToolResponse,
   type ExperienceV3EnhanceEvaluatorResponse,
@@ -58,6 +59,56 @@ function manifest(): ExperienceFactManifest {
     targetLocale: 'en',
     contextHash: 'finite-contract-context-hash',
   });
+}
+
+function employmentTenseManifest(
+  employmentState: 'present' | 'completed',
+): ExperienceFactManifest {
+  const sourceText = 'SOURCE_SURFACE_COMPLETED_FORM_FOR_SAME_DUTY';
+  return createExperienceFactManifest({
+    operationId: `employment-tense-${employmentState}`,
+    mode: 'enhance',
+    entryId: 'employment-tense-entry',
+    locale: 'en',
+    roleTitle: 'Example Role',
+    company: 'Example Company',
+    employmentState,
+    dates: {
+      start: { year: 2022, month: 1 },
+      end: employmentState === 'present' ? null : { year: 2024, month: 1 },
+    },
+    exactSourceText: sourceText,
+    facts: [{
+      factId: 'employment-tense-fact-1',
+      text: sourceText,
+      sourceHash: `employment-tense-source-${employmentState}`,
+      required: true,
+    }],
+    snapshotHash: `employment-tense-snapshot-${employmentState}`,
+    sourceLocale: 'en',
+    targetLocale: 'en',
+    contextHash: `employment-tense-context-${employmentState}`,
+  });
+}
+
+function writerResponseWithText(
+  input: ExperienceFactManifest,
+  text: string,
+): ExperienceV3EnhanceWriterResponse {
+  return {
+    stopReason: 'tool_use',
+    content: [{
+      type: 'tool_use',
+      name: EXPERIENCE_V3_ENHANCE_WRITER_TOOL_NAME,
+      input: {
+        operationId: input.operationId,
+        entryId: input.entryId,
+        snapshotHash: input.snapshotHash,
+        locale: input.locale,
+        units: [{ factId: input.facts[0].factId, text }],
+      },
+    }],
+  };
 }
 
 function writerResponse(input: ExperienceFactManifest): ExperienceV3EnhanceWriterResponse {
@@ -192,6 +243,69 @@ function failureWithValidation(
 }
 
 describe('Experience V3 Enhance finite evaluator validation-code contract', () => {
+  it('M9 physical present-employment tense contract treats source tense as presentation, not fact authority', async () => {
+    const input = employmentTenseManifest('present');
+    const candidateText = 'CANDIDATE_SURFACE_ONGOING_FORM_FOR_SAME_DUTY';
+    const candidate = createCandidateEnvelope({
+      operationId: input.operationId,
+      candidateId: 'employment-tense-current-candidate',
+      operationKind: 'experience_enhance',
+      targetLocale: input.locale,
+      sourceSnapshotHash: input.snapshotHash,
+      text: candidateText,
+    });
+    const writerPrompt = buildExperienceV3EnhanceWriterPrompt(input);
+    const evaluatorPrompt = buildExperienceV3EnhanceEvaluatorPrompt(input, candidate);
+
+    expect(input.employmentState).toBe('present');
+    expect(input.facts.map((fact) => fact.factId)).toEqual(['employment-tense-fact-1']);
+    expect(writerPrompt).toContain('TENSE AUTHORITY: manifest.employmentState is the only employment-tense authority.');
+    expect(writerPrompt).toContain('Source wording is immutable for propositions and facts, not for surface tense or aspect.');
+    expect(evaluatorPrompt).toContain('Judge employment tense from the candidate against manifest.employmentState only.');
+    expect(evaluatorPrompt).toContain('Do not report employment_tense_mismatch solely because source wording uses a different tense or aspect.');
+
+    const result = await executeExperienceV3EnhanceServer({ manifest: input }, {
+      generate: async () => writerResponseWithText(input, candidateText),
+      evaluate: async () => evaluatorResponse(input, 'semantic', 'unused', [], []),
+    });
+    expect(result).toMatchObject({ ok: true });
+  });
+
+  it('M9 keeps a genuine present-role past-form candidate rejectable as employment_tense_mismatch', async () => {
+    const input = employmentTenseManifest('present');
+    const result = await executeExperienceV3EnhanceServer({ manifest: input }, {
+      generate: async () => writerResponseWithText(input, 'CANDIDATE_SURFACE_COMPLETED_FORM_FOR_SAME_DUTY'),
+      evaluate: async () => evaluatorResponse(input, 'language_quality', 'employment_tense_mismatch'),
+    });
+    expect(result).toMatchObject({ ok: false, typedReason: 'validation_rejected' });
+    if (result.ok) return;
+    expect(result.validation?.phases.language_quality.violations).toMatchObject([
+      { code: 'employment_tense_mismatch', category: 'language_quality' },
+    ]);
+  });
+
+  it('M9 preserves completed employment as a distinct past-form contract', async () => {
+    const input = employmentTenseManifest('completed');
+    const candidate = createCandidateEnvelope({
+      operationId: input.operationId,
+      candidateId: 'employment-tense-completed-candidate',
+      operationKind: 'experience_enhance',
+      targetLocale: input.locale,
+      sourceSnapshotHash: input.snapshotHash,
+      text: 'CANDIDATE_SURFACE_COMPLETED_FORM_FOR_SAME_DUTY',
+    });
+    const writerPrompt = buildExperienceV3EnhanceWriterPrompt(input);
+    const evaluatorPrompt = buildExperienceV3EnhanceEvaluatorPrompt(input, candidate);
+    expect(writerPrompt).toContain('completed/past CV form');
+    expect(evaluatorPrompt).toContain('manifest.employmentState');
+
+    const result = await executeExperienceV3EnhanceServer({ manifest: input }, {
+      generate: async () => writerResponseWithText(input, candidate.text),
+      evaluate: async () => evaluatorResponse(input, 'semantic', 'unused', [], []),
+    });
+    expect(result).toMatchObject({ ok: true });
+  });
+
   it('keeps the canonical owner, provider schema, and prompt exactly aligned', () => {
     const input = manifest();
     const prompt = buildExperienceV3EnhanceEvaluatorPrompt(input, createCandidateEnvelope({

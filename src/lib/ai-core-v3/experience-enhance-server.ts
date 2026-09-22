@@ -922,6 +922,9 @@ export function buildExperienceV3EnhanceWriterPrompt(manifest: ExperienceFactMan
   return [
     'Enhance the exact Experience source without adding, deleting, merging, or moving material facts.',
     `Write only in locale ${manifest.locale} using ${tense}. Preserve professional CV perspective.`,
+    'TENSE AUTHORITY: manifest.employmentState is the only employment-tense authority.',
+    'Source wording is immutable for propositions and facts, not for surface tense or aspect.',
+    'Adapt the candidate tense and aspect naturally for the target locale: present employment requires an ongoing-role form; completed employment requires a completed-role form.',
     'Return exactly one unit for every required factId, in the supplied source order.',
     'Improve only grammar, clarity, safe concision, professional phrasing, tense, or CV perspective.',
     'Never invent metrics, achievements, tools, certifications, leadership, ownership, scope, responsibility, domain expertise, or universal claims.',
@@ -939,6 +942,9 @@ export function buildExperienceV3EnhanceEvaluatorPrompt(
   return [
     'Act only as an independent non-writing validator. Never rewrite, repair, or suggest replacement prose.',
     'Check complete fact retention, entry ownership, unsupported claims, escalation, quantifiers, cross-entry leakage, role/company/date mutation, target language/script, grammar, clarity, employment tense, CV perspective, degradation, and material improvement.',
+    'Judge employment tense from the candidate against manifest.employmentState only.',
+    'Do not report employment_tense_mismatch solely because source wording uses a different tense or aspect.',
+    'For fact retention, preserve source propositions and scope; source surface tense and aspect are presentation that may change to comply with the authoritative employment state.',
     `Invoke only the ${EXPERIENCE_V3_ENHANCE_EVALUATOR_TOOL_NAME} tool. Do not emit text, Markdown, code fences, commentary, explanations, headings, or reasoning.`,
     'Its input has exactly operationId, entryId, snapshotHash, locale, phases, and materiality.',
     'phases contains exactly semantic and language_quality; each contains status and structured violations.',
