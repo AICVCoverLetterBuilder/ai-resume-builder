@@ -491,8 +491,10 @@ export function classifyExperienceV3Routing(
   if (normalizeExperienceV3Source(input.exactVisibleDescription).length > 0) return 'not_applicable';
   const requested = normalizeLocale(input.requestedLocale);
   const ui = normalizeLocale(input.uiLocale);
-  const stored = normalizeLocale(input.storedContentLocale);
-  if (!requested || requested !== ui || requested !== stored) return 'not_applicable';
+  // Empty-source generation has no content locale to preserve or translate.
+  // The requested output locale must match the UI, but stale CV-level locale
+  // metadata must not send an empty Generate action into the legacy V2 path.
+  if (!requested || requested !== ui) return 'not_applicable';
   return 'owned';
 }
 

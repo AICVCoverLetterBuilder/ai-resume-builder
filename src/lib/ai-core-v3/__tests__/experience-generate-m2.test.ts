@@ -222,6 +222,8 @@ async function runHarness(options: HarnessOptions = {}) {
   let industry = input.industry;
   let usage = input.usageCountBefore;
   let requestCount = 0;
+  const requestActions: string[] = [];
+  const requestManifests: unknown[] = [];
   let writeCount = 0;
   let persistCount = 0;
   let usageCallCount = 0;
@@ -234,8 +236,10 @@ async function runHarness(options: HarnessOptions = {}) {
     setIndustry: (value: string) => { industry = value; },
   };
   const result = await runExperienceV3GenerateAdapter(input, {
-    request: async ({ manifest }) => {
+    request: async ({ action, manifest }) => {
       requestCount += 1;
+      requestActions.push(action);
+      requestManifests.push(manifest);
       options.duringRequest?.(control);
       const response = await validServerResponse(manifest, options.serverOptions);
       return options.mutateResponse ? options.mutateResponse(response) : response;
@@ -280,6 +284,8 @@ async function runHarness(options: HarnessOptions = {}) {
     usage,
     usageCallCount,
     requestCount,
+    requestActions,
+    requestManifests,
     writeCount,
     persistCount,
   };
@@ -300,13 +306,99 @@ describe('M2 A. exact routing', () => {
     expect(run.requestCount).toBe(0);
   });
 
-  it('3. flag true plus cross-locale is not_applicable', async () => {
-    const run = await runHarness({ input: makeInput({ storedContentLocale: 'de' }) });
-    expect(run.result.kind).toBe('not_applicable');
+  it('3. empty Generate ignores stale stored locale but still requires UI and requested locale to match', () => {
+    expect(classifyExperienceV3Routing(makeInput({ storedContentLocale: 'de' }))).toBe('owned');
+    expect(classifyExperienceV3Routing(makeInput({ requestedLocale: 'sr', uiLocale: 'en' }))).toBe('not_applicable');
   });
 
   it('4. flag true plus same-locale plus empty source is owned by V3', () => {
     expect(classifyExperienceV3Routing(makeInput())).toBe('owned');
+  });
+
+  it('4a. empty descriptions use Generate across locales and arbitrary roles, then apply once', async () => {
+    const scenarios = [
+      {
+        locale: 'sr',
+        storedLocale: 'en',
+        role: 'Prodajni rukovodilac',
+        industry: 'sales',
+        level: 'leader',
+        bullets: [
+          'Razgovara sa kupcima o dostupnim proizvodima.',
+          'Predstavlja proizvode i odgovara na pitanja kupaca.',
+          'Učestvuje u svakodnevnim prodajnim aktivnostima.',
+        ],
+      },
+      {
+        locale: 'en',
+        storedLocale: 'sr',
+        role: 'Sales Associate',
+        industry: 'sales',
+        level: 'mid',
+        bullets: [
+          'Discusses available products with customers.',
+          'Describes products and answers customer questions.',
+          'Supports routine sales activities.',
+        ],
+      },
+      {
+        locale: 'en',
+        storedLocale: 'de',
+        role: 'Studio Coordinator',
+        industry: 'general',
+        level: 'mid',
+        bullets: [
+          'Coordinates routine activities for the assigned work area.',
+          'Communicates task updates to relevant colleagues.',
+          'Supports ordinary daily activities in the assigned area.',
+        ],
+      },
+    ] as const;
+
+    for (const scenario of scenarios) {
+      const cv = makeCv(scenario.storedLocale);
+      cv.experience[0] = {
+        ...cv.experience[0],
+        position: scenario.role,
+        company: 'Synthetic Company',
+        startDate: '2026-01',
+        endDate: '',
+        isPresent: true,
+        description: '',
+      };
+      const input = makeInput({
+        cv,
+        requestedLocale: scenario.locale,
+        uiLocale: scenario.locale,
+        storedContentLocale: scenario.storedLocale,
+        industry: scenario.industry,
+        level: scenario.level,
+        exactVisibleDescription: '',
+      });
+
+      expect(classifyExperienceV3Routing(input)).toBe('owned');
+      const run = await runHarness({ input, serverOptions: { bullets: scenario.bullets } });
+      expect(run.result.kind).toBe('handled_success');
+      expect(run.requestActions).toEqual([EXPERIENCE_V3_GENERATE_ACTION]);
+      expect(run.requestManifests).toHaveLength(1);
+      expect(run.requestManifests[0]).toMatchObject({
+        mode: 'generate',
+        locale: scenario.locale,
+        roleTitle: scenario.role,
+        employmentState: 'present',
+        exactSourceText: '',
+        facts: [],
+      });
+      const expectedDescription = scenario.bullets.map((bullet) => `• ${bullet}`).join('\n');
+      expect(run.cv.experience[0].description).toBe(expectedDescription);
+      expect(run.persistedCv.experience[0].description).toBe(expectedDescription);
+      expect(run.requestCount).toBe(1);
+      expect(run.writeCount).toBe(1);
+      expect(run.persistCount).toBe(1);
+      expect(run.usage).toBe(input.usageCountBefore + 1);
+      expect(run.usageCallCount).toBe(1);
+      expect(scenario.bullets.every((bullet) => !/\d|%|Synthetic Company|\b(?:SAP|CRM|certified|doubled|increased)\b/iu.test(bullet))).toBe(true);
+    }
   });
 
   it('5. eligible provider failure is terminal handled_failure with no write or usage', async () => {
