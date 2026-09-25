@@ -61,12 +61,14 @@ import {
   SummaryAiDiagnosticSession,
   clearSummaryV3InternalRejectionAudit,
   resolveAuthoritativeVisibleSummaryText,
+  type SummaryGenerateTerminalStage,
 } from '@/lib/cv-summary-ai-diagnostics';
 import { resolveSummaryFinalizeClientOutcome } from '@/lib/cv-summary-noop-ui';
 import { INTERNAL_AI_RESET_ENABLED } from '@/lib/build-channel';
 import {
   ExperienceAiCopyDiagnosticsButton,
   SummaryAiCopyDiagnosticsButton,
+  SummaryGenerateTerminalDecisionControl,
 } from '@/components/CvExportDiagnosticsControls';
 import type { SaveFileResult } from '@/lib/native-save';
 import {
@@ -231,7 +233,7 @@ import {
   EXPERIENCE_V3_ENHANCE_ACTION,
   EXPERIENCE_V3_GENERATE_ACTION,
   SUMMARY_V3_GENERATE_ACTION,
-  classifySummaryV3GenerateRouting,
+  resolveSummaryV3GenerateRoutingReason,
   isAiCoreV3Enabled,
   hashSummaryV3Value,
   mapExperienceV3GenerateResultToErrorCode,
@@ -1732,7 +1734,8 @@ export default function CVBuilderPage() {
       jobContextHash: summaryJobContext.key,
       usageCountBefore: countBefore,
     });
-    const summaryV3RoutingAtPress = classifySummaryV3GenerateRouting(summaryV3InputAtPress);
+    const summaryV3RoutingReasonAtPress = resolveSummaryV3GenerateRoutingReason(summaryV3InputAtPress);
+    const summaryV3RoutingAtPress = summaryV3RoutingReasonAtPress === 'owned' ? 'owned' : 'not_applicable';
     const clientTimeoutMs = summaryV3RoutingAtPress === 'owned'
       ? resolveSummaryM4ClientAbortTimeoutMs()
       : resolveClientAbortTimeoutMs(AI_CLIENT_TIMEOUT_MS);
@@ -1752,11 +1755,18 @@ export default function CVBuilderPage() {
       operationMode,
       jobContextHash: summaryJobContext.key,
     });
+    summaryDiag.recordSummaryGenerateRoutingDecision({
+      requestId: reqCtx.requestId,
+      owner: summaryV3RoutingReasonAtPress === 'owned' ? 'summary_v3' : 'summary_v2_legacy',
+      routingReason: summaryV3RoutingReasonAtPress,
+    });
     summaryDiag.recordCvSnapshot(liveCvAtPress, liveSummaryAtPress);
     const authObservation = authObservationPromise ? await authObservationPromise : undefined;
     if (authObservation) summaryDiag.patch({ authBoundary: authObservation });
     let summaryV3RouteHttpStatus: number | null = null;
     let summaryV3TerminalEvent: import('@/lib/ai-core-v3/summary-generate').SummaryV3GenerateTerminalEvent | null = null;
+    let summaryGenerateTerminalHttpStatus: number | null = null;
+    let summaryGenerateTerminalStage: SummaryGenerateTerminalStage = 'route';
     const summaryV3Result = summaryV3Enabled
       ? await runSummaryV3GenerateAdapter(summaryV3InputAtPress, {
         request: async ({ manifest }) => {
@@ -1771,6 +1781,7 @@ export default function CVBuilderPage() {
             signal: controller.signal,
           });
           summaryV3RouteHttpStatus = response.status;
+          summaryGenerateTerminalHttpStatus = response.status;
           if (authObservation) summaryDiag.patch({
             authBoundary: { ...authObservation, ...readProAuthServerObservation(data) },
           });
@@ -1799,6 +1810,14 @@ export default function CVBuilderPage() {
       })
       : { kind: 'not_applicable' as const };
     if (summaryV3Result.kind !== 'not_applicable') {
+      const m4CommitReceipt = (summaryV3TerminalEvent as
+        import('@/lib/ai-core-v3/summary-generate').SummaryV3GenerateTerminalEvent | null)?.commitReceipt;
+      summaryGenerateTerminalStage = summaryV3Result.kind === 'handled_success'
+        ? 'success'
+        : m4CommitReceipt?.kind === 'failed'
+          ? (m4CommitReceipt.reason === 'stale_snapshot'
+            || m4CommitReceipt.reason === 'operation_superseded' ? 'preapply' : 'transaction')
+          : summaryGenerateTerminalHttpStatus !== null ? 'server_response' : 'route';
       clearTimeout(timer);
       finishAiClientRequest({
         ctx: reqCtx,
@@ -1829,6 +1848,10 @@ export default function CVBuilderPage() {
         });
         summaryDiag.stage('m4_terminal', 'ok');
       }
+      summaryDiag.recordSummaryGenerateTerminalDecision({
+        terminalStage: summaryGenerateTerminalStage,
+        httpStatus: summaryGenerateTerminalHttpStatus,
+      });
       await terminalizeAiDiagnosticSession(summaryDiag);
       setIsSummaryGenerating(false);
       if (summaryV3Result.kind === 'handled_success') toast.success(t.cv.genSuccess);
@@ -1881,6 +1904,7 @@ export default function CVBuilderPage() {
         return;
       }
 
+      summaryGenerateTerminalStage = 'server_response';
       const { data: summaryData, response: res } = await apiFetch<{ result?: string; error?: string; code?: string; retryAfter?: number }>('/api/generate', {
         body: {
           action: 'summary',
@@ -1902,6 +1926,7 @@ export default function CVBuilderPage() {
         },
         signal: controller.signal,
       });
+      summaryGenerateTerminalHttpStatus = res.status;
       if (authObservation) summaryDiag.patch({
         authBoundary: { ...authObservation, ...readProAuthServerObservation(summaryData) },
       });
@@ -2024,6 +2049,7 @@ export default function CVBuilderPage() {
         return;
       }
       const nextSummary = (summaryData?.result ?? '').trim();
+      summaryGenerateTerminalStage = 'finalizer';
       const finalizedGate = finalizeCvAiFieldForApply({
         action: 'summary_generate',
         field: 'summary',
@@ -2095,6 +2121,7 @@ export default function CVBuilderPage() {
         return;
       }
       summaryDiag.recordFinalizeResult(finalizedGate);
+      summaryGenerateTerminalStage = 'preapply';
       const preApplyGate = summaryDiag.evaluatePreApplyDecisionGates();
       if (!preApplyGate.passed) {
         const failCode = mapExperienceAiFailureToErrorCode(
@@ -2172,6 +2199,7 @@ export default function CVBuilderPage() {
         toast.error(aiErrorMessage('ai_noop', locale));
         return;
       }
+      summaryGenerateTerminalStage = 'transaction';
       const applyCommit = commitSummaryApplyTransactionally({
         cvRef,
         ownership: summaryApplyOwnershipRef.current,
@@ -2224,6 +2252,7 @@ export default function CVBuilderPage() {
         staleReactSummary: '',
       });
       // Visible validation must pass before usage increment (AAB-326).
+      summaryGenerateTerminalStage = 'visible_readback';
       summaryDiag.recordVisibleApply(true, countBefore, visibleSummaryText);
       const visibleOk = summaryDiag.visibleApplySucceeded;
       if (!visibleOk) {
@@ -2271,6 +2300,7 @@ export default function CVBuilderPage() {
         toast.error(msg ?? aiErrorMessage(failCode, locale));
         return;
       }
+      summaryGenerateTerminalStage = 'success';
       recordProAiSuccess();
       summaryDiag.patch({ usageCountAfter: countBefore + 1 });
       finishAiClientRequest({
@@ -2334,6 +2364,10 @@ export default function CVBuilderPage() {
       summaryDiag.recordVisibleApplySkippedFailure(countBefore, 'request_failed_before_apply');
       toast.error(msg ?? aiErrorMessage(payload.code === 'network_error' ? 'network_error' : 'provider_temporarily_unavailable', locale));
     } finally {
+      summaryDiag.recordSummaryGenerateTerminalDecision({
+        terminalStage: summaryGenerateTerminalStage,
+        httpStatus: summaryGenerateTerminalHttpStatus,
+      });
       await terminalizeAiDiagnosticSession(summaryDiag);
       clearTimeout(timer);
       setIsSummaryGenerating(false);
@@ -6175,6 +6209,7 @@ export default function CVBuilderPage() {
                       subtitle={isSummaryGenerating ? undefined : t.cv.generateSubtext}
                       showArrow
                     />
+                    <SummaryGenerateTerminalDecisionControl />
                     <PremiumAIButton
                       onClick={openSummaryTranslateDialog}
                       icon={Wand2}

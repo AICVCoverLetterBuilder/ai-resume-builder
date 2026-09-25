@@ -88,6 +88,15 @@ export type SummaryV3GenerateRoutingResult =
   | { readonly kind: 'handled_success' }
   | { readonly kind: 'handled_failure'; readonly typedReason: string };
 
+export type SummaryV3GenerateRoutingReason =
+  | 'owned'
+  | 'feature_disabled'
+  | 'operation_mismatch'
+  | 'source_not_empty'
+  | 'locale_mismatch'
+  | 'stored_locale_mismatch'
+  | 'capture_incomplete';
+
 export type SummaryV3ExperienceSourceKind = 'mounted_textarea' | 'committed_cv_ref';
 
 export interface SummaryV3AuthorityRecord {
@@ -484,17 +493,26 @@ function canCapture(input: Pick<SummaryV3GenerateAdapterInput,
   }) && /^\d{4}-\d{2}-\d{2}$/u.test(input.referenceDateIso);
 }
 
+export function resolveSummaryV3GenerateRoutingReason(
+  input: Pick<SummaryV3GenerateAdapterInput,
+    'enabled' | 'operationKind' | 'cv' | 'requestedLocale' | 'uiLocale' | 'storedContentLocale'
+    | 'exactVisibleSummary' | 'visibleExperienceSources' | 'referenceDateIso' | 'jobContextHash'>,
+): SummaryV3GenerateRoutingReason {
+  if (!input.enabled) return 'feature_disabled';
+  if (input.operationKind !== 'summary_generate') return 'operation_mismatch';
+  if (normalizeSummaryV3Source(input.exactVisibleSummary) !== '') return 'source_not_empty';
+  const requested = normalizeLocale(input.requestedLocale);
+  if (!requested || requested !== normalizeLocale(input.uiLocale)) return 'locale_mismatch';
+  if (requested !== normalizeLocale(input.storedContentLocale)) return 'stored_locale_mismatch';
+  return canCapture(input) ? 'owned' : 'capture_incomplete';
+}
+
 export function classifySummaryV3GenerateRouting(
   input: Pick<SummaryV3GenerateAdapterInput,
     'enabled' | 'operationKind' | 'cv' | 'requestedLocale' | 'uiLocale' | 'storedContentLocale'
     | 'exactVisibleSummary' | 'visibleExperienceSources' | 'referenceDateIso' | 'jobContextHash'>,
 ): 'not_applicable' | 'owned' {
-  if (!input.enabled || input.operationKind !== 'summary_generate') return 'not_applicable';
-  if (normalizeSummaryV3Source(input.exactVisibleSummary) !== '') return 'not_applicable';
-  const requested = normalizeLocale(input.requestedLocale);
-  if (!requested || requested !== normalizeLocale(input.uiLocale)
-    || requested !== normalizeLocale(input.storedContentLocale)) return 'not_applicable';
-  return canCapture(input) ? 'owned' : 'not_applicable';
+  return resolveSummaryV3GenerateRoutingReason(input) === 'owned' ? 'owned' : 'not_applicable';
 }
 
 function effectiveCv(input: SummaryV3GenerateAdapterInput): CVData {

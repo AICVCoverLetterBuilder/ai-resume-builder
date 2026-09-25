@@ -15,6 +15,11 @@ import {
   INTERNAL_AI_DIAGNOSTICS_REVISION,
   INTERNAL_AI_RESET_BUNDLE_MARKER,
 } from '@/lib/build-channel';
+import { getLatestSummaryGenerateTerminalDecision } from '@/lib/cv-summary-ai-diagnostics';
+import {
+  getCvAiDiagnosticsLifecycleRevision,
+  subscribeCvAiDiagnosticsChanged,
+} from '@/lib/cv-ai-diagnostics-lifecycle';
 
 /**
  * Release-safe "Copy diagnostics" control for CV export failures.
@@ -88,6 +93,62 @@ export function SummaryAiCopyDiagnosticsButton() {
 
   if (!INTERNAL_AI_RESET_ENABLED || !Link) return null;
   return <Link />;
+}
+
+/** Commercial, read-only projection of the single Summary Generate terminal event. */
+export function SummaryGenerateTerminalDecisionControl() {
+  useSyncExternalStore(
+    (onStoreChange) => subscribeCvAiDiagnosticsChanged(onStoreChange, { kind: 'summary' }),
+    getCvAiDiagnosticsLifecycleRevision,
+    () => 0,
+  );
+  const decision = getLatestSummaryGenerateTerminalDecision();
+  if (!decision) return null;
+  const json = JSON.stringify(decision, null, 2);
+
+  return (
+    <section className="rounded-lg border border-border p-3" data-testid="summary-terminal-decision-control">
+      <p className="mb-2 text-xs font-medium text-foreground/70">Summary terminal decision</p>
+      <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all rounded bg-muted/40 p-2 text-xs" data-testid="summary-terminal-decision-json">
+        {json}
+      </pre>
+      <button
+        type="button"
+        className="mt-2 min-h-11 rounded-md px-3 text-sm font-medium underline underline-offset-2"
+        onClick={async () => {
+          let copied = false;
+          try {
+            if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+              await navigator.clipboard.writeText(json);
+              copied = true;
+            }
+          } catch {
+            /* fall through to the platform-compatible copy path */
+          }
+          if (!copied) {
+            try {
+              const textarea = document.createElement('textarea');
+              textarea.value = json;
+              textarea.readOnly = true;
+              textarea.style.position = 'fixed';
+              textarea.style.left = '-9999px';
+              document.body.appendChild(textarea);
+              textarea.select();
+              copied = document.execCommand('copy');
+              document.body.removeChild(textarea);
+            } catch {
+              copied = false;
+            }
+          }
+          toast[copied ? 'success' : 'error'](
+            copied ? 'Summary terminal diagnostic copied' : 'Could not copy Summary terminal diagnostic',
+          );
+        }}
+      >
+        Copy Summary terminal diagnostic
+      </button>
+    </section>
+  );
 }
 
 /** Internal-only Content Localization diagnostics copy control. */

@@ -180,6 +180,7 @@ async function actualGeneralSummaryFlow(options: {
   enabled?: boolean; kind?: AdapterKind; summary?: string; locale?: Locale; contentLocale?: Locale; experienceDescription?: string;
   noCurrentRole?: boolean; captureClientTimer?: boolean; persist?: boolean; usageFailure?: boolean;
   usageFailureMode?: 'verified_rollback' | 'rollback_failed';
+  legacyResponseStatus?: number; legacyFailureCode?: string;
 } = {}) {
   const environmentKeys = ['NEXT_PUBLIC_AI_CORE_V3_ENABLED', 'AI_CORE_V3_ENABLED'] as const;
   const saved = Object.fromEntries(environmentKeys.map((key) => [key, process.env[key]]));
@@ -202,11 +203,16 @@ async function actualGeneralSummaryFlow(options: {
     };
   }
   const kind = options.kind ?? 'handled_failure';
+  const apiGenerateRequests: Array<{ action?: string; requestId?: string }> = [];
   let toastSawSummaryRecord = false;
   m4Adapter.mockReset().mockImplementation(async (
     adapterInput: SummaryV3GenerateAdapterInput,
     dependencies: SummaryV3GenerateAdapterDependencies,
   ) => {
+    const snapshot = captureSummaryV3GenerateOperationSnapshot(adapterInput);
+    if (snapshot.manifest) {
+      await dependencies.request({ action: SUMMARY_V3_GENERATE_ACTION, manifest: snapshot.manifest });
+    }
     if (kind === 'handled_success') {
       const previous = runtimeCv;
       const candidate = 'M4 generated summary.';
@@ -237,9 +243,27 @@ async function actualGeneralSummaryFlow(options: {
   });
   m2Adapter.mockReset().mockResolvedValue({ kind: 'not_applicable' });
   m3Adapter.mockReset().mockResolvedValue({ kind: 'not_applicable' });
-  legacyRequest.mockReset().mockResolvedValue({
-    data: { error: 'legacy_v2_positive_control', code: 'provider_temporarily_unavailable' },
-    response: { ok: false, status: 502, headers: { get: () => null } },
+  legacyRequest.mockReset().mockImplementation(async (...args: unknown[]) => {
+    const path = String(args[0] ?? '');
+    const optionsArg = args[1] as { body?: unknown } | undefined;
+    const body = optionsArg?.body && typeof optionsArg.body === 'object'
+      ? optionsArg.body as { action?: string; requestId?: string }
+      : {};
+    if (path === '/api/generate') apiGenerateRequests.push({ action: body.action, requestId: body.requestId });
+    if (body.action === SUMMARY_V3_GENERATE_ACTION) {
+      return { data: { ok: true }, response: { ok: true, status: 200, headers: { get: () => null } } };
+    }
+    return {
+      data: {
+        error: 'legacy_v2_positive_control',
+        code: options.legacyFailureCode ?? 'provider_temporarily_unavailable',
+      },
+      response: {
+        ok: false,
+        status: options.legacyResponseStatus ?? 502,
+        headers: { get: () => null },
+      },
+    };
   });
   usageIncrement.mockReset(); toastSuccess.mockReset(); toastError.mockReset();
   toastError.mockImplementation(() => {
@@ -279,7 +303,8 @@ async function actualGeneralSummaryFlow(options: {
     return {
       adapterCalls: m4Adapter.mock.calls.length,
       adapterInput: m4Adapter.mock.calls[0]?.[0] as SummaryV3GenerateAdapterInput | undefined,
-      legacyCalls: legacyRequest.mock.calls.length,
+      legacyCalls: apiGenerateRequests.filter(({ action }) => action !== SUMMARY_V3_GENERATE_ACTION).length,
+      apiGenerateRequests,
       usageCalls: usageIncrement.mock.calls.length,
       writes: writes.length,
       visible: editor.value,
@@ -458,6 +483,48 @@ async function forcedToolDirectRoute(options: {
 afterEach(() => { cleanup(); });
 
 describe('M4 actual page routing and direct server gate', () => {
+  it('0a. mounted empty-Summary legacy continuation persists one rejected terminal decision correlated to its request', async () => {
+    const run = await actualGeneralSummaryFlow({
+      enabled: false,
+      legacyResponseStatus: 422,
+      legacyFailureCode: 'generation_validation_failed',
+    });
+    const decision = run.terminalTrace?.summaryGenerateTerminalDecision;
+    expect(decision).toMatchObject({
+      event: 'summary_generate_terminal_decision',
+      owner: 'summary_v2_legacy',
+      routingReason: 'feature_disabled',
+      terminalStage: 'server_response',
+      reasonCode: 'generation_validation_failed',
+      httpStatus: 422,
+      applied: false,
+      usageDelta: 0,
+    });
+    expect(run.visible).toBe('');
+    expect(run.usageCalls).toBe(0);
+    expect(run.apiGenerateRequests).toHaveLength(1);
+    expect(run.apiGenerateRequests[0]?.action).toBe('summary');
+    expect(run.apiGenerateRequests[0]?.requestId).toBe(decision.requestId);
+    expect(JSON.stringify(run.terminalTrace).match(/summary_generate_terminal_decision/gu)).toHaveLength(1);
+  });
+  it('0b. mounted V3-owned Summary success persists one terminal decision with the API request ID', async () => {
+    const run = await actualGeneralSummaryFlow({ kind: 'handled_success' });
+    const decision = run.terminalTrace?.summaryGenerateTerminalDecision;
+    expect(decision).toMatchObject({
+      event: 'summary_generate_terminal_decision',
+      owner: 'summary_v3',
+      routingReason: 'owned',
+      terminalStage: 'success',
+      reasonCode: 'success',
+      httpStatus: 200,
+      applied: true,
+      usageDelta: 1,
+    });
+    expect(run.apiGenerateRequests).toHaveLength(1);
+    expect(run.apiGenerateRequests[0]?.action).toBe(SUMMARY_V3_GENERATE_ACTION);
+    expect(run.apiGenerateRequests[0]?.requestId).toBe(decision.requestId);
+    expect(JSON.stringify(run.terminalTrace).match(/summary_generate_terminal_decision/gu)).toHaveLength(1);
+  });
   it('1. V3-disabled Generate schedules one generic 40000ms timer and bypasses the M4 adapter', async () => {
     const run = await actualGeneralSummaryFlow({ enabled: false, captureClientTimer: true });
     expectOneClientTimer(run, AI_CLIENT_TIMEOUT_MS);

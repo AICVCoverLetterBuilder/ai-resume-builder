@@ -9,6 +9,7 @@ import {
   applySummaryV3GenerateTransaction,
   captureSummaryV3GenerateOperationSnapshot,
   classifySummaryV3GenerateRouting,
+  resolveSummaryV3GenerateRoutingReason,
   executeSummaryV3GenerateServer,
   classifySummaryV3ProviderFailure,
   createSummaryV3ProviderTransportError,
@@ -475,6 +476,20 @@ describe('M4 exact routing', () => {
 
   it('23. enabled empty same-locale general Summary Generate is M4-owned', () => {
     expect(classifySummaryV3GenerateRouting(input())).toBe('owned');
+    expect(resolveSummaryV3GenerateRoutingReason(input())).toBe('owned');
+  });
+
+  it.each([
+    ['feature disabled', { enabled: false }, 'feature_disabled'],
+    ['wrong operation', { operationKind: 'summary_stronger' }, 'operation_mismatch'],
+    ['non-empty source', { exactVisibleSummary: 'existing summary' }, 'source_not_empty'],
+    ['UI locale mismatch', { uiLocale: 'de' }, 'locale_mismatch'],
+    ['stored locale mismatch', { storedContentLocale: 'de' }, 'stored_locale_mismatch'],
+    ['incomplete capture', { referenceDateIso: 'invalid-date' }, 'capture_incomplete'],
+  ] as const)('exposes finite not-applicable reason for %s without changing ownership', (_name, overrides, reason) => {
+    const candidate = input(overrides as Partial<SummaryV3GenerateAdapterInput>);
+    expect(resolveSummaryV3GenerateRoutingReason(candidate)).toBe(reason);
+    expect(classifySummaryV3GenerateRouting(candidate)).toBe('not_applicable');
   });
 });
 

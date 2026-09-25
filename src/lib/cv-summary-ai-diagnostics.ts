@@ -209,6 +209,86 @@ export type SummaryAiDiagStage = {
   reason?: string;
 };
 
+export const SUMMARY_GENERATE_TERMINAL_DECISION_EVENT =
+  'summary_generate_terminal_decision' as const;
+
+export type SummaryGenerateRoutingReason =
+  | 'owned'
+  | 'feature_disabled'
+  | 'operation_mismatch'
+  | 'source_not_empty'
+  | 'locale_mismatch'
+  | 'stored_locale_mismatch'
+  | 'capture_incomplete';
+
+export type SummaryGenerateTerminalOwner = 'summary_v3' | 'summary_v2_legacy' | 'none';
+export type SummaryGenerateTerminalStage =
+  | 'route'
+  | 'server_response'
+  | 'finalizer'
+  | 'preapply'
+  | 'transaction'
+  | 'visible_readback'
+  | 'success';
+export type SummaryGenerateTerminalReasonCode =
+  | 'route_not_applicable'
+  | 'generation_validation_failed'
+  | 'locale_language_rejected'
+  | 'grounding_provenance_rejected'
+  | 'semantic_rejection'
+  | 'semantic_noop_rejected'
+  | 'transaction_persistence_failed'
+  | 'visible_readback_failed'
+  | 'other_typed_failure'
+  | 'success';
+
+export type SummaryGenerateTerminalDecisionRecord = Readonly<{
+  event: typeof SUMMARY_GENERATE_TERMINAL_DECISION_EVENT;
+  requestId: string | null;
+  owner: SummaryGenerateTerminalOwner;
+  routingReason: SummaryGenerateRoutingReason;
+  terminalStage: SummaryGenerateTerminalStage;
+  reasonCode: SummaryGenerateTerminalReasonCode;
+  httpStatus: number | null;
+  applied: boolean;
+  usageDelta: number;
+}>;
+
+function safeSummaryGenerateRequestId(value: unknown): string | null {
+  return typeof value === 'string' && /^[A-Za-z0-9:_-]{1,128}$/u.test(value)
+    ? value
+    : null;
+}
+
+export function resolveSummaryGenerateTerminalReasonCode(input: {
+  terminalStage: SummaryGenerateTerminalStage;
+  routingReason: SummaryGenerateRoutingReason;
+  applied: boolean;
+  finalTypedFailureReason: unknown;
+}): SummaryGenerateTerminalReasonCode {
+  if (input.applied || input.terminalStage === 'success') return 'success';
+  if (input.terminalStage === 'transaction') return 'transaction_persistence_failed';
+  if (input.terminalStage === 'visible_readback') return 'visible_readback_failed';
+  const reason = typeof input.finalTypedFailureReason === 'string'
+    ? input.finalTypedFailureReason.toLowerCase()
+    : '';
+  if (/no.?op|identical|meaningful.change|unchanged/u.test(reason)) return 'semantic_noop_rejected';
+  if (/locale|language|script|foreign|impurity/u.test(reason)) return 'locale_language_rejected';
+  if (/ground|provenance|unsupported.claim|source.fact|fact.retention|lost.source/u.test(reason)) {
+    return 'grounding_provenance_rejected';
+  }
+  if (/semantic|evaluator/u.test(reason)) return 'semantic_rejection';
+  if (/validation|contract|structural|schema|invariant|completeness/u.test(reason)) return 'generation_validation_failed';
+  if (input.terminalStage === 'route' && input.routingReason !== 'owned') return 'route_not_applicable';
+  return 'other_typed_failure';
+}
+
+function safeSummaryGenerateHttpStatus(value: unknown): number | null {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 100 && value <= 599
+    ? value
+    : null;
+}
+
 /** Read-only M4/legacy presentation projection; never reads or infers ledger state. */
 export type SummaryUsageDiagnosticView =
   | Readonly<{ kind: 'legacy'; before: number; after: number; delta: number }>
@@ -345,7 +425,7 @@ const M4_V2_AUTHORITATIVE_FIELD_SET = new Set(M4_V2_AUTHORITATIVE_CONSTRUCTOR_FI
 
 /** Shared fields emitted by the common commit envelope. */
 const M4_SHARED_NON_CONSTRUCTOR_AUTHORITATIVE_FIELDS = Object.freeze(`
-authBoundary
+authBoundary summaryGenerateTerminalDecision
 operationKind diagnosticContractRevision compiledDiagnosticMarker assetRevision cvAiDiagnosticsV2299Revision internalDiagnosticsEnabled internalResetEnabled internalBuildContractUsed serverUrlConfigured apiBaseUrlConfigured capacitorServerUrlConfigured apiHostClass apiHostClassificationContractRevision sourceCommitShort sourceCommitStatus diagnosticInvariantCheckPassed diagnosticInvariantFailureCount diagnosticInvariantFailures diagnosticCompletenessPassed missingRequiredDiagnosticFields nullRequiredDiagnosticFields notApplicableDiagnosticFieldViolations unexpectedDiagnosticFieldTypes diagnosticPayloadByteSize diagnosticPayloadTruncated diagnosticTruncatedSection diagnosticPrivacyViolations privacyCheckPassed
 `.trim().split(/\s+/u));
 
@@ -381,6 +461,7 @@ const M4_OPTIONAL_EXTERNAL_FIELDS = Object.freeze([
   'authBoundary',
   'cvAiDiagnosticsV2299Revision',
   'diagnosticTruncatedSection',
+  'summaryGenerateTerminalDecision',
 ] as const);
 export const M4_SUMMARY_EXTERNAL_REQUIRED_FIELDS = Object.freeze([
   ...M4_SHARED_CONSTRUCTOR_FIELDS,
@@ -1333,6 +1414,7 @@ export function checkM4SummaryDiagnosticCompleteness(
 /** Full mutable session shape. Persisted consumers use the discriminated external union below. */
 export type SummaryAiDiagnosticDraft = {
   authBoundary?: ProAuthBoundaryObservation;
+  summaryGenerateTerminalDecision?: SummaryGenerateTerminalDecisionRecord;
   schemaVersion: typeof SUMMARY_AI_TRACE_SCHEMA_VERSION;
   marker: string;
   capturedAt: string;
@@ -1907,6 +1989,7 @@ type SummaryM4OnlyField = Extract<keyof SummaryAiDiagnosticDraft, `m4${string}`>
 
 type SummaryM4SharedExternalField =
   | 'authBoundary'
+  | 'summaryGenerateTerminalDecision'
   | 'schemaVersion'
   | 'marker'
   | 'capturedAt'
@@ -2006,9 +2089,13 @@ type SummaryM4ForbiddenField = Exclude<
 export type SummaryM4ExternalDiagnostic = Readonly<
   Required<Pick<
     SummaryAiDiagnosticDraft,
-    Exclude<SummaryM4SharedExternalField | SummaryM4OnlyField, 'cvAiDiagnosticsV2299Revision'>
+    Exclude<SummaryM4SharedExternalField | SummaryM4OnlyField,
+      'authBoundary' | 'cvAiDiagnosticsV2299Revision' | 'diagnosticTruncatedSection'
+      | 'summaryGenerateTerminalDecision'>
   >>
-  & Pick<SummaryAiDiagnosticDraft, 'cvAiDiagnosticsV2299Revision' | 'diagnosticTruncatedSection'>
+  & Pick<SummaryAiDiagnosticDraft,
+    'authBoundary' | 'cvAiDiagnosticsV2299Revision' | 'diagnosticTruncatedSection'
+    | 'summaryGenerateTerminalDecision'>
   & { [K in SummaryM4ForbiddenField]?: never }
   & {
     m4Operation: 'summary_v3_generate';
@@ -2035,8 +2122,12 @@ type SummaryM5ForbiddenField = Exclude<
 >;
 
 export type SummaryM5ExternalDiagnostic = Readonly<
-  Required<Pick<SummaryAiDiagnosticDraft, SummaryM4SharedExternalField>>
-  & Pick<SummaryAiDiagnosticDraft, 'diagnosticTruncatedSection' | 'summaryFinalCandidateDiagnosticsRevision'>
+  Required<Pick<SummaryAiDiagnosticDraft,
+    Exclude<SummaryM4SharedExternalField,
+      'authBoundary' | 'diagnosticTruncatedSection' | 'summaryGenerateTerminalDecision'>>>
+  & Pick<SummaryAiDiagnosticDraft,
+    'authBoundary' | 'diagnosticTruncatedSection' | 'summaryGenerateTerminalDecision'
+    | 'summaryFinalCandidateDiagnosticsRevision'>
   & { [K in SummaryM5ForbiddenField]?: never }
   & { m5Operation: 'summary_style' }
 >;
@@ -2129,6 +2220,12 @@ export type SummaryAiDiagSessionInput = {
 export class SummaryAiDiagnosticSession {
   private stages: SummaryAiDiagStage[] = [];
   private committedTrace: SummaryAiDiagnosticTrace | null = null;
+  private summaryGenerateRouting: Readonly<{
+    requestId: string | null;
+    owner: SummaryGenerateTerminalOwner;
+    routingReason: SummaryGenerateRoutingReason;
+  }> | null = null;
+  private summaryGenerateTerminalDecisionRecorded = false;
   private draft: Partial<SummaryAiDiagnosticDraft> & {
     schemaVersion: typeof SUMMARY_AI_TRACE_SCHEMA_VERSION;
     capturedAt: string;
@@ -2142,6 +2239,60 @@ export class SummaryAiDiagnosticSession {
 
   get finalTypedFailureReason(): string | null {
     return this.draft.finalTypedFailureReason ?? null;
+  }
+
+  recordSummaryGenerateRoutingDecision(input: {
+    requestId: string;
+    owner: SummaryGenerateTerminalOwner;
+    routingReason: SummaryGenerateRoutingReason;
+  }): boolean {
+    if (this.summaryGenerateRouting || this.committedTrace) return false;
+    try {
+      this.summaryGenerateRouting = Object.freeze({
+        requestId: safeSummaryGenerateRequestId(input.requestId),
+        owner: input.owner,
+        routingReason: input.routingReason,
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  recordSummaryGenerateTerminalDecision(input: {
+    terminalStage: SummaryGenerateTerminalStage;
+    httpStatus: number | null;
+  }): SummaryGenerateTerminalDecisionRecord | null {
+    if (!this.summaryGenerateRouting || this.summaryGenerateTerminalDecisionRecorded || this.committedTrace) return null;
+    try {
+      const applied = this.draft.visibleApplySucceeded === true && this.draft.countedAsSuccess === true;
+      const before = this.draft.usageCountBefore;
+      const after = this.draft.usageCountAfter;
+      const usageDelta = typeof before === 'number' && typeof after === 'number'
+        ? after - before
+        : 0;
+      const decision = Object.freeze({
+        event: SUMMARY_GENERATE_TERMINAL_DECISION_EVENT,
+        requestId: this.summaryGenerateRouting.requestId,
+        owner: this.summaryGenerateRouting.owner,
+        routingReason: this.summaryGenerateRouting.routingReason,
+        terminalStage: input.terminalStage,
+        reasonCode: resolveSummaryGenerateTerminalReasonCode({
+          terminalStage: input.terminalStage,
+          routingReason: this.summaryGenerateRouting.routingReason,
+          applied,
+          finalTypedFailureReason: this.draft.finalTypedFailureReason,
+        }),
+        httpStatus: safeSummaryGenerateHttpStatus(input.httpStatus),
+        applied,
+        usageDelta,
+      }) satisfies SummaryGenerateTerminalDecisionRecord;
+      this.patch({ summaryGenerateTerminalDecision: decision });
+      this.summaryGenerateTerminalDecisionRecorded = true;
+      return decision;
+    } catch {
+      return null;
+    }
   }
 
   constructor(input: SummaryAiDiagSessionInput) {
@@ -5226,6 +5377,49 @@ function readStored(): SummaryAiDiagnosticTrace | null {
 
 export function getLatestSummaryAiDiagnostic(): SummaryAiDiagnosticTrace | null {
   return latestSummaryTrace || readStored();
+}
+
+/** Release-safe, finite projection for the phone-readable terminal decision control. */
+export function getLatestSummaryGenerateTerminalDecision(): SummaryGenerateTerminalDecisionRecord | null {
+  let storedTrace: unknown;
+  if (latestSummaryTrace) {
+    storedTrace = latestSummaryTrace;
+  } else {
+    try {
+      if (typeof localStorage !== 'undefined') {
+        const serialized = localStorage.getItem(SUMMARY_AI_DIAG_STORAGE_KEY);
+        storedTrace = serialized ? JSON.parse(serialized) as unknown : null;
+      }
+    } catch {
+      return null;
+    }
+  }
+  const raw = isRecord(storedTrace) ? storedTrace.summaryGenerateTerminalDecision : undefined;
+  if (!isRecord(raw)
+    || raw.event !== SUMMARY_GENERATE_TERMINAL_DECISION_EVENT
+    || !(raw.requestId === null || (typeof raw.requestId === 'string' && /^[A-Za-z0-9:_-]{1,128}$/u.test(raw.requestId)))
+    || !(['summary_v3', 'summary_v2_legacy', 'none'] as const).includes(raw.owner as SummaryGenerateTerminalOwner)
+    || !(['owned', 'feature_disabled', 'operation_mismatch', 'source_not_empty', 'locale_mismatch', 'stored_locale_mismatch', 'capture_incomplete'] as const)
+      .includes(raw.routingReason as SummaryGenerateRoutingReason)
+    || !(['route', 'server_response', 'finalizer', 'preapply', 'transaction', 'visible_readback', 'success'] as const)
+      .includes(raw.terminalStage as SummaryGenerateTerminalStage)
+    || !(['route_not_applicable', 'generation_validation_failed', 'locale_language_rejected', 'grounding_provenance_rejected', 'semantic_rejection', 'semantic_noop_rejected', 'transaction_persistence_failed', 'visible_readback_failed', 'other_typed_failure', 'success'] as const)
+      .includes(raw.reasonCode as SummaryGenerateTerminalReasonCode)
+    || !(raw.httpStatus === null || (typeof raw.httpStatus === 'number' && Number.isInteger(raw.httpStatus) && raw.httpStatus >= 100 && raw.httpStatus <= 599))
+    || typeof raw.applied !== 'boolean'
+    || (raw.usageDelta !== 0 && raw.usageDelta !== 1)) return null;
+
+  return Object.freeze({
+    event: SUMMARY_GENERATE_TERMINAL_DECISION_EVENT,
+    requestId: raw.requestId,
+    owner: raw.owner as SummaryGenerateTerminalOwner,
+    routingReason: raw.routingReason as SummaryGenerateRoutingReason,
+    terminalStage: raw.terminalStage as SummaryGenerateTerminalStage,
+    reasonCode: raw.reasonCode as SummaryGenerateTerminalReasonCode,
+    httpStatus: raw.httpStatus,
+    applied: raw.applied,
+    usageDelta: raw.usageDelta,
+  });
 }
 
 export function formatSummaryAiDiagnosticForCopy(trace: SummaryAiDiagnosticTrace): string {
