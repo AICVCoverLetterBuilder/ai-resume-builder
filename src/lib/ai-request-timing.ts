@@ -150,11 +150,17 @@ export const EXPERIENCE_V3_PROVIDER_STAGE_TIMEOUT_MS = 15_000;
 export const EXPERIENCE_V3_ROUTE_OVERHEAD_MS = 6_000;
 export const EXPERIENCE_V3_ROUTE_APPLICATION_BUDGET_MS =
   EXPERIENCE_V3_PROVIDER_STAGE_TIMEOUT_MS * 2 + EXPERIENCE_V3_ROUTE_OVERHEAD_MS;
-export const EXPERIENCE_V3_ENHANCE_DISPATCH_SAFETY_MS = 500;
-export const EXPERIENCE_V3_ENHANCE_POST_EVALUATOR_RESERVE_MS =
-  EXPERIENCE_V3_ROUTE_OVERHEAD_MS - EXPERIENCE_V3_ENHANCE_DISPATCH_SAFETY_MS;
-export const EXPERIENCE_V3_ENHANCE_EVALUATOR_MAX_TIMEOUT_MS =
+export const EXPERIENCE_V3_EVALUATOR_DISPATCH_SAFETY_MS = 500;
+export const EXPERIENCE_V3_POST_EVALUATOR_RESERVE_MS =
+  EXPERIENCE_V3_ROUTE_OVERHEAD_MS - EXPERIENCE_V3_EVALUATOR_DISPATCH_SAFETY_MS;
+export const EXPERIENCE_V3_EVALUATOR_MAX_TIMEOUT_MS =
   EXPERIENCE_V3_ROUTE_APPLICATION_BUDGET_MS - EXPERIENCE_V3_ROUTE_OVERHEAD_MS;
+export const EXPERIENCE_V3_ENHANCE_DISPATCH_SAFETY_MS =
+  EXPERIENCE_V3_EVALUATOR_DISPATCH_SAFETY_MS;
+export const EXPERIENCE_V3_ENHANCE_POST_EVALUATOR_RESERVE_MS =
+  EXPERIENCE_V3_POST_EVALUATOR_RESERVE_MS;
+export const EXPERIENCE_V3_ENHANCE_EVALUATOR_MAX_TIMEOUT_MS =
+  EXPERIENCE_V3_EVALUATOR_MAX_TIMEOUT_MS;
 
 /** Shared application deadline for the two-stage Experience V3 operations. */
 export function computeExperienceV3Deadline(requestStartedAt: number): number {
@@ -449,28 +455,29 @@ function deadlineError(
 }
 
 /**
- * Gives only the Experience Enhance evaluator the writer's unused portion of
- * the existing 36-second route budget. The writer cap and outer deadline stay
+ * Gives the Experience V3 evaluator the writer's unused portion of the
+ * existing 36-second route budget. The writer cap and outer deadline stay
  * unchanged, while the six-second orchestration reserve remains unavailable
  * to the provider call (5.5 seconds after evaluation plus 0.5 seconds before
  * dispatch). A late evaluator start fails before provider dispatch instead of
  * borrowing from that reserve.
  */
-export function computeExperienceV3EnhanceEvaluatorTimeoutMs(
+function computeExperienceV3EvaluatorTimeoutMsForOwner(
   deadlineAt: number,
-  now = Date.now(),
+  now: number,
+  ownerLabel: string,
 ): number {
   const outerBudgetRemainingAtStartMs = Math.max(0, remainingBudgetMs(deadlineAt, now));
   const availableEvaluatorMs = Math.floor(
     outerBudgetRemainingAtStartMs
-      - EXPERIENCE_V3_ENHANCE_POST_EVALUATOR_RESERVE_MS
-      - EXPERIENCE_V3_ENHANCE_DISPATCH_SAFETY_MS,
+      - EXPERIENCE_V3_POST_EVALUATOR_RESERVE_MS
+      - EXPERIENCE_V3_EVALUATOR_DISPATCH_SAFETY_MS,
   );
   if (availableEvaluatorMs < AI_PROVIDER_MINIMUM_TIMEOUT_MS) {
     throw deadlineError(
-      'route_deadline_insufficient before Experience Enhance evaluator dispatch',
+      'route_deadline_insufficient before ' + ownerLabel + ' evaluator dispatch',
       'route_deadline',
-      EXPERIENCE_V3_ENHANCE_EVALUATOR_MAX_TIMEOUT_MS,
+      EXPERIENCE_V3_EVALUATOR_MAX_TIMEOUT_MS,
       Math.max(0, availableEvaluatorMs),
       0,
       outerBudgetRemainingAtStartMs,
@@ -478,7 +485,23 @@ export function computeExperienceV3EnhanceEvaluatorTimeoutMs(
       'evaluator',
     );
   }
-  return Math.min(EXPERIENCE_V3_ENHANCE_EVALUATOR_MAX_TIMEOUT_MS, availableEvaluatorMs);
+  return Math.min(EXPERIENCE_V3_EVALUATOR_MAX_TIMEOUT_MS, availableEvaluatorMs);
+}
+
+/** Shared Generate/Enhance evaluator timeout that spends only unused route slack. */
+export function computeExperienceV3EvaluatorTimeoutMs(
+  deadlineAt: number,
+  now = Date.now(),
+): number {
+  return computeExperienceV3EvaluatorTimeoutMsForOwner(deadlineAt, now, 'Experience V3');
+}
+
+/** Backward-compatible Enhance name and diagnostic wording retained for callers. */
+export function computeExperienceV3EnhanceEvaluatorTimeoutMs(
+  deadlineAt: number,
+  now = Date.now(),
+): number {
+  return computeExperienceV3EvaluatorTimeoutMsForOwner(deadlineAt, now, 'Experience Enhance');
 }
 
 /**

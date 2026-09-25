@@ -55,6 +55,7 @@ import {
   callProviderWithDeadline,
   computeExperienceV3Deadline,
   computeExperienceV3EnhanceDeadline,
+  computeExperienceV3EvaluatorTimeoutMs,
   computeExperienceV3EnhanceEvaluatorTimeoutMs,
   computeExperienceLocalizationDeadline,
   computeContentLocalizeV3Deadline,
@@ -1080,7 +1081,7 @@ export async function POST(req: NextRequest) {
               request,
               deadlineAt,
               undefined,
-              EXPERIENCE_V3_PROVIDER_STAGE_TIMEOUT_MS,
+              computeExperienceV3EvaluatorTimeoutMs(deadlineAt),
               'verifier', undefined, false);
           } catch (error) {
             throw createExperienceV3EnhanceProviderTransportError(error);
