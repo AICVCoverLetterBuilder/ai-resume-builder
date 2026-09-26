@@ -65,7 +65,8 @@ describe('Summary V3 production terminal observability', () => {
       event: 'summary_v3_terminal', requestId: 'iad1::safe-request-id',
       action: 'summary_v3_generate', httpStatus: 502, phase: 'initial_writer',
       typedFailureCode: 'provider_request_failed', failureFamily: 'provider_transport',
-      timeoutPhase: 'initial_writer', finalizerReached: false, usageCommitted: false,
+      timeoutPhase: 'initial_writer', transportTerminationKind: 'application_slice_timeout',
+      finalizerReached: false, usageCommitted: false,
     });
     expect(JSON.stringify(source)).toBe(before);
     info.mockRestore();
@@ -97,7 +98,10 @@ describe('Summary V3 production terminal observability', () => {
     const slowRateLimit = createSummaryV3TerminalDiagnostic({
       requestId: 'slow-rate-limit', httpStatus: 502, elapsedMs: 99_999,
       result: failure('provider_request_failed', {
-        m4ProviderFailure: providerFailure({ providerErrorType: 'rate_limit' }),
+        m4ProviderFailure: providerFailure({
+          providerErrorType: 'rate_limit', providerDeadlineOwner: null,
+          providerHttpStatus: 429, providerHttpResponseReceived: true,
+        }),
       }),
     });
     const typedTimeout = createSummaryV3TerminalDiagnostic({
@@ -108,7 +112,9 @@ describe('Summary V3 production terminal observability', () => {
     });
 
     expect(slowRateLimit.timeoutPhase).toBeNull();
+    expect(slowRateLimit.transportTerminationKind).toBe('provider_http_error');
     expect(typedTimeout.timeoutPhase).toBe('initial_evaluator');
+    expect(typedTimeout.transportTerminationKind).toBe('application_slice_timeout');
   });
 
   it('projects a fixed allowlist and cannot serialize CV, provider, auth, or secret material', () => {
@@ -138,6 +144,7 @@ describe('Summary V3 production terminal observability', () => {
 
     expect(event.requestId).toBeNull();
     expect(event.outputContractFailureClass).toBe('top_level_keys');
+    expect(event.transportTerminationKind).toBe('unknown');
     for (const forbidden of [
       'PRIVATE CV CANDIDATE', 'PRIVATE EXPERIENCE SOURCE', 'PRIVATE PROVIDER OUTPUT',
       'PRIVATE PROMPT', 'PRIVATE PRO TOKEN', 'PRIVATE REVENUECAT ID',

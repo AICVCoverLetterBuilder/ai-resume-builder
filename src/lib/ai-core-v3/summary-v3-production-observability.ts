@@ -29,6 +29,15 @@ export type SummaryV3TerminalFailureFamily =
   | 'semantic_validation'
   | 'route_exception';
 
+export type SummaryV3TransportTerminationKind =
+  | 'application_slice_timeout'
+  | 'route_budget_timeout'
+  | 'sdk_timeout'
+  | 'client_abort'
+  | 'network_error'
+  | 'provider_http_error'
+  | 'unknown';
+
 export interface SummaryV3RouteTerminalFailure {
   readonly phase: Extract<SummaryV3TerminalPhase,
     'route_auth' | 'route_rate_limit' | 'route_configuration' | 'route_gate' | 'route_exception'>;
@@ -66,6 +75,7 @@ export interface SummaryV3TerminalDiagnosticEvent {
   readonly validationRejected: boolean | null;
   readonly repairValidationRejected: boolean | null;
   readonly timeoutPhase: SummaryV3ProviderPhase | null;
+  readonly transportTerminationKind: SummaryV3TransportTerminationKind;
   readonly outputContractFailureClass: string | null;
   readonly usageCommitted: false;
 }
@@ -160,6 +170,45 @@ function responseReachedProvider(
   return true;
 }
 
+function transportTerminationKind(
+  providerFailure: SummaryV3ProviderFailureEnvelope | null,
+): SummaryV3TransportTerminationKind {
+  if (!providerFailure) return 'unknown';
+
+  if (providerFailure.providerErrorType === 'timeout') {
+    if (providerFailure.providerDeadlineOwner === 'route_deadline') {
+      return 'route_budget_timeout';
+    }
+    if (providerFailure.providerDeadlineOwner === 'client_abort'
+      || providerFailure.errorClass === 'APIUserAbortError') {
+      return 'client_abort';
+    }
+    if (providerFailure.providerDeadlineOwner === 'provider_transport'
+      || providerFailure.providerDeadlineOwner === 'verifier_transport'
+      || providerFailure.providerDeadlineOwner === 'translation_transport') {
+      return 'application_slice_timeout';
+    }
+    if (providerFailure.errorClass === 'APIConnectionTimeoutError') {
+      return 'sdk_timeout';
+    }
+  }
+
+  const httpErrorType = providerFailure.providerErrorType === 'invalid_request'
+    || providerFailure.providerErrorType === 'authentication'
+    || providerFailure.providerErrorType === 'permission'
+    || providerFailure.providerErrorType === 'rate_limit'
+    || providerFailure.providerErrorType === 'provider_5xx';
+  if (providerFailure.providerHttpStatus !== null
+    || providerFailure.providerHttpResponseReceived === true && httpErrorType) {
+    return 'provider_http_error';
+  }
+  if (providerFailure.providerErrorType === 'connection/network'
+    || providerFailure.errorClass === 'APIConnectionError') {
+    return 'network_error';
+  }
+  return 'unknown';
+}
+
 function executionReach(
   result: SummaryV3GenerateFailureResponse,
   phase: SummaryV3TerminalPhase,
@@ -220,6 +269,7 @@ export function createSummaryV3TerminalDiagnostic(
       validationRejected: false,
       repairValidationRejected: false,
       timeoutPhase: null,
+      transportTerminationKind: 'unknown',
       outputContractFailureClass: null,
       usageCommitted: false,
     };
@@ -254,6 +304,7 @@ export function createSummaryV3TerminalDiagnostic(
     timeoutPhase: providerFailure?.providerErrorType === 'timeout'
       ? providerFailure.phase
       : null,
+    transportTerminationKind: transportTerminationKind(providerFailure),
     outputContractFailureClass: providerFailure?.failureStage === 'tool_validation'
       ? safeCode(providerFailure.providerErrorCode, typedFailureCode)
       : null,
