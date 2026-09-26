@@ -3,6 +3,7 @@ import type Anthropic from '@anthropic-ai/sdk';
 import type { AiCoreV3CandidateEnvelope } from './contracts';
 import { immutableCopy } from './immutability';
 import { INTERNAL_AI_RESET_ENABLED } from '../build-channel';
+import { isLocale } from '../i18n/translations';
 import {
   readProviderTimingEvidence,
 } from '../ai-request-timing';
@@ -433,7 +434,8 @@ export function parseSummaryV3GenerateRequest(value: unknown): SummaryV3Manifest
   ])) return null;
   if (manifest.operationKind !== 'summary_generate' || typeof manifest.operationId !== 'string' || !manifest.operationId.trim()
     || typeof manifest.targetLocale !== 'string' || !manifest.targetLocale.trim()
-    || manifest.requestedLocale !== manifest.targetLocale || manifest.sourceLocale !== manifest.targetLocale
+    || !isLocale(manifest.targetLocale)
+    || manifest.requestedLocale !== manifest.targetLocale || manifest.sourceLocale !== null
     || typeof manifest.sourceSnapshotHash !== 'string' || !manifest.sourceSnapshotHash.trim()
     || typeof manifest.jobContextHash !== 'string' || !manifest.jobContextHash.trim()
     || typeof manifest.manifestHash !== 'string' || !manifest.manifestHash.trim()

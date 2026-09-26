@@ -15,6 +15,7 @@ import { createSummaryFactManifest } from './summary-manifest';
 import { INTERNAL_AI_RESET_ENABLED } from '../build-channel';
 import type { AggregateValidationResult, AiCoreV3Violation } from './validators';
 import { hashSummarySourceLocaleText } from '../cv-summary-source-locale';
+import { isLocale } from '../i18n/translations';
 
 export const SUMMARY_V3_GENERATE_ACTION = 'summary_v3_generate' as const;
 
@@ -118,7 +119,8 @@ export interface SummaryV3SelectedEntry extends SummaryEntryFactManifest {
 
 export interface SummaryV3Manifest extends SummaryFactManifest {
   readonly requestedLocale: string;
-  readonly sourceLocale: string;
+  /** Empty Summary Generate has no source text, hence no source-text locale. */
+  readonly sourceLocale: null;
   readonly jobContextHash: string;
   readonly manifestHash: string;
   readonly gender: string;
@@ -502,8 +504,7 @@ export function resolveSummaryV3GenerateRoutingReason(
   if (input.operationKind !== 'summary_generate') return 'operation_mismatch';
   if (normalizeSummaryV3Source(input.exactVisibleSummary) !== '') return 'source_not_empty';
   const requested = normalizeLocale(input.requestedLocale);
-  if (!requested || requested !== normalizeLocale(input.uiLocale)) return 'locale_mismatch';
-  if (requested !== normalizeLocale(input.storedContentLocale)) return 'stored_locale_mismatch';
+  if (!isLocale(requested) || requested !== normalizeLocale(input.uiLocale)) return 'locale_mismatch';
   return canCapture(input) ? 'owned' : 'capture_incomplete';
 }
 
@@ -610,7 +611,7 @@ export function captureSummaryV3GenerateOperationSnapshot(
   const manifestWithoutHash = {
     ...base,
     requestedLocale: input.requestedLocale,
-    sourceLocale: input.storedContentLocale,
+    sourceLocale: null,
     jobContextHash: input.jobContextHash,
     gender: input.cv.personal.gender || '',
     selectedEntries: entries,

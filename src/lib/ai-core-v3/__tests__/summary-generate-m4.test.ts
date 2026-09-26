@@ -469,7 +469,6 @@ describe('M4 exact routing', () => {
     ['Professional operation', { operationKind: 'summary_professional' }],
     ['Shorter operation', { operationKind: 'summary_shorter' }],
     ['cross-locale UI', { uiLocale: 'de' }],
-    ['cross-locale stored content', { storedContentLocale: 'de' }],
   ])('16-22. %s is not applicable and remains V2-owned', (_name, override) => {
     expect(classifySummaryV3GenerateRouting(input(override as Partial<SummaryV3GenerateAdapterInput>))).toBe('not_applicable');
   });
@@ -484,12 +483,67 @@ describe('M4 exact routing', () => {
     ['wrong operation', { operationKind: 'summary_stronger' }, 'operation_mismatch'],
     ['non-empty source', { exactVisibleSummary: 'existing summary' }, 'source_not_empty'],
     ['UI locale mismatch', { uiLocale: 'de' }, 'locale_mismatch'],
-    ['stored locale mismatch', { storedContentLocale: 'de' }, 'stored_locale_mismatch'],
+    ['invalid requested locale', { requestedLocale: 'invalid', uiLocale: 'invalid' }, 'locale_mismatch'],
     ['incomplete capture', { referenceDateIso: 'invalid-date' }, 'capture_incomplete'],
   ] as const)('exposes finite not-applicable reason for %s without changing ownership', (_name, overrides, reason) => {
     const candidate = input(overrides as Partial<SummaryV3GenerateAdapterInput>);
     expect(resolveSummaryV3GenerateRoutingReason(candidate)).toBe(reason);
     expect(classifySummaryV3GenerateRouting(candidate)).toBe('not_applicable');
+  });
+});
+
+describe('empty Summary no-source locale contract', () => {
+  it.each([
+    ['sr', 'en'], ['en', 'sr'], ['hi', 'de'], ['de', ''], ['sr', ''],
+  ])('owns %s with stored %s without fabricating source language or mutating history', async (locale, stored) => {
+    const request = input({ requestedLocale: locale, uiLocale: locale, storedContentLocale: stored });
+    const before = JSON.stringify(request.cv);
+    expect(resolveSummaryV3GenerateRoutingReason(request)).toBe('owned');
+    const captured = captureSummaryV3GenerateOperationSnapshot(request);
+    expect(captured.storedContentLocale).toBe(stored);
+    expect(captured.manifest.sourceLocale).toBeNull();
+    expect(captured.manifest.targetLocale).toBe(locale);
+    expect(captured.manifest.requestedLocale).toBe(locale);
+    expect(parseSummaryV3GenerateRequest({ manifest: captured.manifest })).toEqual(captured.manifest);
+    expect(JSON.stringify(request.cv)).toBe(before);
+    const write = vi.fn(async () => writerResponse(captured.manifest));
+    const evaluate = vi.fn(async () => evaluatorResponse(captured.manifest));
+    const result = await executeSummaryV3GenerateServer({ manifest: captured.manifest }, { write, evaluate });
+    expect(result.ok).toBe(true);
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(evaluate).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['fabricated same locale', { sourceLocale: 'en' }],
+    ['stale source locale', { sourceLocale: 'sr' }],
+    ['empty-string source locale', { sourceLocale: '' }],
+    ['missing source locale', { sourceLocale: undefined }],
+    ['malformed source locale', { sourceLocale: {} }],
+    ['requested-target mismatch', { requestedLocale: 'sr' }],
+    ['invalid target', { targetLocale: 'invalid', requestedLocale: 'invalid' }],
+    ['blank target', { targetLocale: '', requestedLocale: '' }],
+    ['non-empty rewrite mode', { operationKind: 'summary_stronger', sourceLocale: 'en' }],
+  ])('rejects %s even with a recomputed hash', (_name, overrides) => {
+    const manifest = { ...snapshot().manifest, ...overrides };
+    const { manifestHash: _previousHash, ...body } = manifest;
+    manifest.manifestHash = hashSummaryV3Value({
+      ...body,
+      selectedEntries: body.selectedEntries.map(({ indexDiagnostic: _index, ...entry }) => entry),
+    });
+    expect(parseSummaryV3GenerateRequest({ manifest })).toBeNull();
+  });
+
+  it('keeps the null locale in hashed authority and rejects an old fabricated-locale hash', () => {
+    const manifest = snapshot().manifest;
+    const { manifestHash, ...body } = manifest;
+    const authoritativeBody = {
+      ...body, selectedEntries: body.selectedEntries.map(({ indexDiagnostic: _index, ...entry }) => entry),
+    };
+    expect(manifestHash).toBe(hashSummaryV3Value(authoritativeBody));
+    expect(parseSummaryV3GenerateRequest({ manifest: {
+      ...manifest, manifestHash: hashSummaryV3Value({ ...authoritativeBody, sourceLocale: 'en' }),
+    } })).toBeNull();
   });
 });
 

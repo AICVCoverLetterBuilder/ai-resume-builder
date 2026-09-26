@@ -6,6 +6,7 @@ import { translations, type Locale } from '../../i18n/translations';
 import type { CVData } from '../../types';
 import { SUMMARY_AI_DIAG_STORAGE_KEY } from '../../cv-summary-ai-diagnostics';
 import { hashSummarySourceLocaleText } from '../../cv-summary-source-locale';
+import { normalizeLegacyCvRuntime } from '../../cv-legacy-runtime-migration';
 import {
   AI_CLIENT_TIMEOUT_MS,
   AI_PLATFORM_MAX_DURATION_S,
@@ -68,7 +69,7 @@ function pageCv(summary = '', contentLocale: Locale = 'en'): CVData {
 
 function validForcedWriterResponse(manifest: SummaryV3Manifest) {
   return { stop_reason: 'tool_use', content: [{
-    type: 'tool_use',
+    type: 'tool_use' as const,
     name: SUMMARY_V3_WRITER_TOOL_NAME,
     input: {
       operationId: manifest.operationId,
@@ -95,7 +96,7 @@ const summaryEvaluatorChecks = [
 ] as const;
 
 function validForcedEvaluatorResponse(manifest: SummaryV3Manifest, rejected = false) {
-  return { stop_reason: 'tool_use', content: [{ type: 'tool_use', name: SUMMARY_V3_EVALUATOR_TOOL_NAME, input: {
+  return { stop_reason: 'tool_use', content: [{ type: 'tool_use' as const, name: SUMMARY_V3_EVALUATOR_TOOL_NAME, input: {
     operationId: manifest.operationId, snapshotHash: manifest.sourceSnapshotHash, locale: manifest.targetLocale,
     phases: { semantic: rejected
       ? { status: 'failed', violations: [{ code: 'repair_required', category: 'semantic', detail: 'bounded repair evidence' }] }
@@ -181,12 +182,16 @@ async function actualGeneralSummaryFlow(options: {
   noCurrentRole?: boolean; captureClientTimer?: boolean; persist?: boolean; usageFailure?: boolean;
   usageFailureMode?: 'verified_rollback' | 'rollback_failed';
   legacyResponseStatus?: number; legacyFailureCode?: string;
+  realV3?: 'success' | 'evaluator_rejection';
 } = {}) {
   const environmentKeys = ['NEXT_PUBLIC_AI_CORE_V3_ENABLED', 'AI_CORE_V3_ENABLED'] as const;
   const saved = Object.fromEntries(environmentKeys.map((key) => [key, process.env[key]]));
   const scroll = HTMLElement.prototype.scrollIntoView;
   cleanup(); localStorage.clear(); sessionStorage.clear();
   testLocale = options.locale ?? 'en'; runtimeCv = pageCv(options.summary ?? '', options.contentLocale ?? 'en'); writes = [];
+  // The installed-app fixture has already migrated; mount must not perform a
+  // first-run migration that replaces the stale document locale before the click.
+  if (options.realV3) runtimeCv = normalizeLegacyCvRuntime(runtimeCv, options.contentLocale ?? 'en');
   persistenceSucceeds = options.persist !== false;
   usageAccountingSucceeds = options.usageFailure !== true;
   usageFailureMode = options.usageFailureMode ?? null;
@@ -202,13 +207,20 @@ async function actualGeneralSummaryFlow(options: {
       experience: runtimeCv.experience.map((entry) => ({ ...entry, isPresent: false, endDate: entry.endDate || '2024-01' })),
     };
   }
-  const kind = options.kind ?? 'handled_failure';
+  const kind = options.realV3 === 'success' ? 'handled_success' : options.kind ?? 'handled_failure';
+  let writerCalls = 0;
+  let evaluatorCalls = 0;
+  let serverFailure: string | null = null;
   const apiGenerateRequests: Array<{ action?: string; requestId?: string }> = [];
   let toastSawSummaryRecord = false;
   m4Adapter.mockReset().mockImplementation(async (
     adapterInput: SummaryV3GenerateAdapterInput,
     dependencies: SummaryV3GenerateAdapterDependencies,
   ) => {
+    if (options.realV3 || kind === 'not_applicable') {
+      const actual = await vi.importActual<typeof import('..')>('@/lib/ai-core-v3');
+      return actual.runSummaryV3GenerateAdapter(adapterInput, dependencies);
+    }
     const snapshot = captureSummaryV3GenerateOperationSnapshot(adapterInput);
     if (snapshot.manifest) {
       await dependencies.request({ action: SUMMARY_V3_GENERATE_ACTION, manifest: snapshot.manifest });
@@ -247,10 +259,29 @@ async function actualGeneralSummaryFlow(options: {
     const path = String(args[0] ?? '');
     const optionsArg = args[1] as { body?: unknown } | undefined;
     const body = optionsArg?.body && typeof optionsArg.body === 'object'
-      ? optionsArg.body as { action?: string; requestId?: string }
+      ? optionsArg.body as { action?: string; requestId?: string; manifest?: SummaryV3Manifest }
       : {};
     if (path === '/api/generate') apiGenerateRequests.push({ action: body.action, requestId: body.requestId });
     if (body.action === SUMMARY_V3_GENERATE_ACTION) {
+      if (options.realV3) {
+        const actual = await vi.importActual<typeof import('..')>('@/lib/ai-core-v3');
+        const manifest = body.manifest;
+        if (!manifest) throw new Error('missing synthetic page manifest');
+        const data = await actual.executeSummaryV3GenerateServer({ manifest }, {
+          write: async () => {
+            writerCalls += 1;
+            const raw = validForcedWriterResponse(manifest);
+            return { stopReason: raw.stop_reason, content: raw.content };
+          },
+          evaluate: async () => {
+            evaluatorCalls += 1;
+            const raw = validForcedEvaluatorResponse(manifest, options.realV3 === 'evaluator_rejection');
+            return { stopReason: raw.stop_reason, content: raw.content };
+          },
+        });
+        serverFailure = data.ok ? null : data.typedReason;
+        return { data, response: { ok: data.ok, status: data.ok ? 200 : 422, headers: { get: () => null } } };
+      }
       return { data: { ok: true }, response: { ok: true, status: 200, headers: { get: () => null } } };
     }
     return {
@@ -289,12 +320,15 @@ async function actualGeneralSummaryFlow(options: {
     fireEvent.click(screen.getByRole('button', { name: translations[testLocale].cv.summary }));
     const editor = document.querySelector('[data-summary-v3-editor]') as HTMLTextAreaElement;
     expect(editor).not.toBeNull();
+    const writesBeforeClick = writes.length;
     fireEvent.click(screen.getByRole('button', { name: new RegExp(translations[testLocale].cv.generate, 'i') }));
     if (options.enabled === false || kind === 'not_applicable') {
       await waitFor(() => expect(legacyRequest).toHaveBeenCalled());
     } else {
       await waitFor(() => expect(m4Adapter).toHaveBeenCalledTimes(1));
-      await waitFor(() => expect(
+      if (options.realV3) {
+        await waitFor(() => expect(toastSuccess.mock.calls.length + toastError.mock.calls.length).toBe(1));
+      } else await waitFor(() => expect(
         kind === 'handled_success' && options.persist !== false && options.usageFailure !== true && !options.usageFailureMode
           ? toastSuccess
           : toastError,
@@ -307,6 +341,11 @@ async function actualGeneralSummaryFlow(options: {
       apiGenerateRequests,
       usageCalls: usageIncrement.mock.calls.length,
       writes: writes.length,
+      operationWrites: writes.length - writesBeforeClick,
+      writerCalls,
+      evaluatorCalls,
+      serverFailure,
+      finalContentLocale: runtimeCv.contentLocale,
       visible: editor.value,
       toastSawSummaryRecord,
       toastSuccessCalls: toastSuccess.mock.calls.length,
@@ -483,6 +522,48 @@ async function forcedToolDirectRoute(options: {
 afterEach(() => { cleanup(); });
 
 describe('M4 actual page routing and direct server gate', () => {
+  it('empty-source physical class: Serbian UI and stale English document use real V3 through one atomic success', async () => {
+    const run = await actualGeneralSummaryFlow({ locale: 'sr', contentLocale: 'en', realV3: 'success' });
+    expect(run.serverFailure).toBeNull();
+    expect(run.adapterCalls).toBe(1);
+    expect(run.adapterInput?.storedContentLocale).toBe('en');
+    expect(run.adapterInput?.uiLocale).toBe('sr');
+    expect(run.adapterInput?.requestedLocale).toBe('sr');
+    expect(run.apiGenerateRequests).toHaveLength(1);
+    expect(run.apiGenerateRequests[0]?.action).toBe('summary_v3_generate');
+    expect(run.legacyCalls).toBe(0);
+    expect(run.writerCalls).toBe(1);
+    expect(run.evaluatorCalls).toBe(1);
+    expect(run.visible).not.toBe('');
+    expect(run.operationWrites).toBe(1);
+    expect(run.usageCalls).toBe(1);
+    expect(run.finalContentLocale).toBe('en');
+    expect(run.terminalTrace?.summaryGenerateTerminalDecision).toEqual({
+      event: 'summary_generate_terminal_decision', requestId: run.apiGenerateRequests[0]?.requestId,
+      owner: 'summary_v3', routingReason: 'owned', terminalStage: 'success', reasonCode: 'success',
+      httpStatus: 200, applied: true, usageDelta: 1,
+    });
+  });
+  it('empty-source physical class: real evaluator rejection stays V3-owned without apply, usage, or legacy fallback', async () => {
+    const run = await actualGeneralSummaryFlow({ locale: 'sr', contentLocale: 'en', realV3: 'evaluator_rejection' });
+    expect(run.adapterInput?.storedContentLocale).toBe('en');
+    expect(run.serverFailure).toBe('repair_validation_rejected');
+    expect(run.apiGenerateRequests).toHaveLength(1);
+    expect(run.apiGenerateRequests[0]?.action).toBe('summary_v3_generate');
+    expect(run.legacyCalls).toBe(0);
+    expect(run.writerCalls).toBe(2);
+    expect(run.evaluatorCalls).toBe(2);
+    expect(run.visible).toBe('');
+    expect(run.operationWrites).toBe(0);
+    expect(run.usageCalls).toBe(0);
+    expect(run.finalContentLocale).toBe('en');
+    expect(run.terminalTrace?.summaryGenerateTerminalDecision).toMatchObject({
+      requestId: run.apiGenerateRequests[0]?.requestId,
+      owner: 'summary_v3', routingReason: 'owned', applied: false, usageDelta: 0,
+    });
+    expect(run.toastSuccessCalls).toBe(0);
+    expect(run.toastErrorCalls).toBe(1);
+  });
   it('0a. mounted empty-Summary legacy continuation persists one rejected terminal decision correlated to its request', async () => {
     const run = await actualGeneralSummaryFlow({
       enabled: false,
