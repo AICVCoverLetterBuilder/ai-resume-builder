@@ -12,7 +12,10 @@ import {
   resolveExperienceSourceLocale,
 } from './cv-experience-source-locale';
 import { resolveExperienceGroundingDescription } from './cv-experience-provenance';
-import { resolveExperienceTextareaProvenance } from './cv-experience-ai-output-provenance';
+import {
+  resolveExperienceTextareaProvenance,
+  type GeneratedFromEmptyAuthorityDiagnostic,
+} from './cv-experience-ai-output-provenance';
 import {
   isAcceptableExperiencePresentationPurity,
   recoverExperiencePresentationFromSource,
@@ -197,6 +200,8 @@ type ExperiencePresentationGrounding = {
   authorityTextHash: string;
   sourceLocale: Locale | null;
   sourceLocaleResolution: string;
+  /** Cross-locale generated-from-empty text may use only a persisted independently validated surface. */
+  requiresValidatedTargetSurface?: boolean;
   recoveryFailureReason?: string;
 };
 
@@ -333,6 +338,9 @@ function presentationGroundingFromAuthorizedText(options: {
   exp: WorkExperience;
   authorityText: string;
   source: 'user_origin_recovered' | 'immutable_fact_authority';
+  sourceLocaleOverride?: Locale;
+  sourceLocaleResolutionOverride?: string;
+  requiresValidatedTargetSurface?: boolean;
 }): ExperiencePresentationGrounding {
   const authorityText = String(options.authorityText || '').trim();
   const authorityUnits = splitExperienceBullets(authorityText)
@@ -344,12 +352,19 @@ function presentationGroundingFromAuthorizedText(options: {
       sourceLocaleResolution: 'ambiguous', recoveryFailureReason: 'immutable_experience_authority_unavailable',
     };
   }
-  const locale = sourceLocaleFromImmutableAuthority({
+  const detectedLocale = sourceLocaleFromImmutableAuthority({
     cv: options.cv,
     exp: options.exp,
     authorityText,
     authorityUnits,
   });
+  const locale = options.sourceLocaleOverride
+    ? {
+      locale: options.sourceLocaleOverride,
+      resolution: options.sourceLocaleResolutionOverride || 'verified_generated_from_empty_provenance',
+      canonicalFactIds: detectedLocale.canonicalFactIds,
+    }
+    : detectedLocale;
   const entryHash = hashExperienceLocalizedSurfaceValue(options.exp.id);
   const duties: ExperiencePresentationDuty[] = authorityUnits.map((sourceClause, sourceClauseIndex) => {
     const sourceClauseHash = hashExperienceLocalizedSurfaceValue(sourceClause);
@@ -374,6 +389,7 @@ function presentationGroundingFromAuthorizedText(options: {
     authorityTextHash: hashExperienceLocalizedSurfaceValue(authorityText),
     sourceLocale: locale.locale,
     sourceLocaleResolution: locale.resolution,
+    ...(options.requiresValidatedTargetSurface ? { requiresValidatedTargetSurface: true } : {}),
   };
 }
 
@@ -386,6 +402,9 @@ function presentationGroundingFromAuthorizedText(options: {
 function recoverExperiencePresentationGrounding(
   cv: CVData,
   exp: WorkExperience,
+  options?: {
+    verifiedGeneratedFromEmptyAuthorityByEntry?: ReadonlyMap<string, GeneratedFromEmptyAuthorityDiagnostic>;
+  },
 ): ExperiencePresentationGrounding {
   const manual = recoverSemanticDutiesFromUserOrigin(exp, cv.canonicalSnapshot);
   if (manual.source === 'user_origin_recovered' && manual.duties.length > 0) {
@@ -407,16 +426,42 @@ function recoverExperiencePresentationGrounding(
   if (!exp.id?.trim()) {
     return { source: 'none', duties: [], authorityText: '', authorityTextHash: 'empty', sourceLocale: null, sourceLocaleResolution: 'ambiguous' };
   }
+  const generatedFromEmptyAuthority = options?.verifiedGeneratedFromEmptyAuthorityByEntry?.get(exp.id);
+  const generatedFromEmptySourceLocale = resolveLocaleCandidate(exp.aiOutputProvenance?.targetLocale);
+  const generatedFromEmptyText = String(exp.generatedDescription || '').trim();
   // Runtime migration normally stamps this legacy shape as `user`. Keep the
   // resolver robust when called directly on a raw legacy CV: exact equality to
   // original/canonical is positive proof of manual authority, while every
   // differing/unlabelled surface remains fail-closed below.
-  if (canUseLegacyExperienceDisplayProjection(exp)) {
+  if (
+    canUseLegacyExperienceDisplayProjection(exp)
+    && generatedFromEmptyAuthority?.historicalSourceAuthorityVerified !== true
+  ) {
     return presentationGroundingFromAuthorizedText({
       cv,
       exp,
       authorityText: exp.description || '',
       source: 'user_origin_recovered',
+    });
+  }
+  if (
+    generatedFromEmptyAuthority?.historicalSourceAuthorityVerified === true
+    && generatedFromEmptyAuthority.verifierPassed === true
+    && generatedFromEmptySourceLocale
+    && generatedFromEmptyText
+  ) {
+    // The shared verifier has established that this generated output is the
+    // untouched historical source presentation. It remains presentation-only:
+    // cross-locale use still requires the M6 persisted, independently validated
+    // target surface and never promotes text into user/canonical fact fields.
+    return presentationGroundingFromAuthorizedText({
+      cv,
+      exp,
+      authorityText: generatedFromEmptyText,
+      source: 'immutable_fact_authority',
+      sourceLocaleOverride: generatedFromEmptySourceLocale,
+      sourceLocaleResolutionOverride: 'verified_generated_from_empty_provenance',
+      requiresValidatedTargetSurface: true,
     });
   }
   const textareaProvenance = resolveExperienceTextareaProvenance(exp);
@@ -988,6 +1033,11 @@ export function buildExperienceLocalizationSnapshot(
      * instead of silently retaining an unusable record-level cache.
      */
     forceProviderForUnresolvedImmutableExperienceIds?: ReadonlySet<string>;
+    /**
+     * A caller-proven generated-from-empty historical authority may seed the
+     * existing M6 localization binding. The map is not persisted or a new owner.
+     */
+    verifiedGeneratedFromEmptyAuthorityByEntry?: ReadonlyMap<string, GeneratedFromEmptyAuthorityDiagnostic>;
   },
 ): ExperienceLocalizationSnapshot {
   const records: ExperienceLocalizationRequestRecord[] = [];
@@ -996,7 +1046,7 @@ export function buildExperienceLocalizationSnapshot(
   let reason: string | undefined;
 
   for (const exp of cv.experience || []) {
-    const grounding = recoverExperiencePresentationGrounding(cv, exp);
+    const grounding = recoverExperiencePresentationGrounding(cv, exp, options);
     if (grounding.source === 'none' || grounding.duties.length === 0) continue;
     if (
       grounding.source === 'immutable_fact_authority'
@@ -1717,12 +1767,13 @@ function recoverBoundExperiencePresentationFromAuthority(options: {
 export function resolveExperiencePresentationSnapshot(options: {
   cv: CVData;
   targetLocale: Locale;
+  verifiedGeneratedFromEmptyAuthorityByEntry?: ReadonlyMap<string, GeneratedFromEmptyAuthorityDiagnostic>;
 }): ExperiencePresentationSnapshot {
   const records: ExperiencePresentationRecord[] = [];
   let ok = true;
   const experience = (options.cv.experience || []).map((exp) => {
     const current = String(exp.description || '').trim();
-    const grounding = recoverExperiencePresentationGrounding(options.cv, exp);
+    const grounding = recoverExperiencePresentationGrounding(options.cv, exp, options);
     const immutableSource = sourceLocaleForGrounding(grounding);
     const currentLocale = resolveExperienceSourceLocale(exp, options.cv.canonicalSnapshot).locale;
     const projectionRequired = !current
@@ -1754,8 +1805,18 @@ export function resolveExperiencePresentationSnapshot(options: {
     const currentDistinctSourceCollision = grounding.source === 'immutable_fact_authority'
       && currentSourceUnits.length === currentPresentationUnits.length
       && [...currentUnitSources.values()].some((sourceKeys) => sourceKeys.size > 1);
+    // A CV-level `contentLocale` may legitimately change after a separate
+    // localization workflow.  It must not relabel a historically verified
+    // generated-from-empty source as a current target presentation.  That
+    // source can cross locales only through its bound validated surface.
+    const generatedFromEmptyCrossLocaleProjectionRequired = Boolean(
+      grounding.requiresValidatedTargetSurface
+      && immutableSource.locale
+      && !localesEquivalent(immutableSource.locale, options.targetLocale),
+    );
     const currentTargetValid = currentLocaleAndSurfaceValid
-      && !currentDistinctSourceCollision;
+      && !currentDistinctSourceCollision
+      && !generatedFromEmptyCrossLocaleProjectionRequired;
     let description = currentTargetValid
       ? current
       : '';
@@ -1790,6 +1851,18 @@ export function resolveExperiencePresentationSnapshot(options: {
           presentationAuthority = 'validated_target_projection';
           recoveryKind = 'validated_target_projection';
         }
+      } else if (
+        grounding.requiresValidatedTargetSurface
+        && immutableSource.locale
+        && !localesEquivalent(immutableSource.locale, options.targetLocale)
+      ) {
+        // A strictly verified generated-from-empty source is enough to bind a
+        // cached M6 surface, but it is not enough to synthesize a new target
+        // presentation. Missing/stale surfaces must remain a localization failure.
+        description = '';
+        presentationAuthority = 'unresolved';
+        rejectionReason = 'generated_from_empty_validated_surface_required';
+        ok = false;
       } else {
         const recovered = recoverBoundExperiencePresentationFromAuthority({
           exp,

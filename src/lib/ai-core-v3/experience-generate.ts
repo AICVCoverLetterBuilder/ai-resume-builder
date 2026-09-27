@@ -1,9 +1,19 @@
 import type { CVData, WorkExperience } from '../types';
-import { buildExperienceAiOutputProvenance } from '../cv-experience-ai-output-provenance';
+import {
+  buildExperienceAiOutputProvenance,
+  buildExperienceV3EmptySourceRequestContextHash,
+  hashExperienceV3Value as hashExperienceV3ValueShared,
+  normalizeExperienceV3Source as normalizeExperienceV3SourceShared,
+  parseExperienceV3StructuredDate,
+  verifyGeneratedFromEmptyExperienceAuthority,
+} from '../cv-experience-ai-output-provenance';
+import {
+  buildExperienceJobContext,
+  stampExperienceGenerationContext,
+} from '../cv-experience-job-context';
 import { createCandidateEnvelope } from './candidate-envelope';
 import type {
   AiCoreV3CandidateEnvelope,
-  StructuredDate,
   StructuredEmploymentDates,
 } from './contracts';
 import { createExperienceFactManifest } from './experience-manifest';
@@ -431,48 +441,12 @@ function normalizeLocale(value: string): string {
 }
 
 export function normalizeExperienceV3Source(value: string): string {
-  return String(value ?? '').replace(/\s+/gu, ' ').trim();
-}
-
-function stableJson(value: unknown): string {
-  if (value === null || typeof value !== 'object') {
-    return JSON.stringify(value) ?? 'undefined';
-  }
-  if (Array.isArray(value)) {
-    return `[${value.map(stableJson).join(',')}]`;
-  }
-  const record = value as Record<string, unknown>;
-  const keys = Object.keys(record).sort();
-  return `{${keys.map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`).join(',')}}`;
+  return normalizeExperienceV3SourceShared(value);
 }
 
 /** Deterministic, client-safe snapshot fingerprint; it is not an authorization token. */
 export function hashExperienceV3Value(value: unknown): string {
-  const input = typeof value === 'string' ? value : stableJson(value);
-  let hash = 0x811c9dc5;
-  for (let index = 0; index < input.length; index += 1) {
-    hash ^= input.charCodeAt(index);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return `v3-${(hash >>> 0).toString(16).padStart(8, '0')}`;
-}
-
-function parseStructuredDate(value: string): StructuredDate | null {
-  const raw = String(value || '').trim();
-  const yearFirst = raw.match(/^(\d{4})(?:[-/.](\d{1,2}))?(?:[-/.](\d{1,2}))?$/);
-  if (yearFirst) {
-    const year = Number(yearFirst[1]);
-    const month = yearFirst[2] ? Number(yearFirst[2]) : undefined;
-    const day = yearFirst[3] ? Number(yearFirst[3]) : undefined;
-    if (month !== undefined && (month < 1 || month > 12)) return null;
-    if (day !== undefined && (day < 1 || day > 31)) return null;
-    return { year, ...(month !== undefined ? { month } : {}), ...(day !== undefined ? { day } : {}) };
-  }
-  const monthFirst = raw.match(/^(\d{1,2})[-/.](\d{4})$/);
-  if (!monthFirst) return null;
-  const month = Number(monthFirst[1]);
-  if (month < 1 || month > 12) return null;
-  return { year: Number(monthFirst[2]), month };
+  return hashExperienceV3ValueShared(value);
 }
 
 export function classifyExperienceV3Routing(
@@ -498,13 +472,13 @@ export function classifyExperienceV3Routing(
   return 'owned';
 }
 
-function captureContextValue(
+function captureContextHash(
   cv: CVData,
   entry: WorkExperience,
   input: ExperienceV3AdapterInput,
   dates: StructuredEmploymentDates,
-): unknown {
-  return {
+): string {
+  return buildExperienceV3EmptySourceRequestContextHash({
     documentId: cv.id,
     entryId: entry.id,
     roleTitle: entry.position,
@@ -519,8 +493,8 @@ function captureContextValue(
     requestedLocale: input.requestedLocale,
     uiLocale: input.uiLocale,
     storedContentLocale: input.storedContentLocale,
-    sourceHash: hashExperienceV3Value(normalizeExperienceV3Source(input.exactVisibleDescription)),
-  };
+    exactVisibleDescription: input.exactVisibleDescription,
+  });
 }
 
 export function captureExperienceV3OperationSnapshot(
@@ -529,17 +503,15 @@ export function captureExperienceV3OperationSnapshot(
   const entry = input.cv.experience.find((item) => item.id === input.entryId);
   if (!entry) throw new TypeError('target_entry_missing');
   if (!String(entry.position || '').trim()) throw new TypeError('role_title_missing');
-  const start = parseStructuredDate(entry.startDate);
-  const end = entry.isPresent ? null : parseStructuredDate(entry.endDate);
+  const start = parseExperienceV3StructuredDate(entry.startDate);
+  const end = entry.isPresent ? null : parseExperienceV3StructuredDate(entry.endDate);
   if (!start || (!entry.isPresent && !end)) throw new TypeError('structured_dates_invalid');
   const dates: StructuredEmploymentDates = { start, end };
   const normalizedSource = normalizeExperienceV3Source(input.exactVisibleDescription);
   if (normalizedSource.length > 0) throw new TypeError('source_not_empty');
 
   const normalizedSourceHash = hashExperienceV3Value(normalizedSource);
-  const contextSnapshotHash = hashExperienceV3Value(
-    captureContextValue(input.cv, entry, input, dates),
-  );
+  const contextSnapshotHash = captureContextHash(input.cv, entry, input, dates);
   const cvSnapshotHash = hashExperienceV3Value(input.cv);
   const sourceAuthority = createSourceAuthoritySnapshot({
     operationId: input.operationId,
@@ -1082,7 +1054,7 @@ function liveStateMatchesSnapshot(
 ): boolean {
   const entry = live.cv.experience.find((item) => item.id === snapshot.entryId);
   if (!entry) return false;
-  const liveContextSnapshotHash = hashExperienceV3Value({
+  const liveContextSnapshotHash = buildExperienceV3EmptySourceRequestContextHash({
     documentId: live.cv.id,
     entryId: entry.id,
     roleTitle: entry.position,
@@ -1097,7 +1069,7 @@ function liveStateMatchesSnapshot(
     requestedLocale: live.requestedLocale,
     uiLocale: live.uiLocale,
     storedContentLocale: live.storedContentLocale,
-    sourceHash: hashExperienceV3Value(normalizeExperienceV3Source(live.exactVisibleDescription)),
+    exactVisibleDescription: live.exactVisibleDescription,
   });
   return normalizeExperienceV3Source(live.exactVisibleDescription).length === 0
     && normalizeExperienceV3Source(entry.description).length === 0
@@ -1118,7 +1090,9 @@ function liveStateMatchesSnapshot(
 
 function valueWithoutKeys<T extends Record<string, unknown>>(value: T, keys: readonly string[]): Record<string, unknown> {
   const omitted = new Set(keys);
-  return Object.fromEntries(Object.entries(value).filter(([key]) => !omitted.has(key)));
+  return Object.fromEntries(Object.entries(value).filter(([key, entryValue]) => (
+    !omitted.has(key) && entryValue !== undefined
+  )));
 }
 
 const EXPERIENCE_V3_WRITABLE_KEYS = [
@@ -1127,6 +1101,13 @@ const EXPERIENCE_V3_WRITABLE_KEYS = [
   'generatedLocale',
   'descriptionOrigin',
   'aiOutputProvenance',
+  'originalUserDescription',
+  'canonicalDescription',
+  'groundingRecoverySource',
+  'recoveredSemanticDuties',
+  'generationJobContextKey',
+  'groundingJobContextKey',
+  'previousGenerationJobContextKey',
 ] as const;
 
 function nonTargetCvState(cv: CVData, entryId: string): unknown {
@@ -1179,8 +1160,19 @@ export function applyExperienceV3Transaction(
   const beforeEntry = before.experience.find((entry) => entry.id === snapshot.entryId);
   if (!beforeEntry) return { kind: 'handled_failure', typedReason: 'target_entry_deleted' };
 
-  const nextEntry: WorkExperience = {
+  const generationContext = buildExperienceJobContext({
+    position: beforeEntry.position,
+    industry: snapshot.industry,
+    locale: snapshot.requestedLocale,
+    level: snapshot.level,
+  });
+  const nextEntry = stampExperienceGenerationContext({
     ...beforeEntry,
+    originalUserDescription: undefined,
+    canonicalDescription: undefined,
+    groundingRecoverySource: undefined,
+    recoveredSemanticDuties: undefined,
+    groundingJobContextKey: undefined,
     description: response.candidate.text,
     generatedDescription: response.candidate.text,
     generatedLocale: snapshot.requestedLocale,
@@ -1196,7 +1188,18 @@ export function applyExperienceV3Transaction(
       requestHash: snapshot.contextSnapshotHash,
       generatedFromEmpty: true,
     }),
-  };
+  }, generationContext);
+  const nextAuthority = verifyGeneratedFromEmptyExperienceAuthority({
+    documentId: before.id,
+    experience: nextEntry,
+    industry: snapshot.industry,
+    level: snapshot.level,
+    gender: snapshot.gender,
+    requestedLocale: snapshot.requestedLocale,
+  });
+  if (!nextAuthority.verifierPassed) {
+    return { kind: 'handled_failure', typedReason: 'client_verification_exception' };
+  }
   const next: CVData = {
     ...before,
     experience: before.experience.map((entry) => (
@@ -1211,12 +1214,26 @@ export function applyExperienceV3Transaction(
   const visibleHash = hashExperienceV3Value(
     normalizeExperienceV3Source(readbackEntry?.description || ''),
   );
+  const readbackAuthority = readbackEntry
+    ? verifyGeneratedFromEmptyExperienceAuthority({
+      documentId: readback.id,
+      experience: readbackEntry,
+      industry: snapshot.industry,
+      level: snapshot.level,
+      gender: snapshot.gender,
+      requestedLocale: snapshot.requestedLocale,
+    })
+    : null;
   const readbackPassed = Boolean(readbackEntry)
     && readbackEntry?.id === snapshot.entryId
     && readbackEntry.description === response.candidate.text
     && readbackEntry.generatedDescription === response.candidate.text
     && normalizeLocale(readbackEntry.generatedLocale || '') === normalizeLocale(snapshot.requestedLocale)
     && readbackEntry.descriptionOrigin === 'ai_generated'
+    && readbackEntry.generationJobContextKey === generationContext.key
+    && !readbackEntry.originalUserDescription
+    && !readbackEntry.canonicalDescription
+    && readbackAuthority?.verifierPassed === true
     && visibleHash === exactCandidateHash
     && response.providerOutput.bullets.length === 3
     && localeScriptMatches(readbackEntry.description, snapshot.requestedLocale)

@@ -19,6 +19,7 @@ import {
 } from './cv-experience-duration';
 import type { ExperienceLocalizationDiagnostics } from './cv-experience-localized-surfaces';
 import type { ExperiencePresentationRecord } from './cv-experience-localized-surfaces';
+import type { GeneratedFromEmptyAuthorityDiagnostic } from './cv-experience-ai-output-provenance';
 import {
   CV_EXPORT_RENDER_DUTY_PROJECTION_REVISION,
   getExperienceExportRenderDescription,
@@ -124,6 +125,7 @@ export type CvExportExperienceDiag = {
   crossEntryOwnershipPassed: boolean | null;
   renderDutyProjectionUsed: boolean | null;
   renderDutyProjectionRevision?: string;
+  generatedFromEmptyAuthority: GeneratedFromEmptyAuthorityDiagnostic;
 };
 
 export type CvExportStageDiag = {
@@ -159,6 +161,7 @@ export type CvExportDiagnosticTrace = {
   /** True when every applicable migration-authority field is serialized. */
   migrationDiagnosticsApplicable?: boolean;
   migrationDiagnosticsComplete?: boolean;
+  summaryAuthorityDiagnosticsStatus?: 'applicable' | 'not_reached';
   diagnosticCompletenessPassed?: boolean;
   diagnosticCompletenessFailureReasons?: string[];
   experienceCount: number;
@@ -491,6 +494,7 @@ function experienceDiag(
   recoveredKeys: string[],
   locale: Locale,
   presentation?: ExperiencePresentationRecord,
+  generatedFromEmptyAuthority?: GeneratedFromEmptyAuthorityDiagnostic,
 ): CvExportExperienceDiag {
   const visible = (exp.description || '').trim();
   const generated = (exp.generatedDescription || '').trim();
@@ -564,6 +568,33 @@ function experienceDiag(
     renderDutyProjectionRevision: renderDutyProjectionUsed
       ? CV_EXPORT_RENDER_DUTY_PROJECTION_REVISION
       : undefined,
+    generatedFromEmptyAuthority: generatedFromEmptyAuthority || {
+      applicable: false,
+      provenancePresent: false,
+      provenanceRevisionSupported: false,
+      entryIdentityMatched: false,
+      generatedFromEmptyFlagMatched: false,
+      sourceAuthorityKindMatched: false,
+      operationModeMatched: false,
+      expectedSourceEmptyMatched: false,
+      generatedOutputPresent: false,
+      visibleOutputMatched: false,
+      normalizedOutputHashMatched: false,
+      rawOutputHashMatched: false,
+      sourceLocaleMatched: false,
+      historicalGenerationLocaleRecovered: false,
+      requestContextRecomputed: false,
+      requestContextMatched: false,
+      generatedLocaleMatched: false,
+      requestedLocaleCompatible: false,
+      historicalSourceAuthorityVerified: false,
+      directPresentationAllowed: false,
+      generationJobContextKeyPresent: false,
+      generationJobContextKeyMatched: true,
+      verifierPassed: false,
+      verifierDecisionReason: 'not_applicable',
+      authoritySource: 'none',
+    },
   };
 }
 
@@ -784,6 +815,7 @@ export function buildAndStoreCvExportDiagnostic(input: BuildCvExportTraceInput):
       keys,
       input.locale,
       diag?.experiencePresentation?.[index],
+      row?.generatedFromEmptyAuthority,
     );
   });
 
@@ -952,6 +984,18 @@ export function buildAndStoreCvExportDiagnostic(input: BuildCvExportTraceInput):
     diag?.legacyCanonicalSnapshotPresent
     || diag?.legacyCanonicalSnapshotStructuralUpgradeAttempted,
   );
+  const summaryAuthorityDiagnosticsStatus: 'applicable' | 'not_reached' = (
+    prepared
+    && !prepared.ok
+    && [
+      'normalize_runtime',
+      'normalize_region',
+      'resolve_provenance',
+      'recover_legacy_grounding',
+      'produce_semantic_duties',
+      'produce_localized_display',
+    ].includes(prepared.stage)
+  ) ? 'not_reached' : 'applicable';
   const migrationDiagnosticFields: Array<[string, unknown]> = [
     ['runtimeMigrationVersionBefore', diag?.runtimeMigrationVersionBefore],
     ['runtimeMigrationVersionAfter', diag?.runtimeMigrationVersionAfter],
@@ -967,9 +1011,11 @@ export function buildAndStoreCvExportDiagnostic(input: BuildCvExportTraceInput):
     ['canonicalSnapshotSemanticallyCoherent', diag?.canonicalSnapshotSemanticallyCoherent],
     ['canonicalSnapshotSemanticFailureReasons', diag?.canonicalSnapshotSemanticFailureReasons],
     ['canonicalSnapshotCoherenceRebuildAttempted', diag?.canonicalSnapshotCoherenceRebuildAttempted],
-    ['resolvedCanonicalSummarySource', diag?.resolvedCanonicalSummarySource],
-    ['resolvedCanonicalSummaryHash', diag?.resolvedCanonicalSummaryHash],
-    ['summaryAuthorityDecisionBranch', diag?.summaryAuthorityDecisionBranch],
+    ...(summaryAuthorityDiagnosticsStatus === 'applicable' ? [
+      ['resolvedCanonicalSummarySource', diag?.resolvedCanonicalSummarySource],
+      ['resolvedCanonicalSummaryHash', diag?.resolvedCanonicalSummaryHash],
+      ['summaryAuthorityDecisionBranch', diag?.summaryAuthorityDecisionBranch],
+    ] as Array<[string, unknown]> : []),
   ];
   const migrationDiagnosticFailures = migrationDiagnosticsApplicable
     ? migrationDiagnosticFields
@@ -1014,6 +1060,7 @@ export function buildAndStoreCvExportDiagnostic(input: BuildCvExportTraceInput):
       diag?.canonicalSnapshotCoherenceRebuildAttempted,
     migrationDiagnosticsApplicable,
     migrationDiagnosticsComplete,
+    summaryAuthorityDiagnosticsStatus,
     diagnosticCompletenessPassed: migrationDiagnosticsComplete,
     diagnosticCompletenessFailureReasons: migrationDiagnosticFailures,
     experienceCount: (exportCv.experience || []).length,

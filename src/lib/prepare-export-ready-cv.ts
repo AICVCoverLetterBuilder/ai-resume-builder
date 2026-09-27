@@ -56,6 +56,10 @@ import {
 } from './cv-semantic-duty-facts';
 import { splitExperienceBullets } from './cv-canonical-facts';
 import {
+  verifyGeneratedFromEmptyExperienceAuthority,
+  type GeneratedFromEmptyAuthorityDiagnostic,
+} from './cv-experience-ai-output-provenance';
+import {
   buildExperienceJobContext,
   experienceJobContextsMatch,
   buildOccupationAwareExperienceFallback,
@@ -401,6 +405,7 @@ export type ExportReadyDiagnostics = {
     visibleBulletCount: number;
     groundingBulletCount: number;
     exportBulletCount: number;
+    generatedFromEmptyAuthority: GeneratedFromEmptyAuthorityDiagnostic;
   }>;
   summaryFactSetSource: 'semantic_duties' | 'modern_provenance' | 'occupation_generic' | 'app_owned_v2_manifest' | 'none';
   summarySemanticDutyKeys: SemanticDutyKey[];
@@ -1155,6 +1160,7 @@ export function prepareExportReadyCv(
 
   stage = 'resolve_provenance';
   const groundingById = new Map<string, ExperienceSemanticGrounding>();
+  const generatedFromEmptyAuthorityById = new Map<string, GeneratedFromEmptyAuthorityDiagnostic>();
   let recoveryInvoked = false;
   let changed = false;
 
@@ -1166,6 +1172,14 @@ export function prepareExportReadyCv(
 
   const nextExperience: WorkExperience[] = (cv.experience || []).map((exp) => {
     const jobCtx = jobContextForExport(exp.position || cv.personal?.jobTitle);
+    generatedFromEmptyAuthorityById.set(exp.id, verifyGeneratedFromEmptyExperienceAuthority({
+      documentId: cv.id,
+      experience: exp,
+      industry: exportIndustry || '',
+      level: exportLevel || '',
+      gender,
+      requestedLocale,
+    }));
     let grounding = resolveExperienceSemanticGrounding(exp, {
       canonicalSnapshot: cv.canonicalSnapshot,
     });
@@ -1259,16 +1273,48 @@ export function prepareExportReadyCv(
     const diagnostics = baseDiagnostics();
     diagnostics.recoveryInvoked = recoveryInvoked;
     diagnostics.runtimeMigrationVersion = cv.runtimeMigrationVersion;
-    diagnostics.experienceProvenance = buildProvenanceRows(cv, groundingById);
+    diagnostics.experienceProvenance = buildProvenanceRows(cv, groundingById, generatedFromEmptyAuthorityById);
     diagnostics.summaryFactKeysBefore = [...new Set(summaryFactKeysBefore)];
     return fail(failedUserOriginRecovery.recoveryFailureReason, stage, diagnostics);
+  }
+  const unverifiableGeneratedFromEmptyAuthority = [...generatedFromEmptyAuthorityById.entries()]
+    .find(([entryId, authority]) => {
+      if (!authority.applicable || authority.verifierPassed) return false;
+      const grounding = groundingById.get(entryId);
+      // A failed generated-from-empty presentation record remains invalid, but
+      // it cannot veto a different semantic owner already resolved for this
+      // same entry. Display-derived legacy duties are deliberately excluded:
+      // they may be the rejected generated surface itself.
+      const hasIndependentSemanticAuthority = Boolean(
+        grounding?.duties.length
+        && (
+          grounding.source === 'user_origin_recovered'
+          || grounding.source === 'modern_provenance'
+        ),
+      );
+      return !hasIndependentSemanticAuthority;
+    });
+  if (unverifiableGeneratedFromEmptyAuthority) {
+    const diagnostics = baseDiagnostics();
+    diagnostics.recoveryInvoked = recoveryInvoked;
+    diagnostics.runtimeMigrationVersion = cv.runtimeMigrationVersion;
+    diagnostics.experienceProvenance = buildProvenanceRows(
+      cv,
+      groundingById,
+      generatedFromEmptyAuthorityById,
+    );
+    diagnostics.summaryFactKeysBefore = [...new Set(summaryFactKeysBefore)];
+    return fail('legacy_export_recovery_no_safe_duties', stage, diagnostics);
   }
   const hadDisplay = (rawCv.experience || []).some((exp) => Boolean(
     (exp.description || '').trim() || (exp.generatedDescription || '').trim(),
   ));
   const allKeys = [...groundingById.values()].flatMap((g) => semanticDutyKeys(g));
+  const hasVerifiedGeneratedFromEmptySource = [...generatedFromEmptyAuthorityById.values()]
+    .some((authority) => authority.historicalSourceAuthorityVerified);
   const hasContextSafeEmptyDutyDisplay = (cv.experience || []).some((exp) => {
     const jobCtx = jobContextForExport(exp.position || cv.personal?.jobTitle);
+    const generatedFromEmptyAuthority = generatedFromEmptyAuthorityById.get(exp.id);
     const desc = (exp.description || '').trim();
     if (!desc) return false;
     if (
@@ -1284,6 +1330,10 @@ export function prepareExportReadyCv(
       && !hasGenuineUserExperienceGrounding(exp)
     ) {
       return false;
+    }
+    if (generatedFromEmptyAuthority?.applicable) {
+      return generatedFromEmptyAuthority.directPresentationAllowed
+        && experienceBulletsMatchRequestedLocale(desc, requestedLocale, cv);
     }
     const contextOk = Boolean(
       exp.generationJobContextKey
@@ -1313,12 +1363,16 @@ export function prepareExportReadyCv(
     && allKeys.length === 0
     && !occupationGenericFallbackUsed
     && !hasContextSafeEmptyDutyDisplay
+    // A verified generated-from-empty source may continue to the established
+    // target-presentation resolver. It cannot directly display cross-locale
+    // source text; that resolver requires a validated bound target surface.
+    && !hasVerifiedGeneratedFromEmptySource
     && !hasMaterialSourceFacts
   ) {
     const diagnostics = baseDiagnostics();
     diagnostics.recoveryInvoked = recoveryInvoked;
     diagnostics.runtimeMigrationVersion = cv.runtimeMigrationVersion;
-    diagnostics.experienceProvenance = buildProvenanceRows(cv, groundingById);
+    diagnostics.experienceProvenance = buildProvenanceRows(cv, groundingById, generatedFromEmptyAuthorityById);
     diagnostics.summaryFactKeysBefore = [...new Set(summaryFactKeysBefore)];
     return fail('legacy_export_recovery_no_safe_duties', stage, diagnostics);
   }
@@ -1343,7 +1397,7 @@ export function prepareExportReadyCv(
     const diagnostics = baseDiagnostics();
     diagnostics.recoveryInvoked = recoveryInvoked;
     diagnostics.runtimeMigrationVersion = cv.runtimeMigrationVersion;
-    diagnostics.experienceProvenance = buildProvenanceRows(cv, groundingById);
+    diagnostics.experienceProvenance = buildProvenanceRows(cv, groundingById, generatedFromEmptyAuthorityById);
     diagnostics.summarySemanticDutyKeys = [...new Set(allKeys)];
     return fail(
       'experience_localization_source_binding_missing',
@@ -1368,7 +1422,7 @@ export function prepareExportReadyCv(
       const diagnostics = baseDiagnostics();
       diagnostics.recoveryInvoked = recoveryInvoked;
       diagnostics.runtimeMigrationVersion = cv.runtimeMigrationVersion;
-      diagnostics.experienceProvenance = buildProvenanceRows(cv, groundingById);
+      diagnostics.experienceProvenance = buildProvenanceRows(cv, groundingById, generatedFromEmptyAuthorityById);
       diagnostics.exportIntegrityOk = false;
       diagnostics.exportIntegrityReasons = preIntegrity.reasons;
       diagnostics.exportIntegrityMarker = preIntegrity.marker;
@@ -1409,19 +1463,33 @@ export function prepareExportReadyCv(
   const presentationSnapshot = resolveExperiencePresentationSnapshot({
     cv,
     targetLocale: requestedLocale,
+    verifiedGeneratedFromEmptyAuthorityByEntry: generatedFromEmptyAuthorityById,
   });
   terminalExperiencePresentation = presentationSnapshot;
   if (!presentationSnapshot.ok) {
     const diagnostics = baseDiagnostics();
     diagnostics.recoveryInvoked = recoveryInvoked;
     diagnostics.runtimeMigrationVersion = cv.runtimeMigrationVersion;
-    diagnostics.experienceProvenance = buildProvenanceRows(cv, groundingById);
+    diagnostics.experienceProvenance = buildProvenanceRows(cv, groundingById, generatedFromEmptyAuthorityById);
     diagnostics.experiencePresentation = presentationSnapshot.records;
     diagnostics.experiencePresentationSnapshotId = presentationSnapshot.presentationSnapshotId;
     diagnostics.summarySemanticDutyKeys = [...new Set(allKeys)];
     return fail('localized_display_projection_incomplete', stage, diagnostics);
   }
   cv = presentationSnapshot.cv;
+  // A cross-locale generated-from-empty row contributes to the established
+  // occupation-generic Summary path only after the M6 presentation owner has
+  // accepted an independently validated target surface.  Historical source
+  // verification alone never grants this permission.
+  const hasVerifiedGeneratedFromEmptyTargetPresentation = presentationSnapshot.records.some((record, index) => {
+    // Presentation records preserve CV Experience order. Use that existing
+    // one-to-one relation rather than adding raw IDs to diagnostic records.
+    const authority = generatedFromEmptyAuthorityById.get(cv.experience[index]?.id || '');
+    return Boolean(
+      authority?.historicalSourceAuthorityVerified
+      && record.presentationAuthority === 'validated_target_projection',
+    );
+  });
 
   // Hard postcondition: never report projection ok with English/mixed bullets.
   for (const exp of cv.experience || []) {
@@ -1431,7 +1499,7 @@ export function prepareExportReadyCv(
       const diagnostics = baseDiagnostics();
       diagnostics.recoveryInvoked = recoveryInvoked;
       diagnostics.runtimeMigrationVersion = cv.runtimeMigrationVersion;
-      diagnostics.experienceProvenance = buildProvenanceRows(cv, groundingById);
+      diagnostics.experienceProvenance = buildProvenanceRows(cv, groundingById, generatedFromEmptyAuthorityById);
       diagnostics.summarySemanticDutyKeys = [...new Set(allKeys)];
       return fail('localized_display_projection_incomplete', stage, diagnostics);
     }
@@ -1612,6 +1680,15 @@ export function prepareExportReadyCv(
   let recoveryFactPresentationForDiagnostics: SummaryRecoveryFactPresentationEvidence[] = [];
   let selectedFinalSummaryHashForDiagnostics: string | null = null;
   let selectedFinalSourceForDiagnostics: string | null = null;
+  // These values are read by the early fail-closed diagnostics path below.
+  // Initialize them before that closure can run; later recovery logic only
+  // refines the same values.
+  let rawRecoveryWordCount: number | null = null;
+  let rawRecoveryWordBudgetPassed: boolean | null = null;
+  let compactionAttempted: boolean | null = null;
+  let compactedRecoveryWordCount: number | null = null;
+  let selectedFinalWordCount: number | null = null;
+  let selectedFinalWordBudgetPassed: boolean | null = null;
   const assignSummaryV2Diagnostics = (diagnostics: ExportReadyDiagnostics) => {
     diagnostics.canonicalSummaryTopLevelPresent = Boolean(topLevelCanonicalSummary);
     diagnostics.canonicalSummaryTopLevelHash = topLevelCanonicalSummary
@@ -1734,7 +1811,9 @@ export function prepareExportReadyCv(
     { locale: requestedLocale, gender, referenceDate: summaryReferenceDate },
   );
   let factSource: ExportReadyDiagnostics['summaryFactSetSource'] = summaryKeys.length === 0 && (
-    occupationGenericFallbackUsed || hasContextSafeEmptyDutyDisplay
+    occupationGenericFallbackUsed
+    || hasContextSafeEmptyDutyDisplay
+    || hasVerifiedGeneratedFromEmptyTargetPresentation
   )
     ? 'occupation_generic'
     : factSourceRaw;
@@ -1749,12 +1828,13 @@ export function prepareExportReadyCv(
     && summaryKeys.length === 0
     && !occupationGenericFallbackUsed
     && !hasContextSafeEmptyDutyDisplay
+    && !hasVerifiedGeneratedFromEmptyTargetPresentation
     && !hasMaterialSourceFacts
   ) {
     const diagnostics = baseDiagnostics();
     diagnostics.recoveryInvoked = recoveryInvoked;
     diagnostics.runtimeMigrationVersion = cv.runtimeMigrationVersion;
-    diagnostics.experienceProvenance = buildProvenanceRows(cv, groundingById);
+    diagnostics.experienceProvenance = buildProvenanceRows(cv, groundingById, generatedFromEmptyAuthorityById);
     diagnostics.summaryFactKeysBefore = [...new Set(summaryFactKeysBefore)];
     assignSummaryOwnershipDiagnostics(diagnostics);
     return fail('summary_fact_set_missing_recovered_duties', stage, diagnostics);
@@ -1865,19 +1945,13 @@ export function prepareExportReadyCv(
   let summaryWordCountBefore: number | undefined;
   let summaryWordCountAfter: number | undefined;
   let summaryWordBudgetMax: number | undefined;
-  let rawRecoveryWordCount: number | null = null;
-  let rawRecoveryWordBudgetPassed: boolean | null = null;
-  let compactionAttempted: boolean | null = null;
-  let compactedRecoveryWordCount: number | null = null;
-  let selectedFinalWordCount: number | null = null;
-  let selectedFinalWordBudgetPassed: boolean | null = null;
   let durationCompositionSource = 'saved_summary';
 
   if (staleAppOwnedWrongLocaleCanonicalCandidate) {
     const diagnostics = baseDiagnostics();
     diagnostics.recoveryInvoked = recoveryInvoked;
     diagnostics.runtimeMigrationVersion = cv.runtimeMigrationVersion;
-    diagnostics.experienceProvenance = buildProvenanceRows(cv, groundingById);
+    diagnostics.experienceProvenance = buildProvenanceRows(cv, groundingById, generatedFromEmptyAuthorityById);
     diagnostics.summaryFactSetSource = factSource;
     diagnostics.summarySemanticDutyKeys = summaryKeys;
     diagnostics.summaryInitialValid = false;
@@ -2121,7 +2195,7 @@ export function prepareExportReadyCv(
       const diagnostics = baseDiagnostics();
       diagnostics.recoveryInvoked = recoveryInvoked;
       diagnostics.runtimeMigrationVersion = cv.runtimeMigrationVersion;
-      diagnostics.experienceProvenance = buildProvenanceRows(cv, groundingById);
+      diagnostics.experienceProvenance = buildProvenanceRows(cv, groundingById, generatedFromEmptyAuthorityById);
       diagnostics.summaryFactSetSource = factSource;
       diagnostics.summarySemanticDutyKeys = summaryKeys;
       diagnostics.summaryInitialValid = false;
@@ -2210,7 +2284,7 @@ export function prepareExportReadyCv(
       const diagnostics = baseDiagnostics();
       diagnostics.recoveryInvoked = recoveryInvoked;
       diagnostics.runtimeMigrationVersion = cv.runtimeMigrationVersion;
-      diagnostics.experienceProvenance = buildProvenanceRows(cv, groundingById);
+      diagnostics.experienceProvenance = buildProvenanceRows(cv, groundingById, generatedFromEmptyAuthorityById);
       diagnostics.summaryFactSetSource = factSource;
       diagnostics.summarySemanticDutyKeys = summaryKeys;
       diagnostics.summaryInitialValid = initialSummaryValidation.valid;
@@ -2266,7 +2340,7 @@ export function prepareExportReadyCv(
       const diagnostics = baseDiagnostics();
       diagnostics.recoveryInvoked = recoveryInvoked;
       diagnostics.runtimeMigrationVersion = cv.runtimeMigrationVersion;
-      diagnostics.experienceProvenance = buildProvenanceRows(cv, groundingById);
+      diagnostics.experienceProvenance = buildProvenanceRows(cv, groundingById, generatedFromEmptyAuthorityById);
       return fail('legacy_export_recovery_snapshot_overwritten', 'produce_semantic_duties', diagnostics);
     }
   }
@@ -2283,7 +2357,7 @@ export function prepareExportReadyCv(
         const diagnostics = baseDiagnostics();
         diagnostics.recoveryInvoked = recoveryInvoked;
         diagnostics.runtimeMigrationVersion = cv.runtimeMigrationVersion;
-        diagnostics.experienceProvenance = buildProvenanceRows(cv, groundingById);
+        diagnostics.experienceProvenance = buildProvenanceRows(cv, groundingById, generatedFromEmptyAuthorityById);
         return fail('localized_display_projection_incomplete', 'produce_localized_display', diagnostics);
       }
       continue;
@@ -2292,7 +2366,7 @@ export function prepareExportReadyCv(
       const diagnostics = baseDiagnostics();
       diagnostics.recoveryInvoked = recoveryInvoked;
       diagnostics.runtimeMigrationVersion = cv.runtimeMigrationVersion;
-      diagnostics.experienceProvenance = buildProvenanceRows(cv, groundingById);
+      diagnostics.experienceProvenance = buildProvenanceRows(cv, groundingById, generatedFromEmptyAuthorityById);
       diagnostics.summaryFactSetSource = factSource;
       diagnostics.summarySemanticDutyKeys = summaryKeys;
       assignSummaryOwnershipDiagnostics(diagnostics);
@@ -2311,7 +2385,7 @@ export function prepareExportReadyCv(
       const diagnostics = baseDiagnostics();
       diagnostics.recoveryInvoked = recoveryInvoked;
       diagnostics.runtimeMigrationVersion = cv.runtimeMigrationVersion;
-      diagnostics.experienceProvenance = buildProvenanceRows(cv, groundingById);
+      diagnostics.experienceProvenance = buildProvenanceRows(cv, groundingById, generatedFromEmptyAuthorityById);
       diagnostics.summaryFactSetSource = factSource;
       diagnostics.summarySemanticDutyKeys = summaryKeys;
       assignSummaryOwnershipDiagnostics(diagnostics);
@@ -2324,7 +2398,7 @@ export function prepareExportReadyCv(
     const diagnostics = baseDiagnostics();
     diagnostics.recoveryInvoked = recoveryInvoked;
     diagnostics.runtimeMigrationVersion = cv.runtimeMigrationVersion;
-    diagnostics.experienceProvenance = buildProvenanceRows(cv, groundingById);
+    diagnostics.experienceProvenance = buildProvenanceRows(cv, groundingById, generatedFromEmptyAuthorityById);
     diagnostics.summaryFactSetSource = factSource;
     diagnostics.summarySemanticDutyKeys = summaryKeys;
     diagnostics.summaryInitialValid = initialSummaryValidation.valid;
@@ -2379,7 +2453,7 @@ export function prepareExportReadyCv(
       const diagnostics = baseDiagnostics();
       diagnostics.recoveryInvoked = recoveryInvoked;
       diagnostics.runtimeMigrationVersion = cv.runtimeMigrationVersion;
-      diagnostics.experienceProvenance = buildProvenanceRows(cv, groundingById);
+      diagnostics.experienceProvenance = buildProvenanceRows(cv, groundingById, generatedFromEmptyAuthorityById);
       diagnostics.summaryFactSetSource = factSource;
       diagnostics.summarySemanticDutyKeys = summaryKeys;
       return fail(
@@ -2424,7 +2498,7 @@ export function prepareExportReadyCv(
     ...runtimeMigrationDiagnostics,
     experienceCount: (cv.experience || []).length,
     recoveryInvoked: true,
-    experienceProvenance: buildProvenanceRows(cv, groundingById),
+    experienceProvenance: buildProvenanceRows(cv, groundingById, generatedFromEmptyAuthorityById),
     summaryFactSetSource: factSource,
     summarySemanticDutyKeys: summaryKeys,
     summaryInitialValid: initialSummaryValidation.valid,
@@ -2531,6 +2605,7 @@ export function prepareExportReadyCv(
 function buildProvenanceRows(
   cv: CVData,
   groundingById: Map<string, ExperienceSemanticGrounding>,
+  generatedFromEmptyAuthorityById: Map<string, GeneratedFromEmptyAuthorityDiagnostic>,
 ): ExportReadyDiagnostics['experienceProvenance'] {
   return (cv.experience || []).map((exp) => {
     const grounding = groundingById.get(exp.id) || { source: 'none' as const, duties: [] };
@@ -2549,6 +2624,15 @@ function buildProvenanceRows(
       visibleBulletCount: splitExperienceBullets(visible).length,
       groundingBulletCount: grounding.duties.length,
       exportBulletCount: splitExperienceBullets(exp.description || '').length,
+      generatedFromEmptyAuthority: generatedFromEmptyAuthorityById.get(exp.id)
+        || verifyGeneratedFromEmptyExperienceAuthority({
+          documentId: cv.id,
+          experience: exp,
+          industry: '',
+          level: '',
+          gender: cv.personal?.gender || '',
+          requestedLocale: cv.contentLocale || 'en',
+        }),
     };
   });
 }
