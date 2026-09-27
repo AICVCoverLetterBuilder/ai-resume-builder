@@ -388,7 +388,7 @@ describe('AAB609 generated-from-empty Experience export authority', () => {
 
   it('recovers a valid existing AAB609-style row without a job-context key and without network or usage effects', () => {
     const requestSpy = vi.fn();
-    let usageDelta = 0;
+    const usageDelta = 0;
     const exp = existingAab609StyleExperience();
     expect(exp.generationJobContextKey).toBeUndefined();
     const decision = verifier(exp);
