@@ -45,6 +45,7 @@ export type CvExportDiagnosticStageName =
   | 'recover_summary'
   | 'validate_locale_integrity'
   | 'prepare_template'
+  | 'localize_export_titles'
   | 'same_snapshot_preview_parity'
   | 'render_blob'
   | 'android_save';

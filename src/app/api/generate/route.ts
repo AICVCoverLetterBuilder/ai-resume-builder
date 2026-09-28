@@ -1823,6 +1823,25 @@ Rules:
         }>;
       };
       type TitleTransportStage = 'translation' | 'verifier';
+      type TitleTranslatorFailureSubcode =
+        | 'translator_response_not_object_or_invalid_json'
+        | 'translator_target_locale_mismatch'
+        | 'translator_entries_not_array'
+        | 'translator_entry_identity_count_mismatch'
+        | 'translator_missing_expected_identity'
+        | 'translator_localized_title_wrong_type'
+        | 'translator_localized_title_empty'
+        | 'translator_localized_title_too_long';
+      type TitleVerifierFailureSubcode =
+        | 'verifier_response_not_object_or_invalid_json'
+        | 'verifier_target_locale_mismatch'
+        | 'verifier_entries_not_array'
+        | 'verifier_entry_identity_count_mismatch'
+        | 'verifier_missing_expected_identity'
+        | 'verifier_decision_not_passed'
+        | 'verifier_semantic_equivalence_failed'
+        | 'verifier_target_locale_failed'
+        | 'verifier_unsupported_scope_introduced';
 
       const safeEntries: SafeTitleEntry[] = rawEntries.map((entry: Record<string, unknown>) => ({
         entryId: sanitizeField(entry.entryId, 200),
@@ -2018,6 +2037,8 @@ Rules:
           code: failure.code,
           localizationTypedFailureReason: failure.reason,
           localizationFailureStage: 'title_translation_transport',
+          titleFailureLayer: 'http_or_transport',
+          titleFailureSubcode: failure.reason,
           deadlineOwner: failure.deadlineOwner,
           providerStatus: failure.providerStatus,
           retryAfter: failure.retryAfter,
@@ -2037,17 +2058,33 @@ Rules:
           ? translated!.entries.map((entry) => [String(entry.entryId || ''), entry])
           : [],
       );
-      const translationParityPassed = translated?.targetLocale === resolvedLocale
-        && translatedById.size === safeEntries.length
-        && safeEntries.every((entry) => {
-          const candidate = translatedById.get(entry.entryId);
-          return Boolean(
-            candidate
-            && typeof candidate.localizedRoleTitle === 'string'
-            && candidate.localizedRoleTitle.trim().length > 0
-            && candidate.localizedRoleTitle.trim().length <= 500,
-          );
-        });
+      const translationCountParityPassed = translatedById.size === safeEntries.length;
+      const translationIdentityParityPassed = translationCountParityPassed
+        && safeEntries.every((entry) => translatedById.has(entry.entryId));
+      const translationFailureSubcode: TitleTranslatorFailureSubcode | null = !translated
+        ? 'translator_response_not_object_or_invalid_json'
+        : translated.targetLocale !== resolvedLocale
+          ? 'translator_target_locale_mismatch'
+          : !Array.isArray(translated.entries)
+            ? 'translator_entries_not_array'
+            : !translationCountParityPassed
+              ? 'translator_entry_identity_count_mismatch'
+              : safeEntries.some((entry) => !translatedById.has(entry.entryId))
+                ? 'translator_missing_expected_identity'
+                : safeEntries.some((entry) => (
+                  typeof translatedById.get(entry.entryId)?.localizedRoleTitle !== 'string'
+                ))
+                  ? 'translator_localized_title_wrong_type'
+                  : safeEntries.some((entry) => (
+                    translatedById.get(entry.entryId)!.localizedRoleTitle.trim().length === 0
+                  ))
+                    ? 'translator_localized_title_empty'
+                    : safeEntries.some((entry) => (
+                      translatedById.get(entry.entryId)!.localizedRoleTitle.trim().length > 500
+                    ))
+                      ? 'translator_localized_title_too_long'
+                      : null;
+      const translationParityPassed = translationFailureSubcode === null;
       if (!translationParityPassed) {
         const partialCandidates = Array.isArray(translated?.entries)
           ? translated!.entries
@@ -2065,6 +2102,12 @@ Rules:
           code: 'generation_validation_failed' satisfies AiErrorCode,
           localizationTypedFailureReason: 'export_title_localization_provider_malformed',
           localizationFailureStage: 'title_translation_parse',
+          titleFailureLayer: 'server_translator_parse_or_parity',
+          titleFailureSubcode: translationFailureSubcode,
+          titleExpectedIdentityCount: safeEntries.length,
+          titleReturnedIdentityCount: translatedById.size,
+          titleIdentityParityPassed: translationIdentityParityPassed,
+          titleCountParityPassed: translationCountParityPassed,
           titleRepairContext: {
             failedStage: 'translator_parse',
             previousCandidates: partialCandidates,
@@ -2119,6 +2162,8 @@ Rules:
           code: failure.code,
           localizationTypedFailureReason: failure.reason,
           localizationFailureStage: 'title_verifier_transport',
+          titleFailureLayer: 'http_or_transport',
+          titleFailureSubcode: failure.reason,
           deadlineOwner: failure.deadlineOwner,
           providerStatus: failure.providerStatus,
           retryAfter: failure.retryAfter,
@@ -2138,18 +2183,37 @@ Rules:
           ? verified!.entries.map((entry) => [String(entry.entryId || ''), entry])
           : [],
       );
-      const verifierPassed = verified?.targetLocale === resolvedLocale
-        && verifiedById.size === safeEntries.length
-        && safeEntries.every((entry) => {
-          const record = verifiedById.get(entry.entryId);
-          return Boolean(
-            record
-            && record.decision === 'passed'
-            && record.semanticEquivalent === true
-            && record.targetLocalePassed === true
-            && record.unsupportedScopeIntroduced === false,
-          );
-        });
+      const verifierCountParityPassed = verifiedById.size === safeEntries.length;
+      const verifierIdentityParityPassed = verifierCountParityPassed
+        && safeEntries.every((entry) => verifiedById.has(entry.entryId));
+      const verifierFailureSubcode: TitleVerifierFailureSubcode | null = !verified
+        ? 'verifier_response_not_object_or_invalid_json'
+        : verified.targetLocale !== resolvedLocale
+          ? 'verifier_target_locale_mismatch'
+          : !Array.isArray(verified.entries)
+            ? 'verifier_entries_not_array'
+            : !verifierCountParityPassed
+              ? 'verifier_entry_identity_count_mismatch'
+              : safeEntries.some((entry) => !verifiedById.has(entry.entryId))
+                ? 'verifier_missing_expected_identity'
+                : safeEntries.some((entry) => (
+                  verifiedById.get(entry.entryId)!.decision !== 'passed'
+                ))
+                  ? 'verifier_decision_not_passed'
+                  : safeEntries.some((entry) => (
+                    verifiedById.get(entry.entryId)!.semanticEquivalent !== true
+                  ))
+                    ? 'verifier_semantic_equivalence_failed'
+                    : safeEntries.some((entry) => (
+                      verifiedById.get(entry.entryId)!.targetLocalePassed !== true
+                    ))
+                      ? 'verifier_target_locale_failed'
+                      : safeEntries.some((entry) => (
+                        verifiedById.get(entry.entryId)!.unsupportedScopeIntroduced !== false
+                      ))
+                        ? 'verifier_unsupported_scope_introduced'
+                        : null;
+      const verifierPassed = verifierFailureSubcode === null;
       if (!verifierPassed) {
         const verifierDecisions = Array.isArray(verified?.entries)
           ? verified!.entries
@@ -2168,6 +2232,12 @@ Rules:
           localizationTypedFailureReason:
             'export_title_localization_independent_verification_failed',
           localizationFailureStage: 'title_independent_verification',
+          titleFailureLayer: 'server_independent_verifier',
+          titleFailureSubcode: verifierFailureSubcode,
+          titleExpectedIdentityCount: safeEntries.length,
+          titleReturnedIdentityCount: verifiedById.size,
+          titleIdentityParityPassed: verifierIdentityParityPassed,
+          titleCountParityPassed: verifierCountParityPassed,
           titleRepairContext: {
             failedStage: 'independent_verifier',
             previousCandidates: candidates.map((entry) => ({

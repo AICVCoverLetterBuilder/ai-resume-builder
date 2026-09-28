@@ -32,6 +32,11 @@ import {
 } from './cv-semantic-duty-facts';
 import { resolveLocaleCandidate, type Locale } from './i18n/translations';
 import type { CVData, WorkExperience } from './types';
+import type {
+  ExportTitleFieldIdentityDiagnostic,
+  ExportTitleLocaleResolutionDiagnostic,
+  ExportTitleProviderAttemptDiagnostic,
+} from './cv-export-title-localization';
 
 export const EXPERIENCE_LOCALIZED_SURFACE_STORE_SCHEMA = 1 as const;
 export const EXPERIENCE_LOCALIZED_SURFACE_SCHEMA =
@@ -711,8 +716,18 @@ export type ExperienceLocalizationDiagnostics = {
   titleLocalizedFieldCount?: number;
   titleSummaryMentionReplacementCount?: number;
   titleSourceLocaleByField?: Record<string, Locale>;
+  titleLocaleResolutionByField?: Record<string, ExportTitleLocaleResolutionDiagnostic>;
+  titleIdentityByField?: Record<string, ExportTitleFieldIdentityDiagnostic>;
+  titleProviderAttempts?: ExportTitleProviderAttemptDiagnostic[];
+  titleInitialRepairUnitIdentityMatched?: boolean | null;
+  titleTerminalBatchKind?:
+    | 'none'
+    | 'failed_multi_unit_batch'
+    | 'root_singleton_terminal_failure'
+    | 'split_child_singleton_terminal_failure';
   titleProjectionPassed?: boolean;
   employerIdentityPassed?: boolean;
+  employerIdentityStatus?: 'not_reached' | 'passed' | 'failed';
   titlePostProjectionValidationPassed?: boolean;
   titlePostProjectionFailureReason?: string;
   titleFailureReason?: string;
@@ -729,6 +744,12 @@ export type ExperienceLocalizationDiagnostics = {
   titleTransportRetryAfterSec?: number | null;
   titleTransportRepairContextPresent?: boolean;
   titleTransportRecovered?: boolean;
+  titleTransportFailureLayer?:
+    | 'server_translator_parse_or_parity'
+    | 'server_independent_verifier'
+    | 'http_or_transport'
+    | 'client_manifest_validation';
+  titleTransportFailureSubcode?: string;
   failureStage?: string;
   failureReason?: string;
 };

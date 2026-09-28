@@ -34,6 +34,87 @@ export type ExportTitleLocalizationTransportInput = {
   }>;
 };
 
+export type ExportTitleLocaleResolutionSource =
+  | 'direct_title_detection'
+  | 'persisted_position_source_locale'
+  | 'authoritative_description_detection'
+  | 'persisted_description_source_locale'
+  | 'current_description_detection'
+  | 'content_locale'
+  | 'target_locale_fallback'
+  | 'matching_experience_inheritance'
+  | 'present_experience_inheritance'
+  | 'first_experience_inheritance';
+
+export type ExportTitleLocaleResolutionDiagnostic = {
+  directTitleDetectionResult: Locale | null;
+  persistedPositionSourceLocalePresent: boolean;
+  persistedPositionSourceLocale: Locale | null;
+  authoritativeDescriptionDetectionResult: Locale | null;
+  persistedDescriptionSourceLocalePresent: boolean;
+  persistedDescriptionSourceLocale: Locale | null;
+  currentDescriptionDetectionResult: Locale | null;
+  contentLocaleConsidered: Locale | null;
+  targetLocale: Locale;
+  finalSourceLocale: Locale;
+  resolutionSource: ExportTitleLocaleResolutionSource;
+  inheritedResolutionSource?: ExportTitleLocaleResolutionSource;
+};
+
+export type ExportTitleLocalizationFailureLayer =
+  | 'server_translator_parse_or_parity'
+  | 'server_independent_verifier'
+  | 'http_or_transport'
+  | 'client_manifest_validation';
+
+export type ExportTitleClientValidationSubcode =
+  | 'target_locale_mismatch'
+  | 'entry_identity_count_mismatch'
+  | 'missing_expected_identity'
+  | 'facts_not_array'
+  | 'facts_not_empty'
+  | 'localized_title_empty'
+  | 'localized_title_too_long'
+  | 'localized_title_contains_newline'
+  | 'unchanged_cross_locale_title'
+  | 'wrong_script'
+  | 'source_language_leakage'
+  | 'target_locale_purity_failed';
+
+export type ExportTitleLocalizationFailureEvidence = {
+  titleFailureLayer?: ExportTitleLocalizationFailureLayer;
+  titleFailureSubcode?: string;
+  titleHttpStatus?: number | null;
+  titleExpectedIdentityCount?: number | null;
+  titleReturnedIdentityCount?: number | null;
+  titleIdentityParityPassed?: boolean | null;
+  titleCountParityPassed?: boolean | null;
+};
+
+export type ExportTitleProviderAttemptDiagnostic = {
+  pass: 'initial' | 'repair';
+  attempted: boolean;
+  result: 'success' | 'failed' | 'not_attempted';
+  batchKind: 'root_batch' | 'split_child';
+  batchDiagnosticId: string;
+  unitCount: number;
+  failureLayer: ExportTitleLocalizationFailureLayer | null;
+  failureSubcode: string | null;
+  topLevelReason: string | null;
+  httpStatus: number | null;
+  httpCategory: 'success' | 'client_error' | 'server_error' | 'transport' | null;
+  expectedIdentityCount: number;
+  returnedIdentityCount: number | null;
+  identityParityPassed: boolean | null;
+  countParityPassed: boolean | null;
+};
+
+export type ExportTitleFieldIdentityDiagnostic = {
+  diagnosticUnitId: string;
+  sharedSourceTitleFieldCount: number;
+  fieldsShareSourceUnit: boolean;
+};
+
 export type ExportTitleLocalizationAdapter = (
   input: ExportTitleLocalizationTransportInput,
 ) => Promise<SummaryV2LocalizationProviderResponse>;
@@ -55,8 +136,18 @@ export type ExportTitleLocalizationDiagnostics = {
   titleLocalizedFieldCount: number;
   titleSummaryMentionReplacementCount: number;
   titleSourceLocaleByField: Record<string, Locale>;
+  titleLocaleResolutionByField: Record<string, ExportTitleLocaleResolutionDiagnostic>;
+  titleIdentityByField: Record<string, ExportTitleFieldIdentityDiagnostic>;
+  titleProviderAttempts: ExportTitleProviderAttemptDiagnostic[];
+  titleInitialRepairUnitIdentityMatched: boolean | null;
+  titleTerminalBatchKind:
+    | 'none'
+    | 'failed_multi_unit_batch'
+    | 'root_singleton_terminal_failure'
+    | 'split_child_singleton_terminal_failure';
   titleProjectionPassed: boolean;
-  employerIdentityPassed: boolean;
+  employerIdentityStatus: 'not_reached' | 'passed' | 'failed';
+  employerIdentityPassed?: boolean;
   titleFailureReason?: string;
 };
 
@@ -80,6 +171,7 @@ type TitleFieldRef = {
   kind: 'personal_job_title' | 'experience_position';
   sourceTitle: string;
   sourceLocale: Locale;
+  localeResolution: ExportTitleLocaleResolutionDiagnostic;
   experienceId?: string;
   employer: string;
   employmentState: 'present' | 'completed';
@@ -113,7 +205,11 @@ function asLocale(value?: string | null): Locale | null {
   return resolveLocaleCandidate(value);
 }
 
-function localeForExperience(cv: CVData, exp: WorkExperience, targetLocale: Locale): Locale {
+function localeForExperience(
+  cv: CVData,
+  exp: WorkExperience,
+  targetLocale: Locale,
+): { locale: Locale; diagnostic: ExportTitleLocaleResolutionDiagnostic } {
   const titleDetected = asLocale(detectTextLocale(exp.position || ''));
   const authoritativeDescription = exp.originalUserDescription
     || exp.canonicalDescription
@@ -121,16 +217,44 @@ function localeForExperience(cv: CVData, exp: WorkExperience, targetLocale: Loca
     || '';
   const authoritativeDescriptionDetected = asLocale(detectTextLocale(authoritativeDescription));
   const currentDescriptionDetected = asLocale(detectTextLocale(exp.description || ''));
-  return titleDetected
-    || asLocale(exp.positionSourceLocale)
-    || authoritativeDescriptionDetected
-    || asLocale(exp.descriptionSourceLocale)
-    || currentDescriptionDetected
-    || asLocale(cv.contentLocale)
-    || targetLocale;
+  const persistedPositionSourceLocale = asLocale(exp.positionSourceLocale);
+  const persistedDescriptionSourceLocale = asLocale(exp.descriptionSourceLocale);
+  const contentLocale = asLocale(cv.contentLocale);
+  const selected = titleDetected
+    ? { locale: titleDetected, source: 'direct_title_detection' as const }
+    : persistedPositionSourceLocale
+      ? { locale: persistedPositionSourceLocale, source: 'persisted_position_source_locale' as const }
+      : authoritativeDescriptionDetected
+        ? { locale: authoritativeDescriptionDetected, source: 'authoritative_description_detection' as const }
+        : persistedDescriptionSourceLocale
+          ? { locale: persistedDescriptionSourceLocale, source: 'persisted_description_source_locale' as const }
+          : currentDescriptionDetected
+            ? { locale: currentDescriptionDetected, source: 'current_description_detection' as const }
+            : contentLocale
+              ? { locale: contentLocale, source: 'content_locale' as const }
+              : { locale: targetLocale, source: 'target_locale_fallback' as const };
+  return {
+    locale: selected.locale,
+    diagnostic: {
+      directTitleDetectionResult: titleDetected,
+      persistedPositionSourceLocalePresent: Boolean(exp.positionSourceLocale),
+      persistedPositionSourceLocale,
+      authoritativeDescriptionDetectionResult: authoritativeDescriptionDetected,
+      persistedDescriptionSourceLocalePresent: Boolean(exp.descriptionSourceLocale),
+      persistedDescriptionSourceLocale,
+      currentDescriptionDetectionResult: currentDescriptionDetected,
+      contentLocaleConsidered: contentLocale,
+      targetLocale,
+      finalSourceLocale: selected.locale,
+      resolutionSource: selected.source,
+    },
+  };
 }
 
-function localeForHeader(cv: CVData, targetLocale: Locale): Locale {
+function localeForHeader(
+  cv: CVData,
+  targetLocale: Locale,
+): { locale: Locale; diagnostic: ExportTitleLocaleResolutionDiagnostic } {
   const header = canonical(cv.personal?.jobTitle || '');
   const matching = (cv.experience || []).find(
     (exp) => canonical(exp.position || '').toLocaleLowerCase() === header.toLocaleLowerCase(),
@@ -138,10 +262,63 @@ function localeForHeader(cv: CVData, targetLocale: Locale): Locale {
   const current = matching
     || (cv.experience || []).find((exp) => exp.isPresent)
     || (cv.experience || [])[0];
-  return asLocale(detectTextLocale(header))
-    || (current ? localeForExperience(cv, current, targetLocale) : null)
-    || asLocale(cv.contentLocale)
-    || targetLocale;
+  const titleDetected = asLocale(detectTextLocale(header));
+  const inherited = current ? localeForExperience(cv, current, targetLocale) : null;
+  const contentLocale = asLocale(cv.contentLocale);
+  if (titleDetected) {
+    return {
+      locale: titleDetected,
+      diagnostic: {
+        ...(inherited?.diagnostic || {
+          persistedPositionSourceLocalePresent: false,
+          persistedPositionSourceLocale: null,
+          authoritativeDescriptionDetectionResult: null,
+          persistedDescriptionSourceLocalePresent: false,
+          persistedDescriptionSourceLocale: null,
+          currentDescriptionDetectionResult: null,
+        }),
+        directTitleDetectionResult: titleDetected,
+        contentLocaleConsidered: contentLocale,
+        targetLocale,
+        finalSourceLocale: titleDetected,
+        resolutionSource: 'direct_title_detection',
+      },
+    };
+  }
+  if (current && inherited) {
+    const resolutionSource = matching
+      ? 'matching_experience_inheritance' as const
+      : current.isPresent
+        ? 'present_experience_inheritance' as const
+        : 'first_experience_inheritance' as const;
+    return {
+      locale: inherited.locale,
+      diagnostic: {
+        ...inherited.diagnostic,
+        directTitleDetectionResult: null,
+        finalSourceLocale: inherited.locale,
+        resolutionSource,
+        inheritedResolutionSource: inherited.diagnostic.resolutionSource,
+      },
+    };
+  }
+  const locale = contentLocale || targetLocale;
+  return {
+    locale,
+    diagnostic: {
+      directTitleDetectionResult: null,
+      persistedPositionSourceLocalePresent: false,
+      persistedPositionSourceLocale: null,
+      authoritativeDescriptionDetectionResult: null,
+      persistedDescriptionSourceLocalePresent: false,
+      persistedDescriptionSourceLocale: null,
+      currentDescriptionDetectionResult: null,
+      contentLocaleConsidered: contentLocale,
+      targetLocale,
+      finalSourceLocale: locale,
+      resolutionSource: contentLocale ? 'content_locale' : 'target_locale_fallback',
+    },
+  };
 }
 
 function invariantTitle(text: string): boolean {
@@ -154,29 +331,42 @@ function invariantTitle(text: string): boolean {
   return false;
 }
 
+export function classifyExportLocalizedTitleFailure(options: {
+  sourceTitle: string;
+  sourceLocale: Locale;
+  targetLocale: Locale;
+  localizedTitle: string;
+}): ExportTitleClientValidationSubcode | null {
+  const localized = canonical(options.localizedTitle);
+  if (!localized) return 'localized_title_empty';
+  if (localized.length > 500) return 'localized_title_too_long';
+  if (
+    !localesEquivalent(options.sourceLocale, options.targetLocale)
+    && localized.toLocaleLowerCase() === canonical(options.sourceTitle).toLocaleLowerCase()
+    && !invariantTitle(localized)
+  ) return 'unchanged_cross_locale_title';
+  if (invariantTitle(localized)) return null;
+  const purity = validateAiUnitLocalePurity(localized, options.targetLocale, {
+    kind: 'summary_sentence',
+    requireUnits: true,
+  });
+  if (purity.wrongScriptUnitCount > 0) return 'wrong_script';
+  if (purity.sourceLanguageLeakageDetected) return 'source_language_leakage';
+  const detected = asLocale(detectTextLocale(localized, { storedLocale: options.targetLocale }));
+  return purity.targetLocalePurityPassed
+    || detected === options.targetLocale
+    || detected === null
+    ? null
+    : 'target_locale_purity_failed';
+}
+
 function validLocalizedTitle(options: {
   sourceTitle: string;
   sourceLocale: Locale;
   targetLocale: Locale;
   localizedTitle: string;
 }): boolean {
-  const localized = canonical(options.localizedTitle);
-  if (!localized || localized.length > 500 || /[\r\n]/u.test(localized)) return false;
-  if (
-    !localesEquivalent(options.sourceLocale, options.targetLocale)
-    && localized.toLocaleLowerCase() === canonical(options.sourceTitle).toLocaleLowerCase()
-    && !invariantTitle(localized)
-  ) return false;
-  if (invariantTitle(localized)) return true;
-  const purity = validateAiUnitLocalePurity(localized, options.targetLocale, {
-    kind: 'summary_sentence',
-    requireUnits: true,
-  });
-  if (purity.wrongScriptUnitCount > 0 || purity.sourceLanguageLeakageDetected) return false;
-  const detected = asLocale(detectTextLocale(localized, { storedLocale: options.targetLocale }));
-  return purity.targetLocalePurityPassed
-    || detected === options.targetLocale
-    || detected === null;
+  return classifyExportLocalizedTitleFailure(options) === null;
 }
 
 function fieldRefs(
@@ -189,11 +379,13 @@ function fieldRefs(
   if (header && options?.includePersonalTitle !== false) {
     const current = (cv.experience || []).find((exp) => exp.isPresent)
       || (cv.experience || [])[0];
+    const localeResolution = localeForHeader(cv, targetLocale);
     refs.push({
       fieldKey: 'personal.jobTitle',
       kind: 'personal_job_title',
       sourceTitle: header,
-      sourceLocale: localeForHeader(cv, targetLocale),
+      sourceLocale: localeResolution.locale,
+      localeResolution: localeResolution.diagnostic,
       employer: current?.company || '',
       employmentState: current?.isPresent ? 'present' : 'completed',
     });
@@ -202,12 +394,14 @@ function fieldRefs(
     if (options?.experienceIds && !options.experienceIds.has(exp.id)) continue;
     const title = canonical(exp.position || '');
     if (!title) continue;
+    const localeResolution = localeForExperience(cv, exp, targetLocale);
     refs.push({
       fieldKey: `experience.${exp.id}.position`,
       kind: 'experience_position',
       experienceId: exp.id,
       sourceTitle: title,
-      sourceLocale: localeForExperience(cv, exp, targetLocale),
+      sourceLocale: localeResolution.locale,
+      localeResolution: localeResolution.diagnostic,
       employer: exp.company || '',
       employmentState: exp.isPresent ? 'present' : 'completed',
     });
@@ -264,6 +458,129 @@ function titleAdapterFailureReason(error: unknown): string {
   return /^[a-z0-9_:-]+$/iu.test(reason)
     ? reason
     : 'export_title_localization_provider_failed';
+}
+
+function titleAdapterFailureEvidence(error: unknown): ExportTitleLocalizationFailureEvidence {
+  if (!error || typeof error !== 'object') return {};
+  const candidate = error as ExportTitleLocalizationFailureEvidence;
+  return {
+    titleFailureLayer: candidate.titleFailureLayer,
+    titleFailureSubcode: candidate.titleFailureSubcode,
+    titleHttpStatus: typeof candidate.titleHttpStatus === 'number'
+      ? candidate.titleHttpStatus
+      : candidate.titleHttpStatus === null
+        ? null
+        : undefined,
+    titleExpectedIdentityCount: typeof candidate.titleExpectedIdentityCount === 'number'
+      ? candidate.titleExpectedIdentityCount
+      : candidate.titleExpectedIdentityCount === null
+        ? null
+        : undefined,
+    titleReturnedIdentityCount: typeof candidate.titleReturnedIdentityCount === 'number'
+      ? candidate.titleReturnedIdentityCount
+      : candidate.titleReturnedIdentityCount === null
+        ? null
+        : undefined,
+    titleIdentityParityPassed: typeof candidate.titleIdentityParityPassed === 'boolean'
+      ? candidate.titleIdentityParityPassed
+      : candidate.titleIdentityParityPassed === null
+        ? null
+        : undefined,
+    titleCountParityPassed: typeof candidate.titleCountParityPassed === 'boolean'
+      ? candidate.titleCountParityPassed
+      : candidate.titleCountParityPassed === null
+        ? null
+        : undefined,
+  };
+}
+
+function httpCategory(status: number | null): ExportTitleProviderAttemptDiagnostic['httpCategory'] {
+  if (status === null) return 'transport';
+  if (status >= 500) return 'server_error';
+  if (status >= 400) return 'client_error';
+  if (status >= 200 && status < 300) return 'success';
+  return null;
+}
+
+function validateProviderResponse(options: {
+  response: SummaryV2LocalizationProviderResponse;
+  batch: TitleUnit[];
+  targetLocale: Locale;
+}): {
+  failureSubcode: ExportTitleClientValidationSubcode | null;
+  returnedIdentityCount: number;
+  identityParityPassed: boolean;
+  countParityPassed: boolean;
+} {
+  const actualById = new Map(
+    (options.response.entries || []).map((entry) => [entry.entryId, entry]),
+  );
+  const countParityPassed = actualById.size === options.batch.length;
+  const identityParityPassed = countParityPassed
+    && options.batch.every((unit) => actualById.has(unit.entryId));
+  if (options.response.targetLocale !== options.targetLocale) {
+    return {
+      failureSubcode: 'target_locale_mismatch',
+      returnedIdentityCount: actualById.size,
+      identityParityPassed,
+      countParityPassed,
+    };
+  }
+  if (!countParityPassed) {
+    return {
+      failureSubcode: 'entry_identity_count_mismatch',
+      returnedIdentityCount: actualById.size,
+      identityParityPassed,
+      countParityPassed,
+    };
+  }
+  for (const unit of options.batch) {
+    const entry = actualById.get(unit.entryId);
+    if (!entry) {
+      return {
+        failureSubcode: 'missing_expected_identity',
+        returnedIdentityCount: actualById.size,
+        identityParityPassed,
+        countParityPassed,
+      };
+    }
+    if (!Array.isArray(entry.facts)) {
+      return {
+        failureSubcode: 'facts_not_array',
+        returnedIdentityCount: actualById.size,
+        identityParityPassed,
+        countParityPassed,
+      };
+    }
+    if (entry.facts.length !== 0) {
+      return {
+        failureSubcode: 'facts_not_empty',
+        returnedIdentityCount: actualById.size,
+        identityParityPassed,
+        countParityPassed,
+      };
+    }
+    const titleFailure = classifyExportLocalizedTitleFailure({
+      sourceTitle: unit.sourceTitle,
+      sourceLocale: unit.sourceLocale,
+      targetLocale: options.targetLocale,
+      localizedTitle: entry.localizedRoleTitle,
+    });
+    if (titleFailure) {
+      return {
+        failureSubcode: titleFailure,
+        returnedIdentityCount: actualById.size,
+        identityParityPassed,
+        countParityPassed,
+      };
+    }
+  }
+  return {
+    failureSubcode: null,
+    returnedIdentityCount: actualById.size,
+    identityParityPassed,
+    countParityPassed,
+  };
 }
 
 function batchFailureCanBeIsolated(reason: string): boolean {
@@ -443,6 +760,23 @@ export async function prepareExportLocalizedTitles(options: {
     );
   const localizedByUnit = new Map<string, string>();
   const sourceLocaleByField = Object.fromEntries(refs.map((ref) => [ref.fieldKey, ref.sourceLocale]));
+  const localeResolutionByField = Object.fromEntries(
+    refs.map((ref) => [ref.fieldKey, ref.localeResolution]),
+  );
+  const unitByField = new Map<string, TitleUnit>();
+  const diagnosticUnitIdByUnitKey = new Map<string, string>();
+  for (const unit of units) {
+    diagnosticUnitIdByUnitKey.set(unit.unitKey, `u${diagnosticUnitIdByUnitKey.size}`);
+    for (const ref of unit.refs) unitByField.set(ref.fieldKey, unit);
+  }
+  const titleIdentityByField = Object.fromEntries(refs.map((ref) => {
+    const unit = unitByField.get(ref.fieldKey)!;
+    return [ref.fieldKey, {
+      diagnosticUnitId: diagnosticUnitIdByUnitKey.get(unit.unitKey) || 'u-unknown',
+      sharedSourceTitleFieldCount: unit.refs.length,
+      fieldsShareSourceUnit: unit.refs.length > 1,
+    } satisfies ExportTitleFieldIdentityDiagnostic];
+  }));
   let sameLocaleCount = 0;
   let deterministicCount = 0;
   let cacheReuseCount = 0;
@@ -451,7 +785,18 @@ export async function prepareExportLocalizedTitles(options: {
   let titleBatchSplitCount = 0;
   let titleSingletonFailureCount = 0;
   let titleLastProviderFailureReason: string | undefined;
+  const titleProviderAttempts: ExportTitleProviderAttemptDiagnostic[] = [];
+  let titleTerminalBatchKind: ExportTitleLocalizationDiagnostics['titleTerminalBatchKind'] = 'none';
   const missing: TitleUnit[] = [];
+  const diagnosticBatchIdByBatchKey = new Map<string, string>();
+  const diagnosticBatchId = (batch: TitleUnit[]): string => {
+    const key = batch.map((unit) => unit.unitKey).join('\u001f');
+    const existing = diagnosticBatchIdByBatchKey.get(key);
+    if (existing) return existing;
+    const next = `b${diagnosticBatchIdByBatchKey.size}`;
+    diagnosticBatchIdByBatchKey.set(key, next);
+    return next;
+  };
   const initialSnapshotHash = sourceSnapshotHash(options.sourceCv);
 
   for (const unit of units) {
@@ -494,7 +839,7 @@ export async function prepareExportLocalizedTitles(options: {
     missing.push(unit);
   }
 
-  const resolveProviderBatch = async (batch: TitleUnit[]): Promise<{
+  const resolveProviderBatch = async (batch: TitleUnit[], depth: number): Promise<{
     ok: true;
     accepted: SummaryV2LocalizationProviderResponse;
   } | {
@@ -502,6 +847,8 @@ export async function prepareExportLocalizedTitles(options: {
     reason: string;
   }> => {
     let lastReason = 'export_title_localization_provider_failed';
+    const batchDiagnosticId = diagnosticBatchId(batch);
+    const batchKind = depth === 0 ? 'root_batch' as const : 'split_child' as const;
     for (let pass = 0; pass < 2; pass += 1) {
       providerRequestCount += 1;
       if (pass === 1) providerRepairCount += 1;
@@ -523,51 +870,124 @@ export async function prepareExportLocalizedTitles(options: {
       } catch (error) {
         lastReason = titleAdapterFailureReason(error);
         titleLastProviderFailureReason = lastReason;
+        const evidence = titleAdapterFailureEvidence(error);
+        const inferredLayer: ExportTitleLocalizationFailureLayer = evidence.titleFailureLayer
+          || (lastReason === 'export_title_localization_independent_verification_failed'
+            ? 'server_independent_verifier'
+            : lastReason === 'export_title_localization_provider_malformed'
+              ? 'server_translator_parse_or_parity'
+              : 'http_or_transport');
+        const status = evidence.titleHttpStatus ?? null;
+        titleProviderAttempts.push({
+          pass: pass === 0 ? 'initial' : 'repair',
+          attempted: true,
+          result: 'failed',
+          batchKind,
+          batchDiagnosticId,
+          unitCount: batch.length,
+          failureLayer: inferredLayer,
+          failureSubcode: evidence.titleFailureSubcode || 'diagnostic_unavailable_legacy',
+          topLevelReason: lastReason,
+          httpStatus: status,
+          httpCategory: httpCategory(status),
+          expectedIdentityCount: evidence.titleExpectedIdentityCount ?? batch.length,
+          returnedIdentityCount: evidence.titleReturnedIdentityCount ?? null,
+          identityParityPassed: evidence.titleIdentityParityPassed ?? null,
+          countParityPassed: evidence.titleCountParityPassed ?? null,
+        });
         continue;
       }
-      const actualById = new Map((response.entries || []).map((entry) => [entry.entryId, entry]));
-      const valid = response.targetLocale === options.targetLocale
-        && actualById.size === batch.length
-        && batch.every((unit) => {
-          const entry = actualById.get(unit.entryId);
-          return Boolean(
-            entry
-            && Array.isArray(entry.facts)
-            && entry.facts.length === 0
-            && validLocalizedTitle({
-              sourceTitle: unit.sourceTitle,
-              sourceLocale: unit.sourceLocale,
-              targetLocale: options.targetLocale,
-              localizedTitle: entry.localizedRoleTitle,
-            }),
-          );
+      const validation = validateProviderResponse({
+        response,
+        batch,
+        targetLocale: options.targetLocale,
+      });
+      if (!validation.failureSubcode) {
+        titleProviderAttempts.push({
+          pass: pass === 0 ? 'initial' : 'repair',
+          attempted: true,
+          result: 'success',
+          batchKind,
+          batchDiagnosticId,
+          unitCount: batch.length,
+          failureLayer: null,
+          failureSubcode: null,
+          topLevelReason: null,
+          httpStatus: 200,
+          httpCategory: 'success',
+          expectedIdentityCount: batch.length,
+          returnedIdentityCount: validation.returnedIdentityCount,
+          identityParityPassed: validation.identityParityPassed,
+          countParityPassed: validation.countParityPassed,
         });
-      if (valid) return { ok: true, accepted: response };
+        if (pass === 0) {
+          titleProviderAttempts.push({
+            pass: 'repair',
+            attempted: false,
+            result: 'not_attempted',
+            batchKind,
+            batchDiagnosticId,
+            unitCount: batch.length,
+            failureLayer: null,
+            failureSubcode: null,
+            topLevelReason: null,
+            httpStatus: null,
+            httpCategory: null,
+            expectedIdentityCount: batch.length,
+            returnedIdentityCount: null,
+            identityParityPassed: null,
+            countParityPassed: null,
+          });
+        }
+        return { ok: true, accepted: response };
+      }
+      titleProviderAttempts.push({
+        pass: pass === 0 ? 'initial' : 'repair',
+        attempted: true,
+        result: 'failed',
+        batchKind,
+        batchDiagnosticId,
+        unitCount: batch.length,
+        failureLayer: 'client_manifest_validation',
+        failureSubcode: validation.failureSubcode,
+        topLevelReason: 'export_title_localization_provider_malformed',
+        httpStatus: 200,
+        httpCategory: 'success',
+        expectedIdentityCount: batch.length,
+        returnedIdentityCount: validation.returnedIdentityCount,
+        identityParityPassed: validation.identityParityPassed,
+        countParityPassed: validation.countParityPassed,
+      });
       lastReason = 'export_title_localization_provider_malformed';
       titleLastProviderFailureReason = lastReason;
     }
     return { ok: false, reason: lastReason };
   };
 
-  const resolveAndStageBatch = async (batch: TitleUnit[]): Promise<{
+  const resolveAndStageBatch = async (batch: TitleUnit[], depth = 0): Promise<{
     ok: true;
   } | {
     ok: false;
     reason: string;
   }> => {
-    const resolved = await resolveProviderBatch(batch);
+    const resolved = await resolveProviderBatch(batch, depth);
     if (!resolved.ok) {
       if (batch.length > 1 && batchFailureCanBeIsolated(resolved.reason)) {
         titleBatchSplitCount += 1;
         const midpoint = Math.ceil(batch.length / 2);
-        const left = await resolveAndStageBatch(batch.slice(0, midpoint));
+        const left = await resolveAndStageBatch(batch.slice(0, midpoint), depth + 1);
         if (!left.ok) return left;
-        const right = await resolveAndStageBatch(batch.slice(midpoint));
+        const right = await resolveAndStageBatch(batch.slice(midpoint), depth + 1);
         if (!right.ok) return right;
         return { ok: true };
       }
       if (batch.length === 1 && batchFailureCanBeIsolated(resolved.reason)) {
         titleSingletonFailureCount += 1;
+        titleTerminalBatchKind = depth === 0
+          ? 'root_singleton_terminal_failure'
+          : 'split_child_singleton_terminal_failure';
+      } else if (batch.length > 1) {
+        titleTerminalBatchKind = 'failed_multi_unit_batch';
       }
       return resolved;
     }
@@ -594,6 +1014,18 @@ export async function prepareExportLocalizedTitles(options: {
     return { ok: true };
   };
 
+  const initialRepairUnitIdentityMatched = (): boolean | null => {
+    const repairs = titleProviderAttempts.filter((attempt) => (
+      attempt.pass === 'repair' && attempt.attempted
+    ));
+    if (repairs.length === 0) return null;
+    return repairs.every((repairAttempt) => titleProviderAttempts.some((attempt) => (
+      attempt.pass === 'initial'
+      && attempt.attempted
+      && attempt.batchDiagnosticId === repairAttempt.batchDiagnosticId
+    )));
+  };
+
   for (let offset = 0; offset < missing.length; offset += CV_EXPORT_TITLE_PROVIDER_BATCH_SIZE) {
     const batch = missing.slice(offset, offset + CV_EXPORT_TITLE_PROVIDER_BATCH_SIZE);
     const resolved = await resolveAndStageBatch(batch);
@@ -615,8 +1047,13 @@ export async function prepareExportLocalizedTitles(options: {
         titleLocalizedFieldCount: 0,
         titleSummaryMentionReplacementCount: 0,
         titleSourceLocaleByField: sourceLocaleByField,
+        titleLocaleResolutionByField: localeResolutionByField,
+        titleIdentityByField,
+        titleProviderAttempts,
+        titleInitialRepairUnitIdentityMatched: initialRepairUnitIdentityMatched(),
+        titleTerminalBatchKind,
         titleProjectionPassed: false,
-        employerIdentityPassed: false,
+        employerIdentityStatus: 'not_reached',
         titleFailureReason: resolved.reason,
       };
       return {
@@ -647,8 +1084,13 @@ export async function prepareExportLocalizedTitles(options: {
       titleLocalizedFieldCount: 0,
       titleSummaryMentionReplacementCount: 0,
       titleSourceLocaleByField: sourceLocaleByField,
+      titleLocaleResolutionByField: localeResolutionByField,
+      titleIdentityByField,
+      titleProviderAttempts,
+      titleInitialRepairUnitIdentityMatched: initialRepairUnitIdentityMatched(),
+      titleTerminalBatchKind,
       titleProjectionPassed: false,
-      employerIdentityPassed: false,
+      employerIdentityStatus: 'not_reached',
       titleFailureReason: 'export_title_localization_stale_snapshot',
     };
     return {
@@ -712,7 +1154,13 @@ export async function prepareExportLocalizedTitles(options: {
     titleLocalizedFieldCount: localizedByField.size,
     titleSummaryMentionReplacementCount,
     titleSourceLocaleByField: sourceLocaleByField,
+    titleLocaleResolutionByField: localeResolutionByField,
+    titleIdentityByField,
+    titleProviderAttempts,
+    titleInitialRepairUnitIdentityMatched: initialRepairUnitIdentityMatched(),
+    titleTerminalBatchKind,
     titleProjectionPassed,
+    employerIdentityStatus: employerIdentityPassed ? 'passed' : 'failed',
     employerIdentityPassed,
     ...(titleProjectionPassed && employerIdentityPassed
       ? {}

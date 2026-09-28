@@ -212,6 +212,7 @@ import {
 import {
   prepareExportLocalizedTitles,
   CV_EXPORT_TITLE_LOCALIZATION_REVISION,
+  type ExportTitleLocalizationFailureEvidence,
   type ExportTitleLocalizationTransportInput,
 } from '@/lib/cv-export-title-localization';
 void CV_EXPORT_DRAFT_ISOLATION_REVISION;
@@ -4997,6 +4998,12 @@ export default function CVBuilderPage() {
                 titleTranslatorAttemptCount?: number;
                 titleVerifierAttemptCount?: number;
                 titleRepairContext?: unknown;
+                titleFailureLayer?: ExportTitleLocalizationFailureEvidence['titleFailureLayer'];
+                titleFailureSubcode?: string;
+                titleExpectedIdentityCount?: number | null;
+                titleReturnedIdentityCount?: number | null;
+                titleIdentityParityPassed?: boolean | null;
+                titleCountParityPassed?: boolean | null;
               }>('/api/generate', {
                 body: {
                   action: 'export-title-localize',
@@ -5059,9 +5066,33 @@ export default function CVBuilderPage() {
                   titleTransportRetryAfterSec: data?.retryAfter ?? null,
                   titleTransportRepairContextPresent:
                     Boolean(data?.titleRepairContext),
+                  titleTransportFailureLayer: data?.titleFailureLayer
+                    || (data?.localizationFailureStage === 'title_translation_parse'
+                      ? 'server_translator_parse_or_parity'
+                      : data?.localizationFailureStage === 'title_independent_verification'
+                        ? 'server_independent_verifier'
+                        : 'http_or_transport'),
+                  titleTransportFailureSubcode:
+                    data?.titleFailureSubcode || 'diagnostic_unavailable_legacy',
                 });
 
-                throw new Error(failureReason);
+                const failure = new Error(failureReason) as Error
+                  & ExportTitleLocalizationFailureEvidence;
+                failure.titleFailureLayer = data?.titleFailureLayer
+                  || (data?.localizationFailureStage === 'title_translation_parse'
+                    ? 'server_translator_parse_or_parity'
+                    : data?.localizationFailureStage === 'title_independent_verification'
+                      ? 'server_independent_verifier'
+                      : 'http_or_transport');
+                failure.titleFailureSubcode =
+                  data?.titleFailureSubcode || 'diagnostic_unavailable_legacy';
+                failure.titleHttpStatus = response.status;
+                failure.titleExpectedIdentityCount =
+                  data?.titleExpectedIdentityCount ?? request.entries.length;
+                failure.titleReturnedIdentityCount = data?.titleReturnedIdentityCount ?? null;
+                failure.titleIdentityParityPassed = data?.titleIdentityParityPassed ?? null;
+                failure.titleCountParityPassed = data?.titleCountParityPassed ?? null;
+                throw failure;
               }
 
               titleRepairContextByBatchKey.delete(batchKey);
@@ -5090,8 +5121,19 @@ export default function CVBuilderPage() {
                     : null,
                 titleTransportRepairContextPresent:
                   Boolean(titleRepairContextByBatchKey.get(batchKey)),
+                titleTransportFailureLayer: 'http_or_transport',
+                titleTransportFailureSubcode: failureReason,
               });
-              throw new Error(failureReason);
+              const failure = new Error(failureReason) as Error
+                & ExportTitleLocalizationFailureEvidence;
+              failure.titleFailureLayer = 'http_or_transport';
+              failure.titleFailureSubcode = failureReason;
+              failure.titleHttpStatus = null;
+              failure.titleExpectedIdentityCount = request.entries.length;
+              failure.titleReturnedIdentityCount = null;
+              failure.titleIdentityParityPassed = null;
+              failure.titleCountParityPassed = null;
+              throw failure;
             } finally {
               window.clearTimeout(timeout);
               if (experienceLocalizationAbortRef.current === controller) {
@@ -5191,6 +5233,7 @@ export default function CVBuilderPage() {
       exportInFlightRef.current = true;
       setShowDownloadMenu(false);
       setIsWordExporting(true);
+      let rendererReached = false;
       try {
         const liveCv = cvRef.current;
         let saveResult: SaveFileResult;
@@ -5198,6 +5241,7 @@ export default function CVBuilderPage() {
         if (liveCv.templateId === 'rirekisho') {
           const cvForExport = await prepareFinalLocaleSafeCv(liveCv);
           const exportBaseName = cvForExport.personal.fullName || '履歴書';
+          rendererReached = true;
           saveResult = await exportRirekishoToDOCX(cvForExport, exportBaseName);
           fallbackFileName = `${exportBaseName}.docx`;
         } else {
@@ -5227,6 +5271,7 @@ export default function CVBuilderPage() {
             personal: { ...latestCv.personal, photo: photoForExport },
           });
           const exportBaseName = makeCvExportBaseName(cvForExport.personal.fullName);
+          rendererReached = true;
           saveResult = await exportToDOCX(cvForExport, exportBaseName, locale, cvForExport.templateId, { elegantFormalPhoto });
           fallbackFileName = `${exportBaseName}.docx`;
           await recordExportDiagnostic({
@@ -5251,18 +5296,21 @@ export default function CVBuilderPage() {
         if (process.env.NODE_ENV !== 'production') console.error('[CV DOCX export] failed:', err);
         const prepared = lastExportPrepareRef.current;
         const originalReason = prepared && !prepared.ok ? prepared.reason : undefined;
+        const titleFailureReason = lastExperienceLocalizationRef.current?.titleFailureReason;
         await recordExportDiagnostic({
           format: 'docx',
           rawCv: lastExportRawCvRef.current || cvRef.current,
           prepared,
           originalFailureReason: originalReason,
           finalError: err,
-          rendererReached: Boolean(prepared?.ok),
+          rendererReached,
           blobProduced: false,
           androidSaveReached: /android_file_save_failed/i.test(extractCvExportFailureReason(err)),
-          extraStages: prepared?.ok
+          extraStages: rendererReached
             ? [{ stage: 'render_blob', result: 'fail', reason: extractCvExportFailureReason(err) }]
-            : undefined,
+            : titleFailureReason
+              ? [{ stage: 'localize_export_titles', result: 'fail', reason: titleFailureReason }]
+              : undefined,
         });
         showExportFailureToast(err, 'docx');
       } finally {
@@ -5280,6 +5328,7 @@ export default function CVBuilderPage() {
       exportInFlightRef.current = true;
       setShowDownloadMenu(false);
       setIsPdfExporting(true);
+      let rendererReached = false;
       try {
         // selectedTemplateId is the live UI selection and is authoritative over any
         // stale cvRef.current/localStorage templateId (hard requirement — do not
@@ -5339,6 +5388,7 @@ export default function CVBuilderPage() {
             toast.error(t.cv.pdfExportFailed);
             throw new Error(`Modern Minimal preview mismatch: ${previewTemplateId}`);
           }
+          rendererReached = true;
           const saveResult = await exportModernMinimalPdf(cvForExport, exportFilename, locale);
           await recordExportDiagnostic({
             format: 'pdf',
@@ -5370,24 +5420,28 @@ export default function CVBuilderPage() {
         });
         const liveCv = pdfResolution.exportCv;
         if (pdfResolution.route.kind === 'dedicated-clean-simple') {
+          rendererReached = true;
           const saveResult = await exportCleanSimplePdf(liveCv, exportFilename, locale);
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
         }
         if (liveCv.templateId === 'professional-classic') {
+          rendererReached = true;
           const saveResult = await exportProfessionalClassicPdf(liveCv, exportFilename, locale);
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
         }
         if (liveCv.templateId === 'creative-bold') {
+          rendererReached = true;
           const saveResult = await exportCreativeBoldPdf(liveCv, exportFilename, locale);
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
         }
         if (liveCv.templateId === 'creative-artistic') {
+          rendererReached = true;
           const saveResult = await exportCreativeArtisticPdf(liveCv, exportFilename, locale);
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
@@ -5395,48 +5449,56 @@ export default function CVBuilderPage() {
         }
         if (liveCv.templateId === 'elegant-formal') {
           const photoDataUrl = await prepareElegantFormalPdfPhotoDataUrl();
+          rendererReached = true;
           const saveResult = await exportElegantFormalPdf(liveCv, exportFilename, locale, { photoDataUrl });
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
         }
         if (liveCv.templateId === 'ats-standard') {
+          rendererReached = true;
           const saveResult = await exportAtsStandardPdf(liveCv, exportFilename, locale);
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
         }
         if (liveCv.templateId === 'executive-premium') {
+          rendererReached = true;
           const saveResult = await exportExecutivePremiumPdf(liveCv, exportFilename, locale);
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
         }
         if (liveCv.templateId === 'nordic-clean') {
+          rendererReached = true;
           const saveResult = await exportNordicCleanPdf(liveCv, exportFilename, locale);
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
         }
         if (liveCv.templateId === 'tech-sidebar') {
+          rendererReached = true;
           const saveResult = await exportTechSidebarPdf(liveCv, exportFilename, locale);
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
         }
         if (liveCv.templateId === 'corporate-navy') {
+          rendererReached = true;
           const saveResult = await exportCorporateNavyPdf(liveCv, exportFilename, locale);
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
         }
         if (liveCv.templateId === 'contemporary-bold') {
+          rendererReached = true;
           const saveResult = await exportContemporaryBoldPdf(liveCv, exportFilename, locale);
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
         }
         if (liveCv.templateId === 'rirekisho') {
+          rendererReached = true;
           const saveResult = await exportRirekishoPdf(liveCv, exportFilename, locale);
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
@@ -5461,6 +5523,7 @@ export default function CVBuilderPage() {
 
         assertDedicatedPdfRouteWasHandled(pdfResolution);
 
+        rendererReached = true;
         const saveResult = await exportToPDF(previewId, exportFilename);
         showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
         incrementDownloads('cv');
@@ -5469,18 +5532,21 @@ export default function CVBuilderPage() {
         if (process.env.NODE_ENV !== 'production') console.error('[CV PDF export] failed:', err);
         const prepared = lastExportPrepareRef.current;
         const originalReason = prepared && !prepared.ok ? prepared.reason : undefined;
+        const titleFailureReason = lastExperienceLocalizationRef.current?.titleFailureReason;
         await recordExportDiagnostic({
           format: 'pdf',
           rawCv: lastExportRawCvRef.current || cvRef.current,
           prepared,
           originalFailureReason: originalReason,
           finalError: err,
-          rendererReached: Boolean(prepared?.ok),
+          rendererReached,
           blobProduced: false,
           androidSaveReached: /android_file_save_failed/i.test(extractCvExportFailureReason(err)),
-          extraStages: prepared?.ok
+          extraStages: rendererReached
             ? [{ stage: 'render_blob', result: 'fail', reason: extractCvExportFailureReason(err) }]
-            : undefined,
+            : titleFailureReason
+              ? [{ stage: 'localize_export_titles', result: 'fail', reason: titleFailureReason }]
+              : undefined,
         });
         const cv = { templateId: cvRef.current.templateId, personal: { fullName: cvRef.current.personal.fullName } };
         if (cv.templateId === 'modern-minimal' || cv.templateId === 'clean-simple' || cv.templateId === 'professional-classic' || cv.templateId === 'creative-bold' || cv.templateId === 'creative-artistic' || cv.templateId === 'elegant-formal' || cv.templateId === 'ats-standard' || cv.templateId === 'executive-premium' || cv.templateId === 'nordic-clean' || cv.templateId === 'tech-sidebar' || cv.templateId === 'corporate-navy' || cv.templateId === 'contemporary-bold' || cv.templateId === 'rirekisho') {

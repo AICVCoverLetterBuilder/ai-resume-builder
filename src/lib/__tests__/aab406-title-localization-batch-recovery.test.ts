@@ -206,9 +206,10 @@ describe('AAB-406 export-title batch recovery', () => {
       titleLastProviderFailureReason: 'export_title_localization_independent_verification_failed',
       titleLocalizedFieldCount: 0,
       titleProjectionPassed: false,
-      employerIdentityPassed: false,
+      employerIdentityStatus: 'not_reached',
       titleFailureReason: 'export_title_localization_independent_verification_failed',
     });
+    expect(result.diagnostics.employerIdentityPassed).toBeUndefined();
   });
 
   it('does not fan out non-isolatable transport failures and preserves their failure identity', async () => {
