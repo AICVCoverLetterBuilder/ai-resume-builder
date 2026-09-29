@@ -4,6 +4,10 @@
  * lengths, one-way hashes, semantic keys, stages, and typed reasons.
  */
 import type { CVData, WorkExperience } from './types';
+import {
+  collectUnboundTitleLocaleFields,
+  TITLE_LOCALE_AUTHORITY_UNBOUND,
+} from './cv-title-locale-authority';
 import type { Locale } from './i18n/translations';
 import { splitExperienceBullets } from './cv-canonical-facts';
 import {
@@ -267,6 +271,11 @@ export type CvExportDiagnosticTrace = {
   /** Reason before any page-level remapping (e.g. modern_minimal_stale_snapshot). */
   originalFailureReason?: string;
   finalTypedFailureReason?: string;
+  /** Current-title authority evidence, never the title or its binding hash. */
+  titleLocaleBindingStatusByField?: Record<string, 'legacy_unbound'>;
+  titleUnboundFieldKeys?: string[];
+  titleProviderRequestCount?: number;
+  titleProviderRepairCount?: number;
   toastMappingKey?: CvExportToastMappingKey;
   toastMessageLocale?: string;
   rendererReached: boolean;
@@ -956,6 +965,15 @@ export function buildAndStoreCvExportDiagnostic(input: BuildCvExportTraceInput):
   const finalReason = input.finalError
     ? extractCvExportFailureReason(input.finalError)
     : (prepared && !prepared.ok ? prepared.reason : undefined);
+  // The page can stop before title localization is entered. Reuse the sole
+  // title-authority resolver to record that early fail-closed decision.
+  const unboundTitleFields = finalReason === TITLE_LOCALE_AUTHORITY_UNBOUND
+    ? collectUnboundTitleLocaleFields(raw)
+    : [];
+  if (finalReason === TITLE_LOCALE_AUTHORITY_UNBOUND
+    && !stages.some((stage) => stage.stage === 'localize_export_titles')) {
+    stages.push({ stage: 'localize_export_titles', result: 'fail', reason: finalReason });
+  }
 
   const toastKey = finalReason
     ? resolveCvExportToastMappingKey(finalReason, input.format)
@@ -1156,6 +1174,13 @@ export function buildAndStoreCvExportDiagnostic(input: BuildCvExportTraceInput):
     deterministicRecoveryReason: diag?.summaryRecoveryReason,
     originalFailureReason: input.originalFailureReason || (prepared && !prepared.ok ? prepared.reason : undefined),
     finalTypedFailureReason: finalReason || undefined,
+    ...(finalReason === TITLE_LOCALE_AUTHORITY_UNBOUND ? {
+      titleLocaleBindingStatusByField: Object.fromEntries(
+        unboundTitleFields.map((field) => [field.fieldKey, 'legacy_unbound' as const])),
+      titleUnboundFieldKeys: unboundTitleFields.map((field) => field.fieldKey),
+      titleProviderRequestCount: 0,
+      titleProviderRepairCount: 0,
+    } : {}),
     toastMappingKey: toastKey,
     toastMessageLocale: input.locale,
     rendererReached: Boolean(input.rendererReached),

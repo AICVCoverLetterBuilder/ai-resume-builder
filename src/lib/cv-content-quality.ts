@@ -3,6 +3,7 @@
  * Applied in the content/localization pipeline — not in template layouts.
  */
 import type { CVData, CvSummaryOrigin, WorkExperience } from './types';
+import { hashTitleLocaleText } from './cv-title-locale-authority';
 import type { Locale } from './i18n/translations';
 import {
   formatExperienceBullets,
@@ -1580,21 +1581,29 @@ export function applyCvContentQuality(
     level: localizeCvLanguageLevel(lang.level, locale),
   }));
   const localizedSkills = deduplicateSkillsForExport(cv.skills || [], locale);
-  const localizedExperience = experience.map((exp) => ({
-    ...exp,
-    position: resolveExperienceTitleForDisplay(exp, locale, gender),
-  }));
+  const localizedExperience = experience.map((exp) => {
+    const position = resolveExperienceTitleForDisplay(exp, locale, gender);
+    return {
+      ...exp,
+      position,
+      ...(position !== exp.position ? {
+        positionSourceLocale: locale,
+        positionSourceLocaleTextHash: hashTitleLocaleText(position),
+      } : {}),
+    };
+  });
+  const projectedJobTitle = resolvePersonalJobTitleForDisplay(cv.personal?.jobTitle || '', locale, gender);
 
   return {
     cv: {
       ...cv,
       personal: {
         ...cv.personal,
-        jobTitle: resolvePersonalJobTitleForDisplay(
-          cv.personal?.jobTitle || '',
-          locale,
-          gender,
-        ),
+        jobTitle: projectedJobTitle,
+        ...(projectedJobTitle !== cv.personal.jobTitle ? {
+          jobTitleSourceLocale: locale,
+          jobTitleSourceLocaleTextHash: hashTitleLocaleText(projectedJobTitle),
+        } : {}),
       },
       summary,
       experience: localizedExperience,

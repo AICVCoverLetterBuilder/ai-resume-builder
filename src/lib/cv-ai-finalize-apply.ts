@@ -7,6 +7,7 @@
  * never be applied after this function.
  */
 import type { CVData, CvSummaryOrigin, WorkExperience } from './types';
+import { hashTitleLocaleText } from './cv-title-locale-authority';
 import type { Locale } from './i18n/translations';
 import type { CoverLetterGender } from './cover-letter-gender';
 import {
@@ -14461,6 +14462,7 @@ export function applyFinalizedBulletsToCv(
             position: localized,
             positionProvenance: 'localized_generated' as const,
             positionSourceLocale: locale,
+            positionSourceLocaleTextHash: hashTitleLocaleText(localized),
             positionUserEdited: false,
           }
           : e;

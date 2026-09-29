@@ -6,7 +6,13 @@ import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import Header from '@/components/Header';
 import Footer from '@/components/Footer';
 import { useI18n } from '@/lib/i18n/context';
-import type { Locale } from '@/lib/i18n/translations';
+import { languages as titleLocaleOptions, type Locale } from '@/lib/i18n/translations';
+import {
+  collectUnboundTitleLocaleFields,
+  confirmTitleLocales,
+  TITLE_LOCALE_AUTHORITY_UNBOUND,
+  type UnboundTitleLocaleField,
+} from '@/lib/cv-title-locale-authority';
 import { useApp, checkProAccess } from '@/lib/store';
 import {
   beginAiClientRequest,
@@ -524,6 +530,8 @@ export default function CVBuilderPage() {
     NEXT_PUBLIC_AI_CORE_V3_ENABLED: process.env.NEXT_PUBLIC_AI_CORE_V3_ENABLED,
   });
   const [cv, setCv] = useState<CVData>(currentCv || emptyCV());
+  const [titleConfirmationFields, setTitleConfirmationFields] = useState<UnboundTitleLocaleField[]>([]);
+  const [titleConfirmationSelections, setTitleConfirmationSelections] = useState<Record<string, Locale>>({});
   const cvRef = useRef<CVData>(cv);
   // This is local current-state synchronization, not an AI transaction owner.
   // A manual edit stays authoritative until the store publishes that same
@@ -1148,7 +1156,38 @@ export default function CVBuilderPage() {
   }, [showPreview, steps.length]);
 
   const updatePersonal = (field: string, value: string) => {
-    setCv(prev => ({ ...prev, personal: { ...prev.personal, [field]: value }, updatedAt: new Date().toISOString() }));
+    setCv(prev => ({
+      ...prev,
+      personal: field === 'jobTitle'
+        ? {
+          ...prev.personal,
+          jobTitle: value,
+          // The editor's UI locale is not proof of the language being typed.
+          jobTitleSourceLocale: undefined,
+          jobTitleSourceLocaleTextHash: undefined,
+        }
+        : { ...prev.personal, [field]: value },
+      updatedAt: new Date().toISOString(),
+    }));
+  };
+
+  const confirmPendingTitleLocales = () => {
+    if (titleConfirmationFields.length === 0
+      || titleConfirmationFields.some((field) => !titleConfirmationSelections[field.fieldKey])) return;
+    const next = confirmTitleLocales(cvRef.current, titleConfirmationFields.map((field) => ({
+      ...field,
+      locale: titleConfirmationSelections[field.fieldKey],
+    })));
+    if (!next || !persistCurrentCvTransactionally(next)) {
+      toast.error(t.titleLocaleConfirmation.staleOrSaveError);
+      setTitleConfirmationFields([]);
+      return;
+    }
+    cvRef.current = next;
+    pendingLocalCvRef.current = next;
+    setCv(next);
+    setTitleConfirmationFields([]);
+    setTitleConfirmationSelections({});
   };
 
   const addExperience = () => setCv(prev => ({ ...prev, experience: [...prev.experience, emptyExp()] }));
@@ -4760,6 +4799,12 @@ export default function CVBuilderPage() {
       lastExportPrepareRef.current = null;
       lastExperienceLocalizationRef.current = null;
       try {
+        const unboundTitleFields = collectUnboundTitleLocaleFields(sourceCv);
+        if (unboundTitleFields.length > 0) {
+          setTitleConfirmationFields(unboundTitleFields);
+          setTitleConfirmationSelections({});
+          throw new CvExportFailure(TITLE_LOCALE_AUTHORITY_UNBOUND, TITLE_LOCALE_AUTHORITY_UNBOUND);
+        }
         const experienceLocalizationOperationStartedAt = Date.now();
         const experienceLocalizationOperationDeadlineAt =
           computeExperienceLocalizationOperationDeadline(experienceLocalizationOperationStartedAt);
@@ -5312,7 +5357,9 @@ export default function CVBuilderPage() {
               ? [{ stage: 'localize_export_titles', result: 'fail', reason: titleFailureReason }]
               : undefined,
         });
-        showExportFailureToast(err, 'docx');
+        if (extractCvExportFailureReason(err) !== TITLE_LOCALE_AUTHORITY_UNBOUND) {
+          showExportFailureToast(err, 'docx');
+        }
       } finally {
         exportInFlightRef.current = false;
         setIsWordExporting(false);
@@ -5548,6 +5595,7 @@ export default function CVBuilderPage() {
               ? [{ stage: 'localize_export_titles', result: 'fail', reason: titleFailureReason }]
               : undefined,
         });
+        if (extractCvExportFailureReason(err) === TITLE_LOCALE_AUTHORITY_UNBOUND) return;
         const cv = { templateId: cvRef.current.templateId, personal: { fullName: cvRef.current.personal.fullName } };
         if (cv.templateId === 'modern-minimal' || cv.templateId === 'clean-simple' || cv.templateId === 'professional-classic' || cv.templateId === 'creative-bold' || cv.templateId === 'creative-artistic' || cv.templateId === 'elegant-formal' || cv.templateId === 'ats-standard' || cv.templateId === 'executive-premium' || cv.templateId === 'nordic-clean' || cv.templateId === 'tech-sidebar' || cv.templateId === 'corporate-navy' || cv.templateId === 'contemporary-bold' || cv.templateId === 'rirekisho') {
           toast.error(formatCvExportIntegrityToast(err, locale, 'pdf') || t.cv.pdfExportFailed, {
@@ -6540,6 +6588,44 @@ export default function CVBuilderPage() {
         open={aiRecommendModal}
         onClose={() => setAiRecommendModal(false)}
       />
+      {titleConfirmationFields.length > 0 && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4" role="presentation">
+          <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl bg-white p-6 shadow-xl" role="dialog" aria-modal="true" aria-labelledby="title-locale-confirmation-heading">
+            <h2 id="title-locale-confirmation-heading" className="mb-2 text-lg font-semibold">
+              {t.titleLocaleConfirmation.dialogTitle}
+            </h2>
+            <p className="mb-4 text-sm text-gray-600">
+              {t.titleLocaleConfirmation.explanation}
+            </p>
+            <div className="space-y-4">
+              {titleConfirmationFields.map((field) => (
+                <label key={field.fieldKey} className="block text-sm font-medium">
+                  <span>{field.fieldKey === 'personal.jobTitle' ? t.cv.jobTitle : t.cv.position}: {field.title}</span>
+                  <select
+                    className="mt-1 w-full rounded-lg border border-gray-300 p-2"
+                    value={titleConfirmationSelections[field.fieldKey] || ''}
+                    onChange={(event) => setTitleConfirmationSelections((previous) => ({
+                      ...previous,
+                      [field.fieldKey]: event.target.value as Locale,
+                    }))}
+                  >
+                    <option value="">{t.titleLocaleConfirmation.selectLanguage}</option>
+                    {titleLocaleOptions.map((language) => (
+                      <option key={language.code} value={language.code}>{language.nativeName}</option>
+                    ))}
+                  </select>
+                </label>
+              ))}
+            </div>
+            <div className="mt-6 flex justify-end gap-3">
+              <button type="button" onClick={() => setTitleConfirmationFields([])} className="rounded-lg border px-4 py-2">{t.common.cancel}</button>
+              <button type="button" onClick={confirmPendingTitleLocales}
+                disabled={titleConfirmationFields.some((field) => !titleConfirmationSelections[field.fieldKey])}
+                className="rounded-lg bg-blue-700 px-4 py-2 text-white disabled:opacity-50">{t.titleLocaleConfirmation.confirmLanguages}</button>
+            </div>
+          </div>
+        </div>
+      )}
       <TargetContentLocaleDialog
         open={summaryTranslateIntent !== null}
         sourceLocale={summaryTranslateIntent?.sourceLocale || null}

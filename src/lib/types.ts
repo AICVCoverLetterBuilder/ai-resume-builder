@@ -19,6 +19,9 @@ export interface PersonalInfo {
   photo?: string;
   photoEnabled?: boolean;
   jobTitle: string;
+  /** Explicit locale of a standalone title, valid only for this exact title text. */
+  jobTitleSourceLocale?: string;
+  jobTitleSourceLocaleTextHash?: string;
   linkedIn?: string;
   website?: string;
   fathersName?: string;
@@ -55,6 +58,8 @@ export interface WorkExperience {
   positionUserEdited?: boolean;
   /** Locale in which the app last generated or localized `position`, when known. */
   positionSourceLocale?: string;
+  /** Binds positionSourceLocale to the current canonicalized position text. */
+  positionSourceLocaleTextHash?: string;
   /** Optional stable occupation key when selected from localized options. */
   positionSourceKey?: KnownRoleKey;
   startDate: string;

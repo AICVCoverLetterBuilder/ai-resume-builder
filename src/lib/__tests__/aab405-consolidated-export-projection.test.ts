@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import type { CVData, WorkExperience } from '@/lib/types';
 import type { Locale } from '@/lib/i18n/translations';
+import { hashTitleLocaleText } from '@/lib/cv-title-locale-authority';
 import {
   prepareExportLocalizedTitles,
   CV_EXPORT_TITLE_LOCALIZATION_REVISION,
@@ -45,6 +46,7 @@ function experience(
     descriptionOrigin: 'user',
     descriptionSourceLocale: 'de',
     positionSourceLocale: 'de',
+    positionSourceLocaleTextHash: hashTitleLocaleText(position),
     positionProvenance: 'manual',
     positionUserEdited: true,
   };
@@ -381,7 +383,8 @@ describe('AAB-405 consolidated export projection', () => {
     )];
     source.experience[0].description = '- Inspecciona bicicletas y documenta problemas técnicos.';
     source.experience[0].descriptionSourceLocale = 'es';
-    source.experience[0].positionSourceLocale = undefined;
+    // The title was explicitly authored in German for this provider contract.
+    source.experience[0].positionSourceLocale = 'de';
     const providerSpy = vi.fn();
     const result = await prepareExportLocalizedTitles({
       sourceCv: source,

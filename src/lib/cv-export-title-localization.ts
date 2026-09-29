@@ -10,6 +10,14 @@ import { detectTextLocale, localesEquivalent } from './cv-content-locale';
 import { localizeOccupationalTitleForProjection } from './cv-role-title';
 import { validateAiUnitLocalePurity } from './cv-ai-unit-locale-purity';
 import type { SummaryV2LocalizationProviderResponse } from './cv-summary-v2';
+import {
+  collectUnboundTitleLocaleFields,
+  hashTitleLocaleText,
+  invariantTitleLocaleText,
+  resolveExperienceTitleLocale,
+  resolvePersonalTitleLocale,
+  TITLE_LOCALE_AUTHORITY_UNBOUND,
+} from './cv-title-locale-authority';
 
 export const CV_EXPORT_TITLE_LOCALIZATION_REVISION =
   'cv-export-title-localization-405-v1' as const;
@@ -37,14 +45,9 @@ export type ExportTitleLocalizationTransportInput = {
 export type ExportTitleLocaleResolutionSource =
   | 'direct_title_detection'
   | 'persisted_position_source_locale'
-  | 'authoritative_description_detection'
-  | 'persisted_description_source_locale'
-  | 'current_description_detection'
-  | 'content_locale'
-  | 'target_locale_fallback'
   | 'matching_experience_inheritance'
-  | 'present_experience_inheritance'
-  | 'first_experience_inheritance';
+  | 'bound_personal_title'
+  | 'invariant_title';
 
 export type ExportTitleLocaleResolutionDiagnostic = {
   directTitleDetectionResult: Locale | null;
@@ -136,6 +139,8 @@ export type ExportTitleLocalizationDiagnostics = {
   titleLocalizedFieldCount: number;
   titleSummaryMentionReplacementCount: number;
   titleSourceLocaleByField: Record<string, Locale>;
+  titleLocaleBindingStatusByField: Record<string, 'direct_detected' | 'bound' | 'invariant' | 'legacy_unbound'>;
+  titleUnboundFieldKeys: string[];
   titleLocaleResolutionByField: Record<string, ExportTitleLocaleResolutionDiagnostic>;
   titleIdentityByField: Record<string, ExportTitleFieldIdentityDiagnostic>;
   titleProviderAttempts: ExportTitleProviderAttemptDiagnostic[];
@@ -210,7 +215,9 @@ function localeForExperience(
   exp: WorkExperience,
   targetLocale: Locale,
 ): { locale: Locale; diagnostic: ExportTitleLocaleResolutionDiagnostic } {
-  const titleDetected = asLocale(detectTextLocale(exp.position || ''));
+  const resolution = resolveExperienceTitleLocale(exp);
+  if (!resolution.locale && resolution.status !== 'invariant') throw new Error(TITLE_LOCALE_AUTHORITY_UNBOUND);
+  const titleDetected = resolution.status === 'direct_detected' ? resolution.locale : null;
   const authoritativeDescription = exp.originalUserDescription
     || exp.canonicalDescription
     || exp.description
@@ -220,19 +227,11 @@ function localeForExperience(
   const persistedPositionSourceLocale = asLocale(exp.positionSourceLocale);
   const persistedDescriptionSourceLocale = asLocale(exp.descriptionSourceLocale);
   const contentLocale = asLocale(cv.contentLocale);
-  const selected = titleDetected
-    ? { locale: titleDetected, source: 'direct_title_detection' as const }
-    : persistedPositionSourceLocale
-      ? { locale: persistedPositionSourceLocale, source: 'persisted_position_source_locale' as const }
-      : authoritativeDescriptionDetected
-        ? { locale: authoritativeDescriptionDetected, source: 'authoritative_description_detection' as const }
-        : persistedDescriptionSourceLocale
-          ? { locale: persistedDescriptionSourceLocale, source: 'persisted_description_source_locale' as const }
-          : currentDescriptionDetected
-            ? { locale: currentDescriptionDetected, source: 'current_description_detection' as const }
-            : contentLocale
-              ? { locale: contentLocale, source: 'content_locale' as const }
-              : { locale: targetLocale, source: 'target_locale_fallback' as const };
+  const selected = { locale: resolution.locale || targetLocale, source: titleDetected
+    ? 'direct_title_detection' as const
+    : resolution.status === 'invariant'
+      ? 'invariant_title' as const
+      : 'persisted_position_source_locale' as const };
   return {
     locale: selected.locale,
     diagnostic: {
@@ -259,11 +258,10 @@ function localeForHeader(
   const matching = (cv.experience || []).find(
     (exp) => canonical(exp.position || '').toLocaleLowerCase() === header.toLocaleLowerCase(),
   );
-  const current = matching
-    || (cv.experience || []).find((exp) => exp.isPresent)
-    || (cv.experience || [])[0];
-  const titleDetected = asLocale(detectTextLocale(header));
-  const inherited = current ? localeForExperience(cv, current, targetLocale) : null;
+  const resolution = resolvePersonalTitleLocale(cv);
+  if (!resolution.locale && resolution.status !== 'invariant') throw new Error(TITLE_LOCALE_AUTHORITY_UNBOUND);
+  const titleDetected = resolution.status === 'direct_detected' ? resolution.locale : null;
+  const inherited = matching && !titleDetected ? localeForExperience(cv, matching, targetLocale) : null;
   const contentLocale = asLocale(cv.contentLocale);
   if (titleDetected) {
     return {
@@ -285,12 +283,8 @@ function localeForHeader(
       },
     };
   }
-  if (current && inherited) {
-    const resolutionSource = matching
-      ? 'matching_experience_inheritance' as const
-      : current.isPresent
-        ? 'present_experience_inheritance' as const
-        : 'first_experience_inheritance' as const;
+  if (matching && inherited) {
+    const resolutionSource = 'matching_experience_inheritance' as const;
     return {
       locale: inherited.locale,
       diagnostic: {
@@ -302,7 +296,7 @@ function localeForHeader(
       },
     };
   }
-  const locale = contentLocale || targetLocale;
+  const locale = resolution.locale || targetLocale;
   return {
     locale,
     diagnostic: {
@@ -316,19 +310,13 @@ function localeForHeader(
       contentLocaleConsidered: contentLocale,
       targetLocale,
       finalSourceLocale: locale,
-      resolutionSource: contentLocale ? 'content_locale' : 'target_locale_fallback',
+      resolutionSource: resolution.status === 'invariant' ? 'invariant_title' : 'bound_personal_title',
     },
   };
 }
 
 function invariantTitle(text: string): boolean {
-  const value = canonical(text);
-  if (!value) return false;
-  if (/^(?:https?:\/\/|www\.)\S+$/iu.test(value)) return true;
-  if (/^[A-Z0-9][A-Z0-9._:/+#-]*(?:\s+[A-Z0-9][A-Z0-9._:/+#-]*)*$/u.test(value)) {
-    return /[A-Z0-9]/u.test(value);
-  }
-  return false;
+  return invariantTitleLocaleText(text);
 }
 
 export function classifyExportLocalizedTitleFailure(options: {
@@ -621,6 +609,8 @@ function sourceSnapshotHash(cv: CVData): string {
       linkedIn: cv.personal?.linkedIn || '',
       website: cv.personal?.website || '',
       jobTitle: cv.personal?.jobTitle || '',
+      jobTitleSourceLocale: cv.personal?.jobTitleSourceLocale || '',
+      jobTitleSourceLocaleTextHash: cv.personal?.jobTitleSourceLocaleTextHash || '',
       gender: cv.personal?.gender || '',
     },
     summary: cv.summary || '',
@@ -635,6 +625,7 @@ function sourceSnapshotHash(cv: CVData): string {
       positionProvenance: exp.positionProvenance,
       positionUserEdited: exp.positionUserEdited,
       positionSourceLocale: exp.positionSourceLocale,
+      positionSourceLocaleTextHash: exp.positionSourceLocaleTextHash,
       positionSourceKey: exp.positionSourceKey,
       startDate: exp.startDate,
       endDate: exp.endDate,
@@ -700,6 +691,16 @@ function applyLocalizedTitles(options: {
         website: options.sourceCv.personal.website,
         jobTitle: options.localizedByField.get('personal.jobTitle')
           || options.sourceCv.personal.jobTitle,
+        ...(options.localizedByField.get('personal.jobTitle')
+          && options.localizedByField.get('personal.jobTitle') !== options.sourceCv.personal.jobTitle
+          ? {
+            jobTitleSourceLocale: options.targetLocale,
+            jobTitleSourceLocaleTextHash: hashTitleLocaleText(options.localizedByField.get('personal.jobTitle') || ''),
+          }
+          : {
+            jobTitleSourceLocale: options.sourceCv.personal.jobTitleSourceLocale,
+            jobTitleSourceLocaleTextHash: options.sourceCv.personal.jobTitleSourceLocaleTextHash,
+          }),
       },
       experience: (options.exportCv.experience || []).map((exp) => {
         const source = sourceById.get(exp.id);
@@ -720,11 +721,13 @@ function applyLocalizedTitles(options: {
               positionProvenance: 'localized_generated' as const,
               positionUserEdited: false,
               positionSourceLocale: options.targetLocale,
+              positionSourceLocaleTextHash: hashTitleLocaleText(localizedPosition),
             }
             : {
               positionProvenance: source.positionProvenance,
               positionUserEdited: source.positionUserEdited,
               positionSourceLocale: source.positionSourceLocale,
+              positionSourceLocaleTextHash: source.positionSourceLocaleTextHash,
             }),
         };
       }),
@@ -744,6 +747,42 @@ export async function prepareExportLocalizedTitles(options: {
   includePersonalTitle?: boolean;
 }): Promise<PrepareExportLocalizedTitlesResult> {
   const gender = String(options.gender || '');
+  const unbound = collectUnboundTitleLocaleFields(options.sourceCv, {
+    experienceIds: options.experienceIds,
+    includePersonalTitle: options.includePersonalTitle,
+  });
+  if (unbound.length > 0) {
+    const diagnostics: ExportTitleLocalizationDiagnostics = {
+      titleLocalizationRevision: CV_EXPORT_TITLE_LOCALIZATION_REVISION,
+      titleTargetLocale: options.targetLocale,
+      titleFieldCount: unbound.length,
+      titleUniqueSourceCount: 0,
+      titleSameLocaleCount: 0,
+      titleDeterministicCount: 0,
+      titleCacheReuseCount: 0,
+      titleProviderRequestCount: 0,
+      titleProviderRepairCount: 0,
+      titleBatchRecoveryRevision: CV_EXPORT_TITLE_BATCH_RECOVERY_REVISION,
+      titleBatchSplitCount: 0,
+      titleSingletonFailureCount: 0,
+      titleLocalizedFieldCount: 0,
+      titleSummaryMentionReplacementCount: 0,
+      titleSourceLocaleByField: {},
+      titleLocaleBindingStatusByField: Object.fromEntries(
+        unbound.map((field) => [field.fieldKey, 'legacy_unbound' as const])),
+      titleUnboundFieldKeys: unbound.map((field) => field.fieldKey),
+      titleLocaleResolutionByField: {},
+      titleIdentityByField: {},
+      titleProviderAttempts: [],
+      titleInitialRepairUnitIdentityMatched: null,
+      titleTerminalBatchKind: 'none',
+      titleProjectionPassed: false,
+      employerIdentityStatus: 'not_reached',
+      titleFailureReason: TITLE_LOCALE_AUTHORITY_UNBOUND,
+    };
+    return { ok: false, exportCv: options.exportCv, persistableCv: options.sourceCv,
+      reason: TITLE_LOCALE_AUTHORITY_UNBOUND, diagnostics };
+  }
   const refs = fieldRefs(options.sourceCv, options.targetLocale, {
     experienceIds: options.experienceIds,
     includePersonalTitle: options.includePersonalTitle,
@@ -763,6 +802,14 @@ export async function prepareExportLocalizedTitles(options: {
   const localeResolutionByField = Object.fromEntries(
     refs.map((ref) => [ref.fieldKey, ref.localeResolution]),
   );
+  const titleLocaleBindingStatusByField = Object.fromEntries(refs.map((ref) => [
+    ref.fieldKey,
+    ref.localeResolution.resolutionSource === 'direct_title_detection'
+      ? 'direct_detected' as const
+      : ref.localeResolution.resolutionSource === 'invariant_title'
+        || ref.localeResolution.inheritedResolutionSource === 'invariant_title'
+        ? 'invariant' as const : 'bound' as const,
+  ]));
   const unitByField = new Map<string, TitleUnit>();
   const diagnosticUnitIdByUnitKey = new Map<string, string>();
   for (const unit of units) {
@@ -1047,6 +1094,8 @@ export async function prepareExportLocalizedTitles(options: {
         titleLocalizedFieldCount: 0,
         titleSummaryMentionReplacementCount: 0,
         titleSourceLocaleByField: sourceLocaleByField,
+        titleLocaleBindingStatusByField,
+        titleUnboundFieldKeys: [],
         titleLocaleResolutionByField: localeResolutionByField,
         titleIdentityByField,
         titleProviderAttempts,
@@ -1084,6 +1133,8 @@ export async function prepareExportLocalizedTitles(options: {
       titleLocalizedFieldCount: 0,
       titleSummaryMentionReplacementCount: 0,
       titleSourceLocaleByField: sourceLocaleByField,
+      titleLocaleBindingStatusByField,
+      titleUnboundFieldKeys: [],
       titleLocaleResolutionByField: localeResolutionByField,
       titleIdentityByField,
       titleProviderAttempts,
@@ -1154,6 +1205,8 @@ export async function prepareExportLocalizedTitles(options: {
     titleLocalizedFieldCount: localizedByField.size,
     titleSummaryMentionReplacementCount,
     titleSourceLocaleByField: sourceLocaleByField,
+    titleLocaleBindingStatusByField,
+    titleUnboundFieldKeys: [],
     titleLocaleResolutionByField: localeResolutionByField,
     titleIdentityByField,
     titleProviderAttempts,

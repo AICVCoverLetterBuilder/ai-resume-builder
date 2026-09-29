@@ -10,6 +10,7 @@ const visibleExperienceSignature = (exp: WorkExperience) => ({
   positionProvenance: exp.positionProvenance,
   positionUserEdited: exp.positionUserEdited,
   positionSourceLocale: exp.positionSourceLocale,
+  positionSourceLocaleTextHash: exp.positionSourceLocaleTextHash,
   positionSourceKey: exp.positionSourceKey,
   startDate: exp.startDate,
   endDate: exp.endDate,

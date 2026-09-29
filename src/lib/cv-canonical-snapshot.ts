@@ -3,6 +3,7 @@
  * Creative Artistic fact-ID lock remains grounded on this snapshot — never assumes English.
  */
 import type { CVData, WorkExperience } from './types';
+import { hashTitleLocaleText } from './cv-title-locale-authority';
 import { resolveLocaleCandidate, type Locale } from './i18n/translations';
 import {
   classifyDutyCategory,
@@ -535,6 +536,9 @@ function withSyncedLegacyFields(cv: CVData, snapshot: CanonicalCvSnapshot): CVDa
       return {
         ...exp,
         position: snap.role || exp.position,
+        ...(snap.role && snap.role !== exp.position
+          ? { positionSourceLocale: undefined, positionSourceLocaleTextHash: undefined }
+          : {}),
         company: snap.company || exp.company,
         startDate: snap.startDate ?? exp.startDate,
         endDate: snap.endDate ?? exp.endDate,
@@ -834,6 +838,8 @@ export function applyCanonicalExperienceEdit(
       const prev = (e.position || '').trim();
       const nextTitle = value.trim();
       const materialTitleEdit = prev.localeCompare(nextTitle, undefined, { sensitivity: 'accent' }) !== 0;
+      const oldBindingValid = Boolean(e.positionSourceLocaleTextHash
+        && e.positionSourceLocaleTextHash === hashTitleLocaleText(e.position));
       return {
         ...e,
         position: value,
@@ -841,9 +847,17 @@ export function applyCanonicalExperienceEdit(
           ? {
             positionProvenance: 'manual' as const,
             positionUserEdited: true,
-            positionSourceLocale: uiLocale,
+            // A manual title can be in a different language from the UI.
+            // Clear authority until direct detection or explicit confirmation.
+            positionSourceLocale: undefined,
+            positionSourceLocaleTextHash: undefined,
+            positionSourceKey: undefined,
           }
-          : {}),
+          : value !== e.position
+            ? oldBindingValid
+              ? { positionSourceLocaleTextHash: hashTitleLocaleText(value) }
+              : { positionSourceLocale: undefined, positionSourceLocaleTextHash: undefined }
+            : {}),
       };
     }
     return { ...e, [field]: value };
@@ -1181,6 +1195,12 @@ export function applyProjectionToCv(cv: CVData, projection: ValidatedLocalizedCv
       return {
         ...exp,
         position: loc.role || exp.position,
+        ...(loc.role && loc.role !== exp.position
+          ? {
+            positionSourceLocale: projection.requestedLocale,
+            positionSourceLocaleTextHash: hashTitleLocaleText(loc.role),
+          }
+          : {}),
         company: loc.company || exp.company,
         description: formatExperienceBullets(loc.bullets.map((b) => b.localizedText)),
       };

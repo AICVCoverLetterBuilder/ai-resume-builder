@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { CVData, WorkExperience } from '@/lib/types';
+import { hashTitleLocaleText } from '@/lib/cv-title-locale-authority';
 import {
   CV_EXPORT_TITLE_BATCH_RECOVERY_REVISION,
   prepareExportLocalizedTitles,
@@ -26,6 +27,7 @@ function experience(
     descriptionOrigin: 'user',
     descriptionSourceLocale: 'de',
     positionSourceLocale: 'de',
+    positionSourceLocaleTextHash: hashTitleLocaleText(position),
     positionProvenance: 'manual',
     positionUserEdited: true,
   };

@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import type { CVData, WorkExperience } from '@/lib/types';
 import type { Locale } from '@/lib/i18n/translations';
+import { hashTitleLocaleText, TITLE_LOCALE_AUTHORITY_UNBOUND } from '@/lib/cv-title-locale-authority';
 import {
   classifyExportLocalizedTitleFailure,
   prepareExportLocalizedTitles,
@@ -28,6 +29,13 @@ function experience(overrides: Partial<WorkExperience> = {}): WorkExperience {
 }
 
 function fixture(exp: WorkExperience = experience()): CVData {
+  // This provider-observability fixture represents a title whose authoring
+  // locale was explicitly confirmed; legacy-unbound behavior is tested below.
+  const boundExp = {
+    ...exp,
+    positionSourceLocale: exp.positionSourceLocale || 'en',
+    positionSourceLocaleTextHash: hashTitleLocaleText(exp.position),
+  };
   return {
     id: 'title-observability-cv',
     name: 'Fixture',
@@ -36,12 +44,12 @@ function fixture(exp: WorkExperience = experience()): CVData {
       email: '',
       phone: '',
       address: '',
-      jobTitle: exp.position,
+      jobTitle: boundExp.position,
       gender: 'female',
     },
     summary: '',
     contentLocale: 'en',
-    experience: [exp],
+    experience: [boundExp],
     education: [],
     skills: [],
     certifications: [],
@@ -83,97 +91,43 @@ async function prepareSameLocale(
 }
 
 describe('stability title-localization observability', () => {
-  it('records every existing Experience locale-resolution branch without changing precedence', async () => {
-    const cases: Array<{
-      expected: string;
-      target: Locale;
-      cv: CVData;
-    }> = [
-      {
-        expected: 'direct_title_detection',
-        target: 'en',
-        cv: fixture(experience({
-          position: 'Coordinates warehouse inventory and prepares records',
-          positionSourceLocale: 'fr',
-        })),
-      },
-      {
-        expected: 'persisted_position_source_locale',
-        target: 'en',
-        cv: fixture(experience({ position: 'Qxz', positionSourceLocale: 'en' })),
-      },
-      {
-        expected: 'authoritative_description_detection',
-        target: 'es',
-        cv: fixture(experience({
-          position: 'Qxz',
-          originalUserDescription: 'Gestiona pedidos y atiende a clientes diariamente.',
-          canonicalDescription: '',
-          description: 'x',
-        })),
-      },
-      {
-        expected: 'persisted_description_source_locale',
-        target: 'fr',
-        cv: fixture(experience({
-          position: 'Qxz',
-          descriptionSourceLocale: 'fr',
-        })),
-      },
-      {
-        expected: 'current_description_detection',
-        target: 'en',
-        cv: fixture(experience({
-          position: 'Qxz',
-          originalUserDescription: 'x',
-          canonicalDescription: '',
-          description: 'Coordinates customer service and prepares reports every day.',
-        })),
-      },
-      {
-        expected: 'content_locale',
-        target: 'it',
-        cv: { ...fixture(), contentLocale: 'it' },
-      },
-      {
-        expected: 'target_locale_fallback',
-        target: 'en',
-        cv: { ...fixture(), contentLocale: undefined },
-      },
-    ];
-
-    for (const testCase of cases) {
-      const result = await prepareSameLocale(testCase.cv, testCase.target);
-      expect(result.ok, testCase.expected).toBe(true);
-      expect(result.diagnostics.titleLocaleResolutionByField['experience.exp.position'])
-        .toMatchObject({
-          resolutionSource: testCase.expected,
-          finalSourceLocale: testCase.target,
-          targetLocale: testCase.target,
-        });
-    }
+  it('records direct and bound title authority without falling through to description or CV locale', async () => {
+    const direct = fixture(experience({
+      position: 'Coordinates warehouse inventory and prepares records', positionSourceLocale: 'fr',
+    }));
+    const directResult = await prepareSameLocale(direct, 'en');
+    expect(directResult.ok).toBe(true);
+    expect(directResult.diagnostics.titleLocaleResolutionByField['experience.exp.position'].resolutionSource)
+      .toBe('direct_title_detection');
+    const bound = fixture(experience({ position: 'Qxz', positionSourceLocale: 'en' }));
+    const boundResult = await prepareSameLocale(bound, 'en');
+    expect(boundResult.ok).toBe(true);
+    expect(boundResult.diagnostics.titleLocaleResolutionByField['experience.exp.position'].resolutionSource)
+      .toBe('persisted_position_source_locale');
+    const legacy = fixture(experience({ position: 'Qxz', positionSourceLocale: 'en' }));
+    legacy.experience[0].positionSourceLocaleTextHash = undefined;
+    legacy.contentLocale = 'en';
+    legacy.experience[0].description = 'Coordinates customer service and prepares reports every day.';
+    const legacyResult = await prepareSameLocale(legacy, 'en');
+    expect(legacyResult.ok).toBe(false);
+    expect(legacyResult.ok ? null : legacyResult.reason).toBe(TITLE_LOCALE_AUTHORITY_UNBOUND);
+    expect(legacyResult.diagnostics.titleProviderRequestCount).toBe(0);
   });
 
-  it.each([
-    ['matching_experience_inheritance', experience({ position: 'Qxz', positionSourceLocale: 'de' }), 'Qxz', 'de'],
-    ['present_experience_inheritance', experience({ position: 'Other', positionSourceLocale: 'fr', isPresent: true }), 'Qxz', 'fr'],
-    ['first_experience_inheritance', experience({ position: 'Other', positionSourceLocale: 'it', isPresent: false }), 'Qxz', 'it'],
-  ] as const)(
-    'records header branch %s and the inherited Experience branch',
-    async (expected, exp, header, target) => {
-      const cv = fixture(exp);
-      cv.personal.jobTitle = header;
-      cv.contentLocale = target;
-      const result = await prepareSameLocale(cv, target, true);
-      expect(result.ok).toBe(true);
-      expect(result.diagnostics.titleLocaleResolutionByField['personal.jobTitle'])
-        .toMatchObject({
-          resolutionSource: expected,
-          inheritedResolutionSource: 'persisted_position_source_locale',
-          finalSourceLocale: target,
-        });
-    },
-  );
+  it('inherits only from the matching Experience; a different title needs standalone binding', async () => {
+    const matched = fixture(experience({ position: 'Qxz', positionSourceLocale: 'de' }));
+    const result = await prepareSameLocale(matched, 'de', true);
+    expect(result.ok).toBe(true);
+    expect(result.diagnostics.titleLocaleResolutionByField['personal.jobTitle']).toMatchObject({
+      resolutionSource: 'matching_experience_inheritance',
+      inheritedResolutionSource: 'persisted_position_source_locale',
+    });
+    const standalone = fixture(experience({ position: 'Other', positionSourceLocale: 'de' }));
+    standalone.personal.jobTitle = 'Qxz';
+    const unbound = await prepareSameLocale(standalone, 'de', true);
+    expect(unbound.ok).toBe(false);
+    expect(unbound.diagnostics.titleUnboundFieldKeys).toContain('personal.jobTitle');
+  });
 
   it('records one privacy-safe unit identity for two deduplicated title fields', async () => {
     const cv = fixture(experience({ position: 'Qxz', positionSourceLocale: 'en' }));
@@ -441,6 +395,8 @@ describe('stability title-localization observability', () => {
     const exp = experience({ position: 'Qxz', positionSourceLocale: 'en' });
     const cv = fixture(exp);
     cv.personal.jobTitle = 'Rzx';
+    cv.personal.jobTitleSourceLocale = 'en';
+    cv.personal.jobTitleSourceLocaleTextHash = hashTitleLocaleText('Rzx');
     const result = await prepareExportLocalizedTitles({
       sourceCv: cv,
       exportCv: structuredClone(cv),

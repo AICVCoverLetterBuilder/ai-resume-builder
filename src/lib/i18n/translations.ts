@@ -445,6 +445,13 @@ export type TranslationKeys = {
     loginRequired: string;
     upgradeBanner: string;
   };
+  titleLocaleConfirmation: {
+    dialogTitle: string;
+    explanation: string;
+    selectLanguage: string;
+    confirmLanguages: string;
+    staleOrSaveError: string;
+  };
   common: {
 
       save: string;
@@ -635,7 +642,9 @@ export type TranslationKeys = {
   };
 };
 
-export const en: TranslationKeys = {
+type BaseTranslationKeys = Omit<TranslationKeys, 'titleLocaleConfirmation'>;
+
+const enBase: BaseTranslationKeys = {
   nav: { home: 'Home', cvBuilder: 'CV Builder', coverLetter: 'Cover Letter', templates: 'Templates', pricing: 'Pricing', about: 'About', contact: 'Contact', login: 'Log In', register: 'Sign Up', dashboard: 'Dashboard', logout: 'Log Out' },
   hero: { title: '✨ AI & Smart Resume Builder', professionalResumesAiPowered: 'Professional resumes. AI-powered.', subtitle: 'AI & Smart Resume Builder with premium templates and smart job optimization.', valueDesc: 'Create a professional resume in minutes. Unlock 10 premium templates and advanced tools with Pro.', cta: 'Create My CV', ctaSecondary: 'View Templates', badge: 'AI & Smart Resume Builder', footerText: 'One-time payment. Lifetime access. No subscription.' },
   features: { title: 'Everything you need to land the role.', subtitle: 'Powerful AI tools designed for the global job market', badge: "What's included", ai: { title: 'Smart AI Writing', desc: 'Improves clarity, structure, and impact automatically.' }, multilingual: { title: 'Multi-language Support', desc: 'Create CVs in 9 languages instantly.' }, templates: { title: 'Premium Templates', desc: '10 premium + 3 free templates. Modern US/EU professional designs.' }, ats: { title: 'ATS-Friendly', desc: 'All templates pass Applicant Tracking Systems with optimized formatting.' }, region: { title: 'Region Optimized', desc: 'Automatic adaptation for US, EU, Balkan, and Middle East job markets.' },       export: { title: 'DOCX Export', desc: 'Download as DOCX or copy to clipboard with one click.' }, analyzer: { title: 'Job Description Analyzer', desc: 'Match your CV to job listings with AI precision. Pro only.' } },
@@ -930,7 +939,7 @@ export const en: TranslationKeys = {
   }
 };
 
-const de: TranslationKeys = {
+const de: BaseTranslationKeys = {
   nav: { home: 'Startseite', cvBuilder: 'Lebenslauf', coverLetter: 'Anschreiben', templates: 'Vorlagen', pricing: 'Preise', about: 'Über', contact: 'Kontakt', login: 'Anmelden', register: 'Registrieren', dashboard: 'Dashboard', logout: 'Abmelden' },
   hero: { title: 'Erstellen Sie einen professionellen Lebenslauf.', professionalResumesAiPowered: 'Professionelle Lebensläufe. KI-gestützt.', subtitle: 'KI-gestützter Lebenslauf-Builder mit Premium-Vorlagen und intelligenter Job-Optimierung.', valueDesc: 'Erstellen Sie in wenigen Minuten einen professionellen Lebenslauf. Schalten Sie 10 Premium-Vorlagen und erweiterte Tools mit Pro frei.', cta: 'Lebenslauf erstellen', ctaSecondary: 'Vorlagen ansehen', badge: 'KI-gestützter Lebenslauf-Builder', footerText: 'Einmalige Zahlung. Lebenslanger Zugriff. Kein Abonnement.' },
     features: { title: 'Alles, was Sie brauchen.', subtitle: 'Leistungsstarke KI-Tools für den globalen Arbeitsmarkt', badge: 'Was enthalten ist', ai: { title: 'Intelligentes KI-Schreiben', desc: 'Verbessert Klarheit, Struktur und Wirkung automatisch.' }, multilingual: { title: 'Mehrsprachige Unterstützung', desc: 'Erstellen Sie Lebensläufe sofort in 9 Sprachen.' }, templates: { title: 'Premium-Vorlagen', desc: '10 Premium + 3 kostenlose Vorlagen. Moderne Designs.' }, ats: { title: 'ATS-freundlich', desc: 'Alle Vorlagen bestehen Bewerber-Tracking-Systeme.' }, region: { title: 'Regional optimiert', desc: 'Automatische Anpassung für US, EU, Balkan und Mittlerer Osten.' }, export: { title: 'DOCX-Export', desc: 'Download als DOCX oder in die Zwischenablage kopieren.' }, analyzer: { title: 'Stellenanzeigen-Analysator', desc: 'Passen Sie Ihren Lebenslauf mit KI-Präzision an Stellenanzeigen an. Nur Pro.' } },
@@ -1084,7 +1093,7 @@ const de: TranslationKeys = {
   }
 };
 
-const es: TranslationKeys = {
+const es: BaseTranslationKeys = {
   nav: { home: 'Inicio', cvBuilder: 'Creador CV', coverLetter: 'Carta', templates: 'Plantillas', pricing: 'Precios', about: 'Acerca de', contact: 'Contacto', login: 'Acceder', register: 'Registro', dashboard: 'Panel', logout: 'Salir' },
   hero: { title: 'Crea un CV profesional en minutos.', professionalResumesAiPowered: 'Currículums profesionales. Con tecnología de IA.', subtitle: 'Constructor de CV con IA, plantillas premium y optimización inteligente.', valueDesc: 'Crea un currículum profesional en minutos. Desbloquea 10 plantillas premium y herramientas avanzadas con Pro.', cta: 'Crear Mi CV', ctaSecondary: 'Ver Plantillas', badge: 'Constructor de CV con IA', footerText: 'Pago único. Acceso de por vida. Sin suscripciones.' },
   features: { title: 'Todo lo que necesitas.', subtitle: 'Potentes herramientas de IA para el mercado global', badge: 'Qué incluye', ai: { title: 'Escritura IA Inteligente', desc: 'Mejora claridad y estructura automáticamente.' }, multilingual: { title: 'Soporte Multilingüe', desc: 'Crea CVs en 9 idiomas al instante.' }, templates: { title: 'Plantillas Premium', desc: '10 premium + 3 gratis. Diseños modernos.' }, ats: { title: 'ATS-Friendly', desc: 'Pasan los sistemas de seguimiento de candidatos.' }, region: { title: 'Optimizado por Región', desc: 'Adaptación para EE.UU., UE, Balcanes y Oriente Medio.' }, export: { title: 'Exportación Multiformato', desc: 'Descarga en DOCX o copia al portapapeles.' }, analyzer: { title: 'Analizador de Ofertas', desc: 'Ajusta tu CV a la oferta con precisión IA. Solo Pro.' } },
@@ -1238,7 +1247,7 @@ const es: TranslationKeys = {
   }
 };
 
-const fr: TranslationKeys = {
+const fr: BaseTranslationKeys = {
   nav: { home: 'Accueil', cvBuilder: 'Créateur CV', coverLetter: 'Lettre', templates: 'Modèles', pricing: 'Tarifs', about: 'À propos', contact: 'Contact', login: 'Connexion', register: 'Inscription', dashboard: 'Tableau', logout: 'Déconnexion' },
   hero: { title: 'Créez un CV pro en quelques minutes.', professionalResumesAiPowered: 'CV professionnels. Propulsés par l’IA.', subtitle: 'Générateur de CV par IA, modèles premium et optimisation intelligente.', valueDesc: 'Créez un CV professionnel en quelques minutes. Débloquez 10 modèles premium et des outils avancés avec Pro.', cta: 'Créer mon CV', ctaSecondary: 'Voir les modèles', badge: 'Générateur de CV par IA', footerText: 'Paiement unique. Accès à vie. Sans abonnement.' },
   features: { title: 'Tout ce dont vous avez besoin.', subtitle: 'Outils IA puissants pour le marché mondial', badge: 'Inclus', ai: { title: 'Écriture IA Intelligente', desc: 'Améliore la clarté et la structure.' }, multilingual: { title: 'Support Multilingue', desc: 'Créez des CV en 9 langues.' }, templates: { title: 'Modèles Premium', desc: '10 premium + 3 gratuits.' }, ats: { title: 'ATS-Friendly', desc: 'Passe les logiciels de recrutement.' }, region: { title: 'Optimisé par Région', desc: 'Adaptation US, UE, Balkans et Moyen-Orient.' }, export: { title: 'Export Multiformat', desc: 'DOCX ou presse-papiers.' }, analyzer: { title: 'Analyseur d\'Offres', desc: 'Ajustez votre CV avec précision IA. Pro uniquement.' } },
@@ -1391,7 +1400,7 @@ const fr: TranslationKeys = {
   }
 };
 
-const it: TranslationKeys = {
+const it: BaseTranslationKeys = {
   nav: { home: 'Home', cvBuilder: 'Crea CV', coverLetter: 'Lettera', templates: 'Modelli', pricing: 'Prezzi', about: 'Chi Siamo', contact: 'Contatti', login: 'Accedi', register: 'Registrati', dashboard: 'Dashboard', logout: 'Esci' },
   hero: { title: 'Crea un CV professionale in pochi minuti.', professionalResumesAiPowered: 'Curriculum professionali. Potenziati dall’IA.', subtitle: 'Builder di CV con IA, modelli premium e ottimizzazione intelligente.', valueDesc: 'Crea un curriculum professionale in pochi minuti. Sblocca 10 modelli premium e strumenti avanzati con Pro.', cta: 'Crea il mio CV', ctaSecondary: 'Vedi Modelli', badge: 'Builder di CV con IA', footerText: 'Pagamento unico. Accesso a vita. Nessun abbonamento.' },
   features: { title: 'Tutto ciò di cui hai bisogno.', subtitle: 'Potenti strumenti IA per il mercato globale', badge: 'Incluso', ai: { title: 'Scrittura IA Intelligente', desc: 'Migliora chiarezza e struttura.' }, multilingual: { title: 'Supporto Multilingue', desc: 'Crea CV in 9 lingue.' }, templates: { title: 'Modelli Premium', desc: '10 premium + 3 gratis.' }, ats: { title: 'ATS-Friendly', desc: 'Supera i software di selezione.' }, region: { title: 'Ottimizzato per Regione', desc: 'Adattamento US, UE, Balcani e Medio Oriente.' }, export: { title: 'Esportazione Multiformato', desc: 'DOCX o appunti.' }, analyzer: { title: 'Analizzatore Offerte', desc: 'Adatta il CV all\'offerta con precisione IA. Solo Pro.' } },
@@ -1545,7 +1554,7 @@ const it: TranslationKeys = {
   }
 };
 
-const ar: TranslationKeys = {
+const ar: BaseTranslationKeys = {
   nav: { home: 'الرئيسية', cvBuilder: 'إنشاء سيرة', coverLetter: 'الخطاب', templates: 'القوالب', pricing: 'الأسعار', about: 'نبذة', contact: 'اتصل', login: 'دخول', register: 'تسجيل', dashboard: 'لوحة التحكم', logout: 'خروج' },
   hero: { title: 'ابنِ سيرتك الاحترافية في دقائق.', professionalResumesAiPowered: 'سير ذاتية احترافية. مدعومة بالذكاء الاصطناعي.', subtitle: 'منشئ سيرة ذاتية بالذكاء الاصطناعي مع قوالب مميزة.', valueDesc: 'أنشئ سيرة ذاتية احترافية في دقائق. افتح 10 قوالب متميزة وأدوات متقدمة مع Pro.', cta: 'ابدأ سيرتي', ctaSecondary: 'عرض القوالب', badge: 'منشئ سيرة بالذكاء الاصطناعي', footerText: 'دفع لمرة واحدة. وصول مدى الحياة.' },
   features: { title: 'كل ما تحتاجه للنجاح.', subtitle: 'أدوات ذكاء اصطناعي قوية للمسار العالمي', badge: 'ماذا يتضمن', ai: { title: 'كتابة ذكية', desc: 'تحسين الوضوح والهيكلية تلقائياً.' }, multilingual: { title: 'دعم اللغات', desc: 'سير ذاتية بـ 9 لغات.' }, templates: { title: 'قوالب مميزة', desc: '10 مميزة + 3 مجانية.' }, ats: { title: 'متوافق مع ATS', desc: 'تجاوز أنظمة فرز المتقدمين.' }, region: { title: 'تحسين إقليمي', desc: 'تخصيص للشرق الأوسط وأوروبا وأمريكا.' }, export: { title: 'تصدير متعدد', desc: 'DOCX بضغطة واحدة.' }, analyzer: { title: 'محلل الوظائف', desc: 'طابق سيرتك مع الوصف الوظيفي.' } },
@@ -1699,7 +1708,7 @@ const ar: TranslationKeys = {
   }
 };
 
-const sr: TranslationKeys = {
+const sr: BaseTranslationKeys = {
   nav: { home: 'Početna', cvBuilder: 'CV Builder', coverLetter: 'Pismo', templates: 'Šabloni', pricing: 'Cene', about: 'O nama', contact: 'Kontakt', login: 'Prijava', register: 'Registracija', dashboard: 'Kontrolna tabla', logout: 'Odjava' },
   hero: { title: 'Napravite profesionalan CV za nekoliko minuta.', professionalResumesAiPowered: 'Profesionalni CV-jevi. Uz podršku veštačke inteligencije.', subtitle: 'AI generator sa premium šablonima i pametnom optimizacijom za posao.', valueDesc: 'Napravite profesionalnu biografiju za nekoliko minuta. Otključajte 10 premium šablona i napredne alate uz Pro.', cta: 'Napravi moj CV', ctaSecondary: 'Pogledaj šablone', badge: 'AI generator biografija', footerText: 'Jednokratno plaćanje. Doživotni pristup. Bez pretplate.' },
   features: { title: 'Sve što vam treba za uspeh.', subtitle: 'Moćni AI alati dizajnirani za globalno tržište', badge: 'Šta je uključeno', ai: { title: 'Pametno pisanje', desc: 'Automatski poboljšava jasnoću i strukturu.' }, multilingual: { title: 'Više jezika', desc: 'Napravite CV na 9 jezika istovremeno.' }, templates: { title: 'Premium šabloni', desc: '10 premium + 3 besplatna.' }, ats: { title: 'ATS-Friendly', desc: 'Prolazi sisteme za praćenje kandidata.' }, region: { title: 'Optimizacija regiona', desc: 'Prilagođavanje za SAD, EU, Balkan i Bliski istok.' }, export: { title: 'Izvoz u više formata', desc: 'Preuzmite kao DOCX ili kopirajte.' }, analyzer: { title: 'Analizator posla', desc: 'Uskladite CV sa oglasom za posao. Samo Pro.' } },
@@ -1853,7 +1862,7 @@ const sr: TranslationKeys = {
   }
 };
 
-const hr: TranslationKeys = {
+const hr: BaseTranslationKeys = {
   nav: { home: 'Početna', cvBuilder: 'CV Builder', coverLetter: 'Pismo', templates: 'Predlošci', pricing: 'Cijene', about: 'O nama', contact: 'Kontakt', login: 'Prijava', register: 'Registracija', dashboard: 'Nadzorna ploča', logout: 'Odjava' },
   hero: { title: 'Napravite profesionalan CV za nekoliko minuta.', professionalResumesAiPowered: 'Profesionalni životopisi. Uz podršku umjetne inteligencije.', subtitle: 'AI generator s premium predlošcima i pametnom optimizacijom.', valueDesc: 'Napravite profesionalan životopis za nekoliko minuta. Otključajte 10 premium predložaka i napredne alate uz Pro.', cta: 'Napravi moj CV', ctaSecondary: 'Vidi predloške', badge: 'AI generator biografija', footerText: 'Jednokratno plaćanje. Doživotni pristup.' },
   features: { title: 'Sve što vam treba.', subtitle: 'Moćni AI alati za globalno tržište', badge: 'Što je uključeno', ai: { title: 'Pametno pisanje', desc: 'Poboljšava jasnoću i strukturu.' }, multilingual: { title: 'Više jezika', desc: 'Napravite CV na 9 jezika.' }, templates: { title: 'Premium predlošci', desc: '10 premium + 3 besplatna.' }, ats: { title: 'ATS-Friendly', desc: 'Prolazi sustave za odabir.' }, region: { title: 'Optimizacija regiona', desc: 'Prilagođavanje za SAD, EU i Balkan.' }, export: { title: 'DOCX format', desc: 'Preuzmite kao DOCX.' }, analyzer: { title: 'Analizator posla', desc: 'Uskladite CV s oglasom.' } },
@@ -2080,7 +2089,7 @@ const hr: TranslationKeys = {
   }
 };
 
-const ru: TranslationKeys = {
+const ru: BaseTranslationKeys = {
   nav: { home: 'Главная', cvBuilder: 'Конструктор CV', coverLetter: 'Письмо', templates: 'Шаблоны', pricing: 'Цены', about: 'О нас', contact: 'Контакт', login: 'Войти', register: 'Регистрация', dashboard: 'Панель', logout: 'Выйти' },
   hero: { title: 'Создайте профессиональное CV за минуты.', professionalResumesAiPowered: 'Профессиональные резюме. На базе ИИ.', subtitle: 'Конструктор CV на базе ИИ с премиум-шаблонами и умной оптимизацией.', valueDesc: 'Создайте профессиональное резюме за несколько минут. Откройте доступ к 10 премиум-шаблонам и расширенным инструментам с Pro.', cta: 'Создать CV', ctaSecondary: 'Посмотреть шаблоны', badge: 'Конструктор CV с ИИ', footerText: 'Единоразовый платеж. Пожизненный доступ.' },
   features: { title: 'Все, что вам нужно.', subtitle: 'Мощные инструменты ИИ для глобального рынка', badge: 'Что включено', ai: { title: 'Умное написание', desc: 'Улучшает четкость и структуру автоматически.' }, multilingual: { title: 'Многоязычность', desc: 'Создавайте CV на 9 языках.' }, templates: { title: 'Премиум-шаблоны', desc: '8 премиум + 3 бесплатных.' }, ats: { title: 'ATS-Friendly', desc: 'Проходит системы проверки кандидатов.' }, region: { title: 'Региональная оптимизация', desc: 'Адаптация для США, ЕС, Балкан и Ближнего Востока.' }, export: { title: 'Экспорт в разные форматы', desc: 'DOCX или буфер обмена.' }, analyzer: { title: 'Анализатор вакансий', desc: 'Сопоставьте CV с вакансией с точностью ИИ.' } },
@@ -2224,7 +2233,7 @@ const ru: TranslationKeys = {
   about: { hero: { badge: 'Описание для Google Play и App Store', title: 'CV Pro AI', description: 'Создайте профессиональное резюме за минуты. Начните бесплатно — обновитесь один раз и пользуйтесь без ограничений.', ageRating: 'Возрастной рейтинг: 3+', languages: '12 языков', privacyFirst: 'Конфиденциальность прежде всего' }, description: { title: 'Описание приложения', paragraphs: ['CV Pro AI — умный конструктор резюме и сопроводительных писем с поддержкой ИИ.', 'Доступно для Android (Google Play) и iPhone (Apple App Store).', 'Сервис помогает быстро собрать резюме, адаптировать его под вакансию и скачать в профессиональном формате DOCX.', 'Приложение изначально рассчитано на международные рынки: локализация, шаблоны и формулировки работают последовательно для всех поддерживаемых языков и регионов.'] }, features: { title: 'Бесплатно и Pro', free: { label: 'Бесплатно', items: ['3 стандартных шаблона', '1 загрузка сопроводительного письма', '1 попытка регенерации письма', 'Генерация профессионального summary с ИИ', 'Все 12 языков', 'Экспорт в DOCX'], disabledItems: ['Инструменты переписывания с ИИ', 'Анализатор вакансий', '10 премиум-шаблонов', 'Неограниченные письма'] }, pro: { label: 'Pro', price: '$3.99', items: ['10 премиум-шаблонов (+ 3 бесплатных)', 'Неограниченные сопроводительные письма', 'Неограниченные регенерации', 'Инструменты переписывания с ИИ', 'Анализ вакансии', 'Приоритетная поддержка'], footer: 'Разовая оплата. Без подписки и без автопродления.' } }, aiDisclosure: { title: 'Как используется ИИ', items: ['Приложение использует сторонние AI-сервисы для генерации summary, маркеров списка и сопроводительных писем.', 'Введённые данные обрабатываются только для подготовки текста и не используются для маркетинговых целей.', 'AI-контент может содержать неточности, поэтому перед отправкой работодателю его нужно обязательно проверить.', 'Кнопки, запускающие ИИ, помечены явно и не скрывают использование генерации.'] }, ageAndContent: { title: 'Возрастной рейтинг и предупреждение о контенте', ageRating: 'Возрастной рейтинг: 3+', ageRatingDesc: 'Подходит для всех возрастов. Контент для взрослых отсутствует.', disclaimer: 'Текст, созданный ИИ, может содержать фактические неточности, стилистические шероховатости или формулировки, не подходящие для конкретной вакансии. Пользователь обязан проверить и отредактировать итоговый текст перед отправкой.', noLiability: 'CV Pro AI предоставляет инструменты для подготовки резюме и писем, но не гарантирует приглашение на собеседование или трудоустройство. Итоговое использование материалов остаётся на усмотрение пользователя.', privacy: 'Данные резюме хранятся локально на устройстве пользователя. Личная информация не продаётся и не передаётся третьим лицам в рекламных целях.' }, languages: { title: 'Поддерживаемые языки', list: ['English', 'Deutsch', 'Español', 'Français', 'Italiano', 'العربية', 'Srpski', 'Hrvatski', 'Русский', 'Português (Brasil)', 'हिन्दी', '日本語'] }, restorePurchase: { title: 'Восстановить покупку', description: 'Если вы уже приобретали Pro и хотите вернуть доступ на текущем устройстве, нажмите кнопку восстановления покупки на странице тарифов. Если восстановление не сработает, свяжитесь с нами по адресу help.cvappai@gmail.com.' }, legal: { title: 'Юридические документы', privacyPolicy: 'Политика конфиденциальности', termsOfService: 'Условия обслуживания', contact: 'Контакт', viewPricing: 'Посмотреть тарифы' } }
 };
 
-const ptBR: TranslationKeys = {
+const ptBR: BaseTranslationKeys = {
   nav: { home: 'Início', cvBuilder: 'Construtor de CV', coverLetter: 'Carta de Apresentação', templates: 'Modelos', pricing: 'Preços', about: 'Sobre', contact: 'Contato', login: 'Entrar', register: 'Cadastrar', dashboard: 'Painel', logout: 'Sair' },
   hero: { title: 'Crie um currículo profissional em minutos.', professionalResumesAiPowered: 'Currículos profissionais. Com tecnologia de IA.', subtitle: 'Construtor de CV com IA, modelos premium e otimização inteligente para vagas.', valueDesc: 'Crie um currículo profissional em minutos. Desbloqueie 10 modelos premium e ferramentas avançadas com o Pro.', cta: 'Criar meu currículo', ctaSecondary: 'Ver modelos', badge: 'Construtor de CV com IA', footerText: 'Pagamento único. Acesso vitalício. Sem assinaturas.' },
   features: { title: 'Tudo o que você precisa.', subtitle: 'Poderosas ferramentas de IA para o mercado global', badge: 'O que está incluído', ai: { title: 'Escrita inteligente com IA', desc: 'Melhora clareza, estrutura e impacto automaticamente.' }, multilingual: { title: 'Suporte multilíngue', desc: 'Crie currículos em 9 idiomas instantaneamente.' }, templates: { title: 'Modelos Premium', desc: '10 premium + 3 modelos gratuitos. Designs modernos.' }, ats: { title: 'Compatível com ATS', desc: 'Todos os modelos passam pelos sistemas de triagem (ATS).' }, region: { title: 'Otimizado por região', desc: 'Adaptação automática para EUA, Europa e outros mercados.' }, export: { title: 'Exportação em vários formatos', desc: 'Baixe em DOCX ou copie para a área de transferência.' }, analyzer: { title: 'Analisador de descrição de vaga', desc: 'Combine seu CV com anúncios de emprego com precisão de IA. Somente Pro.' } },
@@ -2412,7 +2421,7 @@ const ptBR: TranslationKeys = {
 };
 
 // ─── Hindi ────────────────────────────────────────────────────────────────────
-const hi: TranslationKeys = {
+const hi: BaseTranslationKeys = {
   nav: { home: 'होम', cvBuilder: 'CV बनाएं', coverLetter: 'कवर लेटर', templates: 'टेम्पलेट', pricing: 'मूल्य', about: 'बारे में', contact: 'संपर्क', login: 'लॉग इन', register: 'साइन अप', dashboard: 'डैशबोर्ड', logout: 'लॉग आउट' },
   hero: { title: 'मिनटों में पेशेवर CV बनाएं।', professionalResumesAiPowered: 'पेशेवर रिज़्यूमे। एआई द्वारा संचालित।', subtitle: 'AI-संचालित CV बिल्डर — प्रीमियम टेम्पलेट और स्मार्ट जॉब ऑप्टिमाइज़ेशन के साथ।', valueDesc: 'मिनटों में एक पेशेवर रिज्यूमे बनाएं। Pro के साथ 10 प्रीमियम टेम्पलेट और एडवांस्ड टूल्स अनलॉक करें।', cta: 'मेरा CV बनाएं', ctaSecondary: 'टेम्पलेट देखें', badge: 'AI-संचालित CV बिल्डर', footerText: 'एकमुश्त भुगतान। आजीवन एक्सेस। कोई सदस्यता नहीं।' },
   features: { title: 'वह सब कुछ जो आपको चाहिए।', subtitle: 'वैश्विक नौकरी बाज़ार के लिए शक्तिशाली AI टूल', badge: 'क्या शामिल है', ai: { title: 'स्मार्ट AI लेखन', desc: 'स्वचालित रूप से स्पष्टता, संरचना और प्रभाव में सुधार करता है।' }, multilingual: { title: 'बहुभाषी समर्थन', desc: '10 भाषाओं में तुरंत CV बनाएं।' }, templates: { title: 'प्रीमियम टेम्पलेट', desc: '10 प्रीमियम + 3 मुफ़्त टेम्पलेट। आधुनिक डिज़ाइन।' }, ats: { title: 'ATS-अनुकूल', desc: 'सभी टेम्पलेट ATS सिस्टम से गुज़रते हैं।' }, region: { title: 'क्षेत्र अनुकूलित', desc: 'भारत, US, EU, बाल्कन और मध्य पूर्व के लिए स्वचालित अनुकूलन।' }, export: { title: 'DOCX निर्यात', desc: 'एक क्लिक में DOCX डाउनलोड करें या क्लिपबोर्ड पर कॉपी करें।' }, analyzer: { title: 'जॉब विवरण विश्लेषक', desc: 'AI की सटीकता से अपना CV नौकरी विज्ञापनों से मिलाएं। केवल Pro।' } },
@@ -2612,7 +2621,7 @@ const hi: TranslationKeys = {
   about: { hero: { badge: 'Google Play और App Store विवरण', title: 'CV Pro AI', description: 'कुछ ही मिनटों में पेशेवर CV बनाएं। मुफ़्त शुरू करें और ज़रूरत होने पर एक बार अपग्रेड करें।', ageRating: 'आयु रेटिंग: 3+', languages: '12 भाषाएँ', privacyFirst: 'गोपनीयता पहले' }, description: { title: 'ऐप के बारे में', paragraphs: ['CV Pro AI एक AI-संचालित CV और कवर लेटर बिल्डर है, जिसे आधुनिक नौकरी बाज़ार के लिए बनाया गया है।', 'Android (Google Play) और iPhone (Apple App Store) पर उपलब्ध।', 'यह प्रोफेशनल सारांश, उपलब्धियों के बुलेट बिंदु और अंतरराष्ट्रीय उपयोग के लिए उपयुक्त टेम्पलेट तैयार करने में मदद करता है।', 'ऐप का स्थानीयकरण सभी समर्थित भाषाओं में एकसमान अनुभव देने के लिए बनाया गया है, ताकि अंग्रेज़ी fallback पर निर्भरता न रहे।'] }, features: { title: 'मुफ़्त बनाम Pro', free: { label: 'मुफ़्त', items: ['3 मानक टेम्पलेट', '1 कवर लेटर डाउनलोड', '1 रीजनरेशन प्रयास', 'AI प्रोफेशनल सारांश', 'सभी 12 भाषाएँ', 'DOCX एक्सपोर्ट'], disabledItems: ['AI री-राइट टूल्स', 'जॉब डिस्क्रिप्शन एनालाइज़र', '10 प्रीमियम टेम्पलेट', 'असीमित कवर लेटर'] }, pro: { label: 'Pro', price: '$3.99', items: ['10 प्रीमियम टेम्पलेट (+ 3 मुफ़्त)', 'असीमित कवर लेटर', 'असीमित रीजनरेशन', 'AI री-राइट टूल्स', 'जॉब डिस्क्रिप्शन एनालाइज़र', 'प्राथमिकता सहायता'], footer: 'एक बार भुगतान। कोई सदस्यता नहीं। कोई नवीनीकरण नहीं।' } }, aiDisclosure: { title: 'AI का उपयोग कैसे होता है', items: ['ऐप रिज़्यूमे सारांश, बुलेट बिंदु और कवर लेटर बनाने के लिए तृतीय-पक्ष AI सेवाओं का उपयोग करता है।', 'दिए गए इनपुट केवल टेक्स्ट तैयार करने के उद्देश्य से प्रोसेस किए जाते हैं।', 'AI द्वारा तैयार सामग्री में त्रुटियाँ हो सकती हैं, इसलिए भेजने से पहले समीक्षा आवश्यक है।', 'AI सुविधाएँ इंटरफ़ेस में स्पष्ट रूप से लेबल की जाती हैं।'] }, ageAndContent: { title: 'आयु रेटिंग और सामग्री सूचना', ageRating: 'आयु रेटिंग: 3+', ageRatingDesc: 'सभी आयु समूहों के लिए उपयुक्त। कोई परिपक्व सामग्री नहीं।', disclaimer: 'AI द्वारा तैयार टेक्स्ट में तथ्यात्मक त्रुटियाँ, व्याकरण संबंधी समस्याएँ या भूमिका-विशेष के लिए अनुपयुक्त सुझाव हो सकते हैं। नियोक्ता को भेजने से पहले हर टेक्स्ट की समीक्षा करें।', noLiability: 'CV Pro AI CV और कवर लेटर तैयार करने के लिए उपकरण प्रदान करता है, लेकिन नौकरी मिलने या इंटरव्यू की कोई गारंटी नहीं देता।', privacy: 'CV डेटा उपयोगकर्ता के डिवाइस पर स्थानीय रूप से रहता है। व्यक्तिगत जानकारी को विपणन के लिए बेचा या साझा नहीं किया जाता।' }, languages: { title: 'समर्थित भाषाएँ', list: ['English', 'Deutsch', 'Español', 'Français', 'Italiano', 'العربية', 'Srpski', 'Hrvatski', 'Русский', 'Português (Brasil)', 'हिन्दी', '日本語'] }, restorePurchase: { title: 'खरीद पुनर्स्थापित करें', description: 'यदि आपने पहले Pro खरीदा है और इस डिवाइस पर एक्सेस वापस चाहिए, तो प्राइसिंग पेज पर रिस्टोर बटन का उपयोग करें। यदि कोई समस्या आए तो help.cvappai@gmail.com पर संपर्क करें।' }, legal: { title: 'कानूनी जानकारी', privacyPolicy: 'गोपनीयता', termsOfService: 'शर्तें', contact: 'संपर्क', viewPricing: 'मूल्य देखें' } }
 };
 
-const ja: TranslationKeys = {
+const ja: BaseTranslationKeys = {
   nav: { home: 'ホーム', cvBuilder: 'CV作成', coverLetter: '添え状', templates: 'テンプレート', pricing: '料金', about: '概要', contact: 'お問い合わせ', login: 'ログイン', register: '登録', dashboard: 'ダッシュボード', logout: 'ログアウト' },
   hero: { title: 'プロのCVを数分で作成。', professionalResumesAiPowered: 'プロ品質の履歴書。AI搭載。', subtitle: 'AI搭載のCV作成ツール。プレミアムテンプレートとスマートな求人最適化。', valueDesc: '数分でプロのレジュメを作成。Proプランで10種のプレミアムテンプレートと高度なツールをご利用いただけます。', cta: 'CVを作成する', ctaSecondary: 'テンプレートを見る', badge: 'AI搭載CV作成ツール', footerText: '一回限りの支払い。生涯アクセス。サブスクリプション不要。' },
   features: { title: '就職に必要なすべて。', subtitle: 'グローバル採用市場向けの強力なAIツール', badge: '含まれるもの', ai: { title: 'スマートAIライティング', desc: '明確さ、構成、インパクトを自動で改善。' }, multilingual: { title: '多言語サポート', desc: '9言語でCVを即座に作成。' }, templates: { title: 'プレミアムテンプレート', desc: 'プレミアム10枚＋無料3枚。モダンなデザイン。' }, ats: { title: 'ATS対応', desc: '全テンプレートが採用管理システムに対応。' }, region: { title: '地域最適化', desc: '日本・米国・EU・中東市場に自動適応。' }, export: { title: 'DOCXエクスポート', desc: 'DOCXでダウンロードまたはクリップボードへコピー。' }, analyzer: { title: '求人内容分析', desc: 'AIで求人票に合わせてCVを最適化。Proのみ。' } },
@@ -2768,9 +2777,106 @@ const translationSuccessByLocale: Record<Locale, string> = {
   ja: '翻訳を適用しました！',
 };
 
-const translationRecords: Record<Locale, TranslationKeys> = { en, de, es, fr, it, ar, sr, hr, ru, 'pt-BR': ptBR, hi, ja };
+const titleLocaleConfirmationByLocale: Record<Locale, TranslationKeys['titleLocaleConfirmation']> = {
+  en: {
+    dialogTitle: 'Confirm title languages',
+    explanation: 'Choose the language in which each current title is written. Your titles will not change.',
+    selectLanguage: 'Select language',
+    confirmLanguages: 'Confirm languages',
+    staleOrSaveError: 'The title changed or could not be saved. Please start the export again.',
+  },
+  de: {
+    dialogTitle: 'Sprachen der Berufsbezeichnungen bestätigen',
+    explanation: 'Wählen Sie für jede aktuelle Berufsbezeichnung die Sprache aus. Die Bezeichnungen bleiben unverändert.',
+    selectLanguage: 'Sprache auswählen',
+    confirmLanguages: 'Sprachen bestätigen',
+    staleOrSaveError: 'Die Berufsbezeichnung wurde geändert oder konnte nicht gespeichert werden. Starten Sie den Export erneut.',
+  },
+  es: {
+    dialogTitle: 'Confirmar los idiomas de los cargos',
+    explanation: 'Elige el idioma en que está escrito cada cargo actual. Los cargos no cambiarán.',
+    selectLanguage: 'Seleccionar idioma',
+    confirmLanguages: 'Confirmar idiomas',
+    staleOrSaveError: 'El cargo cambió o no se pudo guardar. Inicia la exportación de nuevo.',
+  },
+  fr: {
+    dialogTitle: 'Confirmer les langues des intitulés',
+    explanation: 'Choisissez la langue de chaque intitulé actuel. Les intitulés ne seront pas modifiés.',
+    selectLanguage: 'Choisir une langue',
+    confirmLanguages: 'Confirmer les langues',
+    staleOrSaveError: 'Un intitulé a changé ou n’a pas pu être enregistré. Relancez l’exportation.',
+  },
+  it: {
+    dialogTitle: 'Conferma le lingue dei titoli professionali',
+    explanation: 'Scegli la lingua di ogni titolo attuale. I titoli non verranno modificati.',
+    selectLanguage: 'Seleziona la lingua',
+    confirmLanguages: 'Conferma le lingue',
+    staleOrSaveError: 'Il titolo è cambiato o non è stato salvato. Avvia di nuovo l’esportazione.',
+  },
+  ar: {
+    dialogTitle: 'تأكيد لغات المسميات الوظيفية',
+    explanation: 'اختر اللغة التي كُتب بها كل مسمى وظيفي حالي. لن تتغير المسميات.',
+    selectLanguage: 'اختر اللغة',
+    confirmLanguages: 'تأكيد اللغات',
+    staleOrSaveError: 'تغيّر المسمى الوظيفي أو تعذّر حفظه. ابدأ التصدير من جديد.',
+  },
+  sr: {
+    dialogTitle: 'Potvrdite jezike naziva pozicija',
+    explanation: 'Izaberite jezik na kojem je napisan svaki trenutni naziv pozicije. Nazivi se neće menjati.',
+    selectLanguage: 'Izaberite jezik',
+    confirmLanguages: 'Potvrdite jezike',
+    staleOrSaveError: 'Naziv pozicije je promenjen ili nije sačuvan. Ponovo pokrenite izvoz.',
+  },
+  hr: {
+    dialogTitle: 'Potvrdite jezike naziva radnih mjesta',
+    explanation: 'Odaberite jezik na kojem je napisan svaki trenutačni naziv radnog mjesta. Nazivi se neće mijenjati.',
+    selectLanguage: 'Odaberite jezik',
+    confirmLanguages: 'Potvrdite jezike',
+    staleOrSaveError: 'Naziv radnog mjesta promijenjen je ili nije spremljen. Ponovno pokrenite izvoz.',
+  },
+  ru: {
+    dialogTitle: 'Подтвердите языки названий должностей',
+    explanation: 'Выберите язык каждого текущего названия должности. Сами названия не изменятся.',
+    selectLanguage: 'Выберите язык',
+    confirmLanguages: 'Подтвердить языки',
+    staleOrSaveError: 'Название должности изменилось или не сохранилось. Запустите экспорт заново.',
+  },
+  'pt-BR': {
+    dialogTitle: 'Confirme os idiomas dos cargos',
+    explanation: 'Escolha o idioma em que cada cargo atual está escrito. Os cargos não serão alterados.',
+    selectLanguage: 'Selecione o idioma',
+    confirmLanguages: 'Confirmar idiomas',
+    staleOrSaveError: 'O cargo mudou ou não pôde ser salvo. Inicie a exportação novamente.',
+  },
+  hi: {
+    dialogTitle: 'पदनामों की भाषाओं की पुष्टि करें',
+    explanation: 'हर वर्तमान पदनाम की भाषा चुनें। पदनामों का पाठ नहीं बदलेगा।',
+    selectLanguage: 'भाषा चुनें',
+    confirmLanguages: 'भाषाओं की पुष्टि करें',
+    staleOrSaveError: 'पदनाम बदल गया है या सहेजा नहीं जा सका। निर्यात फिर से शुरू करें।',
+  },
+  ja: {
+    dialogTitle: '役職名の言語を確認',
+    explanation: '現在の各役職名が書かれている言語を選択してください。役職名自体は変更されません。',
+    selectLanguage: '言語を選択',
+    confirmLanguages: '言語を確認',
+    staleOrSaveError: '役職名が変更されたか、保存できませんでした。エクスポートをやり直してください。',
+  },
+};
+
+export const en: TranslationKeys = {
+  ...enBase,
+  titleLocaleConfirmation: titleLocaleConfirmationByLocale.en,
+};
+
+const translationRecords: Record<Locale, BaseTranslationKeys> = { en: enBase, de, es, fr, it, ar, sr, hr, ru, 'pt-BR': ptBR, hi, ja };
 for (const locale of languages.map(({ code }) => code)) {
   translationRecords[locale].cv.translationSuccess = translationSuccessByLocale[locale];
 }
 
-export const translations: Record<Locale, TranslationKeys> = translationRecords;
+export const translations: Record<Locale, TranslationKeys> = Object.fromEntries(
+  languages.map(({ code }) => [code, {
+    ...translationRecords[code],
+    titleLocaleConfirmation: titleLocaleConfirmationByLocale[code],
+  }]),
+) as Record<Locale, TranslationKeys>;
