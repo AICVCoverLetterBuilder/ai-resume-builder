@@ -3,8 +3,61 @@ import type {
   SummaryV3ProviderFailureEnvelope,
   SummaryV3ProviderPhase,
 } from './summary-generate';
+import type { SummaryV3StyleEvidence, SummaryV3StyleMode, SummaryV3StyleResult } from './summary-style-m5';
+import type { SummaryV3StyleM5RouteFailure } from './summary-style-m5-transport';
 
 export const SUMMARY_V3_TERMINAL_EVENT_NAME = 'summary_v3_terminal' as const;
+export const SUMMARY_STRONGER_TERMINAL_EVENT_NAME = 'summary_stronger_terminal' as const;
+
+export const SUMMARY_STRONGER_TERMINAL_LAYERS = [
+  'route_gate',
+  'request_validation',
+  'provider_transport',
+  'writer_output',
+  'evaluator_validation',
+  'repair_validation',
+  'diagnostics',
+  'terminal_success',
+] as const;
+export type SummaryStrongerTerminalLayer = (typeof SUMMARY_STRONGER_TERMINAL_LAYERS)[number];
+
+export const SUMMARY_STRONGER_WRITER_RESULTS = ['not_attempted', 'accepted', 'rejected', 'error'] as const;
+export type SummaryStrongerWriterResult = (typeof SUMMARY_STRONGER_WRITER_RESULTS)[number];
+
+export const SUMMARY_STRONGER_USAGE_DECISIONS = ['increment', 'no_increment', 'not_applicable'] as const;
+export type SummaryStrongerUsageDecision = (typeof SUMMARY_STRONGER_USAGE_DECISIONS)[number];
+
+type SummaryStrongerResult = SummaryV3StyleResult | SummaryV3StyleM5RouteFailure;
+
+export interface SummaryStrongerTerminalDiagnosticInput {
+  readonly requestId: unknown;
+  readonly requestedLocale: unknown;
+  readonly mode: SummaryV3StyleMode;
+  readonly httpStatus: number;
+  readonly result: SummaryStrongerResult;
+}
+
+export interface SummaryStrongerTerminalDiagnosticEvent {
+  readonly event: typeof SUMMARY_STRONGER_TERMINAL_EVENT_NAME;
+  readonly requestCorrelationId: string | null;
+  readonly operation: 'summary_style';
+  readonly style: 'stronger';
+  readonly mode: SummaryV3StyleMode;
+  readonly requestedLocale: string | null;
+  readonly httpStatus: number;
+  readonly terminalLayer: SummaryStrongerTerminalLayer;
+  readonly terminalReason: string;
+  readonly writerAttempted: boolean;
+  /** not_attempted=no provider attempt; error=initial writer provider failure before response extraction; accepted=candidate reached validation; rejected=attempted without validation candidate. */
+  readonly writerResult: SummaryStrongerWriterResult;
+  /** True only when a parsed writer candidate reached M5 validation; never raw provider output. */
+  readonly writerOutputPresent: boolean;
+  readonly repairAttempted: boolean;
+  readonly repairProviderRequestAttempted: boolean;
+  readonly evaluatorAttempted: boolean;
+  readonly finalApplyEligible: boolean;
+  readonly usageDecision: SummaryStrongerUsageDecision;
+}
 
 export type SummaryV3TerminalPhase =
   | SummaryV3ProviderPhase
@@ -107,6 +160,168 @@ function safeHttpStatus(value: unknown): number {
   return typeof value === 'number' && Number.isInteger(value) && value >= 100 && value <= 599
     ? value
     : 500;
+}
+
+function safeLocale(value: unknown): string | null {
+  return typeof value === 'string' && /^[A-Za-z]{2}(?:-[A-Za-z0-9]{2,8})?$/u.test(value)
+    ? value
+    : null;
+}
+
+function isStyleRouteFailure(result: SummaryStrongerResult): result is SummaryV3StyleM5RouteFailure {
+  return result.kind === 'route_failure';
+}
+
+function styleEvidence(
+  result: SummaryStrongerResult,
+): SummaryV3StyleM5RouteFailure['evidence'] | SummaryV3StyleEvidence | null {
+  if (isStyleRouteFailure(result)) return result.evidence ?? null;
+  if (result.kind === 'not_applicable') return null;
+  return result.evidence;
+}
+
+function styleProviderFailure(
+  result: SummaryStrongerResult,
+): SummaryV3ProviderFailureEnvelope | null {
+  return styleEvidence(result)?.m5ProviderFailure ?? null;
+}
+
+function styleProviderAttempted(
+  failure: SummaryV3ProviderFailureEnvelope | null,
+): boolean {
+  if (!failure) return false;
+  if (failure.failureStage === 'request_construction' || failure.failureStage === 'orchestration') {
+    return false;
+  }
+  return true;
+}
+
+function styleTerminalLayer(
+  result: SummaryStrongerResult,
+): SummaryStrongerTerminalLayer {
+  if (styleProviderFailure(result)) return 'provider_transport';
+  if (isStyleRouteFailure(result)) return 'route_gate';
+  if (result.kind === 'candidate_ready' || result.kind === 'safe_no_op') return 'terminal_success';
+  if (result.kind === 'not_applicable') return 'request_validation';
+
+  const reason = result.typedReason;
+  if (result.evidence.m5ProviderFailure) return 'provider_transport';
+  if (reason === 'diagnostic_size_exceeded') return 'diagnostics';
+  if (reason.startsWith('repair_')) return 'repair_validation';
+  if (reason === 'evaluator_rejected' || reason === 'style_not_fulfilled'
+    || reason === 'invalid_language_or_native_surface') return 'evaluator_validation';
+  if (reason === 'writer_identity_mismatch' || reason === 'candidate_malformed'
+    || reason === 'lost_source_fact' || reason === 'unsupported_claim') return 'writer_output';
+  if (reason === 'malformed_request' || reason === 'insufficient_context'
+    || reason === 'ambiguous_current_role' || reason === 'source_fact_not_visible'
+    || reason === 'stale_identity') return 'request_validation';
+  return 'request_validation';
+}
+
+function styleWriterResult(
+  result: SummaryStrongerResult,
+): SummaryStrongerWriterResult {
+  const providerFailure = styleProviderFailure(result);
+  if (providerFailure?.phase === 'initial_writer'
+    && providerFailure.failureStage !== 'request_construction') return 'error';
+  if (isStyleRouteFailure(result) || result.kind === 'not_applicable') return 'not_attempted';
+  const evidence = result.evidence;
+  if (evidence.writerAttempts <= 0) return 'not_attempted';
+  if (evidence.m5ProviderFailure?.phase === 'initial_writer'
+    && evidence.m5ProviderFailure.failureStage !== 'response_extraction') return 'error';
+  return evidence.writerCandidateReachedValidation ? 'accepted' : 'rejected';
+}
+
+function styleRepairProviderRequestAttempted(
+  result: SummaryStrongerResult,
+): boolean {
+  const providerFailure = styleProviderFailure(result);
+  if (isStyleRouteFailure(result)) {
+    return (providerFailure?.phase === 'repair_writer' || providerFailure?.phase === 'post_repair_evaluator')
+      && styleProviderAttempted(providerFailure);
+  }
+  if (result.kind === 'not_applicable') return false;
+  const evidence = result.evidence;
+  if (evidence.repairWriterAttempts > 0 || evidence.repairEvaluatorAttempts > 0) {
+    if (evidence.m5ProviderFailure?.failureStage === 'request_construction') return false;
+    return evidence.m5ProviderFailure?.phase === 'repair_writer'
+      || evidence.m5ProviderFailure?.phase === 'post_repair_evaluator'
+      || !evidence.m5ProviderFailure;
+  }
+  return false;
+}
+
+function styleUsageDecision(
+  result: SummaryStrongerResult,
+): SummaryStrongerUsageDecision {
+  if (styleProviderFailure(result)) return 'no_increment';
+  if (isStyleRouteFailure(result) || result.kind === 'not_applicable') return 'not_applicable';
+  return result.kind === 'candidate_ready' ? 'increment' : 'no_increment';
+}
+
+/**
+ * The sole privacy-safe terminal observer for the M5 Summary Stronger route.
+ * It projects only bounded enums, booleans, locale, status, and infrastructure
+ * correlation; it never serializes request, candidate, prompt, or provider text.
+ */
+export function createSummaryStrongerTerminalDiagnostic(
+  input: SummaryStrongerTerminalDiagnosticInput,
+): SummaryStrongerTerminalDiagnosticEvent {
+  const routeFailure = isStyleRouteFailure(input.result);
+  const evidence = styleEvidence(input.result);
+  const providerFailure = styleProviderFailure(input.result);
+  const writerAttempted = providerFailure
+    ? providerFailure.phase === 'initial_writer' && styleProviderAttempted(providerFailure)
+    : evidence ? 'writerAttempts' in evidence && evidence.writerAttempts > 0 : false;
+  const repairAttempted = evidence
+    ? ('repairWriterAttempts' in evidence
+      ? evidence.repairWriterAttempts > 0 || evidence.repairEvaluatorAttempts > 0
+      : providerFailure?.phase === 'repair_writer' || providerFailure?.phase === 'post_repair_evaluator')
+    : false;
+  const terminalReason = routeFailure
+    ? safeCode(input.result.typedReason, 'route_failure')
+    : input.result.kind === 'not_applicable'
+      ? safeCode(input.result.reason, 'not_applicable')
+      : input.result.kind === 'candidate_ready'
+        ? 'candidate_ready'
+        : input.result.typedReason === 'safe_no_op'
+          ? 'safe_no_op'
+          : safeCode(input.result.typedReason, 'unknown_failure');
+
+  return {
+    event: SUMMARY_STRONGER_TERMINAL_EVENT_NAME,
+    requestCorrelationId: safeRequestId(input.requestId),
+    operation: 'summary_style',
+    style: 'stronger',
+    mode: input.mode,
+    requestedLocale: safeLocale(input.requestedLocale),
+    httpStatus: safeHttpStatus(input.httpStatus),
+    terminalLayer: styleTerminalLayer(input.result),
+    terminalReason,
+    writerAttempted,
+    writerResult: styleWriterResult(input.result),
+    writerOutputPresent: evidence?.writerCandidateReachedValidation === true,
+    repairAttempted,
+    repairProviderRequestAttempted: styleRepairProviderRequestAttempted(input.result),
+    evaluatorAttempted: evidence?.evaluatorReached === true
+      || providerFailure?.phase === 'initial_evaluator'
+      || providerFailure?.phase === 'post_repair_evaluator',
+    finalApplyEligible: input.result.kind === 'candidate_ready',
+    usageDecision: styleUsageDecision(input.result),
+  };
+}
+
+/** Logging is observational and must never alter the HTTP response or decision. */
+export function emitSummaryStrongerTerminalDiagnostic(
+  input: SummaryStrongerTerminalDiagnosticInput,
+): SummaryStrongerTerminalDiagnosticEvent {
+  const event = createSummaryStrongerTerminalDiagnostic(input);
+  try {
+    console.info(JSON.stringify(event));
+  } catch {
+    // A logging failure is deliberately non-interfering.
+  }
+  return event;
 }
 
 function classifyResponseFailure(

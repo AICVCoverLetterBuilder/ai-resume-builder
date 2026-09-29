@@ -124,6 +124,7 @@ import type {
 } from '@/lib/ai-core-v3/summary-generate';
 import {
   emitSummaryV3TerminalDiagnostic,
+  emitSummaryStrongerTerminalDiagnostic,
   type SummaryV3RouteTerminalFailure,
 } from '@/lib/ai-core-v3/summary-v3-production-observability';
 import {
@@ -2458,13 +2459,17 @@ Rules:
       // M5.2 owns only the three exact same-locale Summary style operations.
       // The shared adapter delegates domain validation and repair policy to M5.1.
       if (!v3RoutingEnabled) {
+        const routeFailure = createSummaryV3StyleM5RouteFailure('v3_feature_disabled');
         return jsonResponse(
-          createSummaryV3StyleM5RouteFailure('v3_feature_disabled'),
+          routeFailure,
           { status: 409 },
         );
       }
       deadlineAt = computeSummaryV3StyleM5ServerDeadline(serverReceivedAt);
       const m5Request = normalizeSummaryV3StyleRouteRequest(action, params, serverReceivedAt);
+      const m5Mode = String(m5Request.visibleSummary || '').trim()
+        ? 'enhance_existing_content' as const
+        : 'generate_from_context' as const;
       let result;
       try {
         result = await executeSummaryV3StyleRoute(m5Request, {
@@ -2487,10 +2492,20 @@ Rules:
       } catch (error) {
         const failure = classifySummaryV3ProviderFailure(error, 'initial_writer', 'orchestration');
         const classified = m5ProviderFailureDisposition(failure);
-        return jsonResponse(createSummaryV3StyleM5RouteFailure(
+        const routeFailure = createSummaryV3StyleM5RouteFailure(
           classified.code,
           { ...M5_ROUTE_EXCEPTION_EVIDENCE, m5ProviderFailure: failure },
-        ), {
+        );
+        if (m5Request.style === 'stronger') {
+          emitSummaryStrongerTerminalDiagnostic({
+            requestId: summaryV3RequestId,
+            requestedLocale: m5Request.requestedLocale,
+            mode: m5Mode,
+            httpStatus: classified.status,
+            result: routeFailure,
+          });
+        }
+        return jsonResponse(routeFailure, {
           status: classified.status,
           headers: classified.retryAfter
             ? { 'Retry-After': String(classified.retryAfter) }
@@ -2510,6 +2525,15 @@ Rules:
           : /(?:_request_failed|_transport_malformed)$/u.test(result.typedReason)
             ? 502
             : 422;
+      if (m5Request.style === 'stronger') {
+        emitSummaryStrongerTerminalDiagnostic({
+          requestId: summaryV3RequestId,
+          requestedLocale: m5Request.requestedLocale,
+          mode: result.kind === 'not_applicable' ? m5Mode : result.mode,
+          httpStatus: status,
+          result,
+        });
+      }
       return jsonResponse(result, { status });
     }
 

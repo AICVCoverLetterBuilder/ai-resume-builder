@@ -150,7 +150,7 @@ async function invokeActualRoute(options: {
   serverEnabled?: boolean; clientEnabled?: unknown; omitEnabled?: boolean;
   executorMode?: 'throw';
   routeOverrides?: Record<string, unknown>;
-  calls?: { count: number; retries: number; tools: string[]; choices: unknown[]; maxRetries: Array<number | undefined>; requests: unknown[]; clientOptions: unknown[] };
+  calls?: { count: number; retries: number; tools: string[]; choices: unknown[]; maxRetries: Array<number | undefined>; requests: unknown[]; clientOptions: unknown[]; logs?: string[] };
 }) {
   const keys = ['AI_CORE_V3_ENABLED', 'NEXT_PUBLIC_AI_CORE_V3_ENABLED', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'PRO_SIGNING_KEY'] as const;
   const saved = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
@@ -199,6 +199,11 @@ async function invokeActualRoute(options: {
       return providerMessage(invocation, mode === 'reject' || mode === 'repair-fail' ? 'reject' : 'pass');
     });
     vi.doMock('@anthropic-ai/sdk', () => { class MockAnthropic { readonly messages = { create }; constructor(options: unknown) { calls.clientOptions.push(options); } } return { default: MockAnthropic }; });
+    if (calls.logs) {
+      vi.spyOn(console, 'info').mockImplementation((value) => {
+        calls.logs?.push(String(value));
+      });
+    }
     vi.doMock('@/lib/pro-token', () => ({ verifyProToken: vi.fn(async () => options.auth === 'invalid' ? null : { subject: 'm52-test' }) }));
     const { POST } = await import('@/app/api/generate/route');
     const body = {
@@ -337,14 +342,35 @@ describe('M5.2 actual production route boundary', () => {
   });
 
   it('keeps an unknown SDK-seam exception unknown and proves callWithRetry makes no retry', async () => {
-    const run = await invokeActualRoute({ providerMode: 'throw' });
+    const logs: string[] = [];
+    const run = await invokeActualRoute({ action: 'summary_stronger', providerMode: 'throw', calls: {
+      count: 0, retries: 0, tools: [], choices: [], maxRetries: [], requests: [], clientOptions: [], logs,
+    } });
     expect(run.response.status).toBe(500); expect(run.body.typedReason).toBe('writer_request_failed');
+    expect(run.response.headers.get('Retry-After')).toBeNull();
     expect(run.body.evidence.m5ProviderFailure).toMatchObject({
       phase: 'initial_writer', failureStage: 'sdk_request',
       providerHttpStatus: null, providerErrorType: null, providerHttpResponseReceived: null,
     });
     expect(run.calls.count).toBe(1); expect(run.calls.retries).toBe(0);
     expect(run.calls.maxRetries).toEqual([0]);
+    const terminalEvents = logs.filter((value) => value.includes('"event":"summary_stronger_terminal"'));
+    expect(terminalEvents).toHaveLength(1);
+    const event = JSON.parse(terminalEvents[0]) as Record<string, unknown>;
+    expect(event).toMatchObject({
+      terminalReason: 'writer_request_failed',
+      terminalLayer: 'provider_transport',
+      writerAttempted: true,
+      writerResult: 'error',
+      writerOutputPresent: false,
+      evaluatorAttempted: false,
+      repairAttempted: false,
+      repairProviderRequestAttempted: false,
+      finalApplyEligible: false,
+      usageDecision: 'no_increment',
+    });
+    expect(terminalEvents[0]).not.toContain('Ava Patel');
+    expect(terminalEvents[0]).not.toContain('Product Engineer');
   });
 
   it.each([
