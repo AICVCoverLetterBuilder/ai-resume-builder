@@ -14,12 +14,14 @@ import {
   summaryV3StyleCandidateUnitsRepresentDeclaredFacts,
   summaryV3StyleCandidateUnitHash,
   type SummaryV3StyleRequest,
+  type SummaryV3StyleResult,
 } from '../summary-style-m5';
 import {
   executeSummaryV3StyleServer,
   type SummaryV3StyleEvaluatorInput,
   type SummaryV3StyleWriterInput,
 } from '../summary-style-m5-server';
+import { createSummaryStrongerTerminalDiagnostic } from '../summary-v3-production-observability';
 
 const source = 'I bring approximately three years of experience. I currently work as an Electrical Service Technician at NordWerk Elektroservice Test, where I carry out maintenance work on electrical systems, locate and resolve faults in electrical systems, as well as support the installation of electrical components.';
 
@@ -223,6 +225,50 @@ async function runWithCandidate(
 }
 
 type WriterUnitPlan = Readonly<{ readonly text: string; readonly factIndexes: readonly number[] }>;
+
+function assertInitialWriterLostSourceFact(
+  result: SummaryV3StyleResult,
+  expectedClass: string,
+  coveredFactCount: number,
+  missingFactCount: number,
+) {
+  expect(result, JSON.stringify(result)).toMatchObject({
+    kind: 'handled_failure',
+    typedReason: 'lost_source_fact',
+    evidence: {
+      writerAttempts: 1,
+      evaluatorAttempts: 0,
+      writerCandidateReachedValidation: true,
+      evaluatorReached: false,
+      writerOutputContractFailureClass: expectedClass,
+      coveredFactCount,
+      missingFactCount,
+    },
+  });
+  const event = createSummaryStrongerTerminalDiagnostic({
+    requestId: 'm8-aab563-observability-test',
+    requestedLocale: 'en',
+    mode: 'enhance_existing_content',
+    httpStatus: 422,
+    result,
+  });
+  expect(event).toMatchObject({
+    terminalLayer: 'writer_output',
+    terminalReason: 'lost_source_fact',
+    writerAttempted: true,
+    writerResult: 'rejected',
+    writerCandidateReachedValidation: true,
+    writerFailureClass: expectedClass,
+    coveredFactCount,
+    missingFactCount,
+    evaluatorAttempted: false,
+    repairAttempted: false,
+    repairProviderRequestAttempted: false,
+    finalApplyEligible: false,
+    usageDecision: 'no_increment',
+  });
+  return event;
+}
 
 async function runWithWriterUnitPlan(
   plans: readonly WriterUnitPlan[],
@@ -794,17 +840,8 @@ describe('M8 AAB571 multi-unit writer source-floor regression', () => {
     ], 'required_fact_coverage'],
   ] as const)('rejects loss of %s before evaluator execution', async (_label, plans, expectedClass) => {
     const { result, calls } = await runWithWriterUnitPlan(plans);
-    expect(result).toMatchObject({
-      kind: 'handled_failure',
-      typedReason: 'lost_source_fact',
-      evidence: {
-        writerAttempts: 1,
-        evaluatorAttempts: 0,
-        writerCandidateReachedValidation: false,
-        evaluatorReached: false,
-        writerOutputContractFailureClass: expectedClass,
-      },
-    });
+    const coveredFactCount = new Set(plans.flatMap((plan) => plan.factIndexes)).size;
+    assertInitialWriterLostSourceFact(result, expectedClass, coveredFactCount, 5 - coveredFactCount);
     expect(result).not.toHaveProperty('candidate');
     expect(calls).toEqual({ writer: 1, evaluator: 0 });
   });
@@ -814,17 +851,44 @@ describe('M8 AAB571 multi-unit writer source-floor regression', () => {
       { text: durationUnit, factIndexes: [1] },
       { text: validBody, factIndexes: [0, 2, 3, 4] },
     ]);
-    expect(result).toMatchObject({
-      kind: 'handled_failure',
-      typedReason: 'lost_source_fact',
-      evidence: {
-        writerAttempts: 1,
-        evaluatorAttempts: 0,
-        writerCandidateReachedValidation: false,
-        evaluatorReached: false,
-        writerOutputContractFailureClass: 'unit_declared_fact_binding',
+    assertInitialWriterLostSourceFact(result, 'unit_declared_fact_binding', 5, 0);
+    expect(calls).toEqual({ writer: 1, evaluator: 0 });
+  });
+
+  it('classifies a calendar date source-floor failure with authoritative counts', async () => {
+    const calendarRequest = request({
+      visibleSummary: 'I worked as an Electrical Service Technician at NordWerk Elektroservice Test from 2020 to 2023, maintaining electrical systems.',
+    });
+    const snapshot = createSummaryV3StyleOperationSnapshot(calendarRequest);
+    const { result, calls } = await runWithWriterUnitPlan([{
+      text: 'I worked as an Electrical Service Technician at NordWerk Elektroservice Test, maintaining electrical systems.',
+      factIndexes: snapshot.requiredFacts.map((_fact, index) => index),
+    }], calendarRequest);
+    assertInitialWriterLostSourceFact(result, 'calendar_date_source_floor', snapshot.requiredFacts.length, 0);
+    expect(calls).toEqual({ writer: 1, evaluator: 0 });
+  });
+
+  it('classifies an entity fact-binding failure with authoritative counts', async () => {
+    const entityRequest = request({
+      visibleSummary: 'Ava builds APIs at Atlas. Ben mentors peers at Nova.',
+      protectedEntities: ['Ava', 'Ben'],
+      manifest: {
+        manifestId: 'm8-aab563-entity-manifest',
+        contextId: 'm8-aab563-entity-context',
+        sourceLocale: 'en',
+        currentRoleEntryId: 'ava-entry',
+        entries: [
+          { stableId: 'ava-entry', role: 'Engineer', employer: 'Atlas', employmentState: 'present', durationMonths: 24, facts: [{ id: 'ava-duty', text: 'builds APIs' }] },
+          { stableId: 'ben-entry', role: 'Mentor', employer: 'Nova', employmentState: 'completed', durationMonths: 12, facts: [{ id: 'ben-duty', text: 'mentors peers' }] },
+        ],
       },
     });
+    const snapshot = createSummaryV3StyleOperationSnapshot(entityRequest);
+    const { result, calls } = await runWithWriterUnitPlan([{
+      text: 'Ava mentors peers at Nova. Ben builds APIs at Atlas.',
+      factIndexes: snapshot.requiredFacts.map((_fact, index) => index),
+    }], entityRequest);
+    assertInitialWriterLostSourceFact(result, 'entity_fact_binding_preservation', snapshot.requiredFacts.length, 0);
     expect(calls).toEqual({ writer: 1, evaluator: 0 });
   });
 });

@@ -362,7 +362,7 @@ describe('M5.2 actual production route boundary', () => {
       terminalLayer: 'provider_transport',
       writerAttempted: true,
       writerResult: 'error',
-      writerOutputPresent: false,
+      writerCandidateReachedValidation: false,
       evaluatorAttempted: false,
       repairAttempted: false,
       repairProviderRequestAttempted: false,

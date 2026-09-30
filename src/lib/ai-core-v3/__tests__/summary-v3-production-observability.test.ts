@@ -345,7 +345,7 @@ describe('Summary V3 production terminal observability', () => {
     expect(info).toHaveBeenCalledTimes(1);
     expect(info).toHaveBeenCalledWith(JSON.stringify(event));
     expect(event).toMatchObject({
-      writerAttempted: true, writerResult: 'accepted', writerOutputPresent: true,
+      writerAttempted: true, writerResult: 'accepted', writerCandidateReachedValidation: true,
       evaluatorAttempted: true, repairAttempted: true, repairProviderRequestAttempted: true,
       finalApplyEligible: false, usageDecision: 'no_increment',
     });
@@ -379,10 +379,10 @@ describe('Summary V3 production terminal observability', () => {
       }),
     });
 
-    expect(notAttempted).toMatchObject({ writerResult: 'not_attempted', writerOutputPresent: false });
-    expect(rejected).toMatchObject({ writerResult: 'rejected', writerOutputPresent: false });
-    expect(errored).toMatchObject({ writerResult: 'error', writerOutputPresent: false });
-    expect(accepted).toMatchObject({ writerResult: 'accepted', writerOutputPresent: true });
+    expect(notAttempted).toMatchObject({ writerResult: 'not_attempted', writerCandidateReachedValidation: false });
+    expect(rejected).toMatchObject({ writerResult: 'rejected', writerCandidateReachedValidation: false });
+    expect(errored).toMatchObject({ writerResult: 'error', writerCandidateReachedValidation: false });
+    expect(accepted).toMatchObject({ writerResult: 'accepted', writerCandidateReachedValidation: true });
     expect('applicationCode' in accepted).toBe(false);
     expect('elapsedMs' in accepted).toBe(false);
   });
@@ -403,11 +403,11 @@ describe('Summary V3 production terminal observability', () => {
 
     expect(gate).toMatchObject({
       terminalLayer: 'route_gate', writerAttempted: false, writerResult: 'not_attempted',
-      writerOutputPresent: false, usageDecision: 'not_applicable',
+      writerCandidateReachedValidation: false, usageDecision: 'not_applicable',
     });
     expect(providerRouteFailureEvent).toMatchObject({
       terminalLayer: 'provider_transport', writerAttempted: true, writerResult: 'error',
-      writerOutputPresent: false, evaluatorAttempted: false, repairAttempted: false,
+      writerCandidateReachedValidation: false, evaluatorAttempted: false, repairAttempted: false,
       repairProviderRequestAttempted: false, finalApplyEligible: false, usageDecision: 'no_increment',
     });
   });

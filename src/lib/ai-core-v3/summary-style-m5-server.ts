@@ -212,7 +212,12 @@ type ParsedStyleEvidence = ParsedShorterEvidence | ParsedStrongerEvidence | Pars
 type WriterParseResult =
   | Readonly<{ ok: true; candidate: SummaryV3StyleCandidate }>
   | Readonly<{ ok: false; reason: 'writer_transport_malformed' | 'writer_identity_mismatch' | 'candidate_malformed' }>
-  | Readonly<{ ok: false; reason: 'lost_source_fact'; writerOutputContractFailureClass: SummaryV3StyleWriterOutputContractFailureClass }>;
+  | Readonly<{
+    ok: false;
+    reason: 'lost_source_fact';
+    writerOutputContractFailureClass: SummaryV3StyleWriterOutputContractFailureClass;
+    candidate: SummaryV3StyleCandidate;
+  }>;
 
 type EvaluatorParseResult =
   | Readonly<{ ok: true; evaluation: ParsedEvaluation }>
@@ -226,11 +231,13 @@ type EvaluatorParseResult =
 function writerFailure(
   reason: Extract<WriterParseResult, { ok: false }>['reason'],
   writerOutputContractFailureClass?: SummaryV3StyleWriterOutputContractFailureClass,
+  candidate?: SummaryV3StyleCandidate,
 ): WriterParseResult {
   return immutableCopy({
     ok: false as const,
     reason,
     ...(writerOutputContractFailureClass ? { writerOutputContractFailureClass } : {}),
+    ...(candidate ? { candidate } : {}),
   }) as WriterParseResult;
 }
 
@@ -1770,7 +1777,7 @@ function parseWriterOutput(value: unknown, snapshot: SummaryV3StyleOperationSnap
     return writerFailure('candidate_malformed');
   }
   const writerOutputContractFailureClass = classifyWriterOutputContractFailure(snapshot, candidate, coverage);
-  if (writerOutputContractFailureClass) return writerFailure('lost_source_fact', writerOutputContractFailureClass);
+  if (writerOutputContractFailureClass) return writerFailure('lost_source_fact', writerOutputContractFailureClass, candidate);
   return immutableCopy({ ok: true, candidate });
 }
 
@@ -2634,6 +2641,7 @@ export async function executeSummaryV3StyleServer(
   const parsedWriter = parseWriterOutput(rawWriter, snapshot);
   if (!parsedWriter.ok) return createSummaryV3StyleHandledFailure(snapshot, parsedWriter.reason, makeEvidence(snapshot, {
     writerAttempts: 1,
+    candidate: parsedWriter.reason === 'lost_source_fact' ? parsedWriter.candidate : null,
     writerOutputContractFailureClass: parsedWriter.reason === 'lost_source_fact'
       ? parsedWriter.writerOutputContractFailureClass
       : null,

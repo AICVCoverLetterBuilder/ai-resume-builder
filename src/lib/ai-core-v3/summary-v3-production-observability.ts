@@ -3,7 +3,12 @@ import type {
   SummaryV3ProviderFailureEnvelope,
   SummaryV3ProviderPhase,
 } from './summary-generate';
-import type { SummaryV3StyleEvidence, SummaryV3StyleMode, SummaryV3StyleResult } from './summary-style-m5';
+import type {
+  SummaryV3StyleEvidence,
+  SummaryV3StyleMode,
+  SummaryV3StyleResult,
+  SummaryV3StyleWriterOutputContractFailureClass,
+} from './summary-style-m5';
 import type { SummaryV3StyleM5RouteFailure } from './summary-style-m5-transport';
 
 export const SUMMARY_V3_TERMINAL_EVENT_NAME = 'summary_v3_terminal' as const;
@@ -48,10 +53,15 @@ export interface SummaryStrongerTerminalDiagnosticEvent {
   readonly terminalLayer: SummaryStrongerTerminalLayer;
   readonly terminalReason: string;
   readonly writerAttempted: boolean;
-  /** not_attempted=no provider attempt; error=initial writer provider failure before response extraction; accepted=candidate reached validation; rejected=attempted without validation candidate. */
+  /** not_attempted=no provider attempt; error=initial writer provider failure before response extraction; accepted=writer passed its contract; rejected=the initial writer contract rejected (with or without a parsed candidate). */
   readonly writerResult: SummaryStrongerWriterResult;
   /** True only when a parsed writer candidate reached M5 validation; never raw provider output. */
-  readonly writerOutputPresent: boolean;
+  readonly writerCandidateReachedValidation: boolean;
+  /** The authoritative finite initial-writer contract class, when present. */
+  readonly writerFailureClass: SummaryV3StyleWriterOutputContractFailureClass | null;
+  /** Existing bounded fact coverage from the server evidence; never recomputed here. */
+  readonly coveredFactCount: number | null;
+  readonly missingFactCount: number | null;
   readonly repairAttempted: boolean;
   readonly repairProviderRequestAttempted: boolean;
   readonly evaluatorAttempted: boolean;
@@ -229,6 +239,7 @@ function styleWriterResult(
   if (evidence.writerAttempts <= 0) return 'not_attempted';
   if (evidence.m5ProviderFailure?.phase === 'initial_writer'
     && evidence.m5ProviderFailure.failureStage !== 'response_extraction') return 'error';
+  if (evidence.writerOutputContractFailureClass !== null) return 'rejected';
   return evidence.writerCandidateReachedValidation ? 'accepted' : 'rejected';
 }
 
@@ -300,7 +311,14 @@ export function createSummaryStrongerTerminalDiagnostic(
     terminalReason,
     writerAttempted,
     writerResult: styleWriterResult(input.result),
-    writerOutputPresent: evidence?.writerCandidateReachedValidation === true,
+    writerCandidateReachedValidation: evidence?.writerCandidateReachedValidation === true,
+    writerFailureClass: evidence?.writerOutputContractFailureClass ?? null,
+    coveredFactCount: evidence && 'coveredFactCount' in evidence
+      ? safeNonNegativeInteger(evidence.coveredFactCount)
+      : null,
+    missingFactCount: evidence && 'missingFactCount' in evidence
+      ? safeNonNegativeInteger(evidence.missingFactCount)
+      : null,
     repairAttempted,
     repairProviderRequestAttempted: styleRepairProviderRequestAttempted(input.result),
     evaluatorAttempted: evidence?.evaluatorReached === true
