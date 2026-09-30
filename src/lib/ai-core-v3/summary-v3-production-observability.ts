@@ -14,6 +14,14 @@ import type {
   SummaryV3StyleVisibleFactKind,
   SummaryV3StyleSourceLockFailureReason,
   SummaryV3StyleEntityLock,
+  SummaryV3StylePhase,
+  SummaryV3StyleViolationCode,
+  SummaryV3StylePostEvaluatorLocalFailureClass,
+} from './summary-style-m5';
+import {
+  SUMMARY_V3_STYLE_M5_PHASES,
+  SUMMARY_V3_STYLE_M5_POST_EVALUATOR_LOCAL_FAILURE_CLASSES,
+  isSummaryV3StyleViolationCode,
 } from './summary-style-m5';
 import type { SummaryV3StyleM5RouteFailure } from './summary-style-m5-transport';
 
@@ -68,6 +76,10 @@ export interface SummaryStrongerTerminalDiagnosticEvent {
   /** Existing bounded fact coverage from the server evidence; never recomputed here. */
   readonly coveredFactCount: number | null;
   readonly missingFactCount: number | null;
+  readonly evaluatorTerminalPhase: SummaryV3StylePhase | null;
+  readonly evaluatorViolationCode: SummaryV3StyleViolationCode | null;
+  readonly evaluatorViolationRepairable: boolean | null;
+  readonly postEvaluatorLocalFailureClass: SummaryV3StylePostEvaluatorLocalFailureClass | null;
   /** Present only for the decisive initial Stronger candidate source-floor branch. */
   readonly sourceFloorFailureStage?: 'fact_representation' | 'multi_fact_fallback';
   /** Present only for the decisive initial Stronger source-lock branch. */
@@ -244,6 +256,11 @@ function styleTerminalLayer(
   const reason = result.typedReason;
   if (result.evidence.m5ProviderFailure) return 'provider_transport';
   if (reason === 'diagnostic_size_exceeded') return 'diagnostics';
+  if (result.evidence.repairWriterAttempts > 0 || result.evidence.repairEvaluatorAttempts > 0) return 'repair_validation';
+  if (result.evidence.writerCandidateReachedValidation && result.evidence.evaluatorReached) return 'evaluator_validation';
+  if (result.evidence.writerAttempts > 0
+    && (result.evidence.writerOutputContractFailureClass !== null
+      || !result.evidence.writerCandidateReachedValidation)) return 'writer_output';
   if (reason.startsWith('repair_')) return 'repair_validation';
   if (reason === 'evaluator_rejected' || reason === 'style_not_fulfilled'
     || reason === 'invalid_language_or_native_surface') return 'evaluator_validation';
@@ -377,6 +394,16 @@ export function createSummaryStrongerTerminalDiagnostic(
     missingFactCount: evidence && 'missingFactCount' in evidence
       ? safeNonNegativeInteger(evidence.missingFactCount)
       : null,
+    evaluatorTerminalPhase: candidateSourceFloorEvidence?.evaluatorTerminalPhase
+      && SUMMARY_V3_STYLE_M5_PHASES.includes(candidateSourceFloorEvidence.evaluatorTerminalPhase)
+      ? candidateSourceFloorEvidence.evaluatorTerminalPhase : null,
+    evaluatorViolationCode: isSummaryV3StyleViolationCode(candidateSourceFloorEvidence?.evaluatorViolationCode)
+      ? candidateSourceFloorEvidence.evaluatorViolationCode : null,
+    evaluatorViolationRepairable: typeof candidateSourceFloorEvidence?.evaluatorViolationRepairable === 'boolean'
+      ? candidateSourceFloorEvidence.evaluatorViolationRepairable : null,
+    postEvaluatorLocalFailureClass: candidateSourceFloorEvidence?.postEvaluatorLocalFailureClass
+      && SUMMARY_V3_STYLE_M5_POST_EVALUATOR_LOCAL_FAILURE_CLASSES.includes(candidateSourceFloorEvidence.postEvaluatorLocalFailureClass)
+      ? candidateSourceFloorEvidence.postEvaluatorLocalFailureClass : null,
     ...sourceFloorEvidence,
     ...sourceLockEvidence,
     repairAttempted,

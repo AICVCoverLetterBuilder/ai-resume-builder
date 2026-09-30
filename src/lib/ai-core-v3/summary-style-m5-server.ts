@@ -53,6 +53,7 @@ import {
   type SummaryV3StyleSupportedLocale,
   type SummaryV3StylePhase,
   type SummaryV3StylePhaseStatus,
+  type SummaryV3StylePostEvaluatorLocalFailureClass,
   type SummaryV3StyleRequest,
   type SummaryV3StyleResult,
   type SummaryV3StyleRoleIdentityResolution,
@@ -2596,17 +2597,56 @@ function canRepair(evaluation: ParsedEvaluation): boolean {
     && violations.every((violation) => violation.repairable && !UNREPAIRABLE_CODES.has(violation.code));
 }
 
-function failureForEvaluation(evaluation: ParsedEvaluation): SummaryV3StyleFailureReason {
-  const violations = allViolations(evaluation);
-  if (violations.some((violation) => UNSUPPORTED_CLAIM_CODES.has(violation.code))) return 'unsupported_claim';
-  if (violations.some((violation) => violation.code === 'lost_source_fact' || violation.code === 'missing_fact')) return 'lost_source_fact';
-  if (violations.some((violation) => violation.code === 'stale_identity')) return 'stale_identity';
-  if (violations.some((violation) => violation.code === 'invalid_language' || violation.code === 'invalid_native_surface')) return 'invalid_language_or_native_surface';
-  if (violations.some((violation) => [
+// The existing failureForEvaluation precedence is shared by the decision and
+// its diagnostic projection. Within one priority group, phase/array order is
+// only a diagnostic tie-break; it does not change the application reason.
+const EVALUATOR_FAILURE_PRECEDENCE: readonly Readonly<{
+  reason: SummaryV3StyleFailureReason;
+  codes: ReadonlySet<string>;
+}>[] = [
+  { reason: 'unsupported_claim', codes: UNSUPPORTED_CLAIM_CODES },
+  { reason: 'lost_source_fact', codes: new Set(['lost_source_fact', 'missing_fact']) },
+  { reason: 'stale_identity', codes: new Set(['stale_identity']) },
+  { reason: 'invalid_language_or_native_surface', codes: new Set(['invalid_language', 'invalid_native_surface']) },
+  { reason: 'style_not_fulfilled', codes: new Set([
     'style_not_fulfilled', 'marker_only_change', 'modifier_only_change',
     'repeated_style_modifier', 'stacked_style_modifier', 'corporate_jargon',
-  ].includes(violation.code))) return 'style_not_fulfilled';
-  return 'evaluator_rejected';
+  ]) },
+];
+
+function evaluatorFailureDecision(evaluation: ParsedEvaluation) {
+  const violations = REQUIRED_PHASES.flatMap((phase) =>
+    evaluation.phases[phase].violations.map((violation) => ({ phase, violation })));
+  for (const priority of EVALUATOR_FAILURE_PRECEDENCE) {
+    const selected = violations.find(({ violation }) => priority.codes.has(violation.code));
+    if (selected) return { reason: priority.reason, selected };
+  }
+  return { reason: 'evaluator_rejected' as const, selected: violations[0] ?? null };
+}
+
+function failureForEvaluation(evaluation: ParsedEvaluation): SummaryV3StyleFailureReason {
+  return evaluatorFailureDecision(evaluation).reason;
+}
+
+/** Attach only after the unchanged control flow selects a validation failure. */
+function postEvaluatorFailureEvidence(
+  evidence: SummaryV3StyleEvidence,
+  evaluation: ParsedEvaluation,
+  localFailure: SummaryV3StyleFailureReason | null,
+): SummaryV3StyleEvidence {
+  const selected = localFailure ? null : evaluatorFailureDecision(evaluation).selected;
+  const localClass: SummaryV3StylePostEvaluatorLocalFailureClass | null = localFailure === 'lost_source_fact'
+    ? 'employment_source_state_preservation'
+    : localFailure === 'unsupported_claim' || localFailure === 'invalid_language_or_native_surface'
+      || localFailure === 'style_not_fulfilled' || localFailure === 'evaluator_rejected'
+      ? localFailure : null;
+  return immutableCopy({
+    ...evidence,
+    evaluatorTerminalPhase: selected?.phase ?? null,
+    evaluatorViolationCode: selected?.violation.code ?? null,
+    evaluatorViolationRepairable: selected?.violation.repairable ?? null,
+    postEvaluatorLocalFailureClass: localClass,
+  }) as SummaryV3StyleEvidence;
 }
 
 function candidateReady(snapshot: SummaryV3StyleOperationSnapshot, candidate: SummaryV3StyleCandidate, evidence: SummaryV3StyleEvidence): SummaryV3StyleResult {
@@ -2784,7 +2824,8 @@ export async function executeSummaryV3StyleServer(
     return initialHardRejection === 'unsupported_claim'
       && sourceRetainingSafeNoOpAllowedForCandidate(snapshot, parsedWriter.candidate.text)
       ? safeNoOpResult(snapshot, initialEvidence, initialUnsupportedCategory)
-      : createSummaryV3StyleHandledFailure(snapshot, initialHardRejection, initialEvidence);
+      : createSummaryV3StyleHandledFailure(snapshot, initialHardRejection,
+        postEvaluatorFailureEvidence(initialEvidence, parsedEvaluator.evaluation, initialHardRejection));
   }
   if (allPhasesPassed(parsedEvaluator.evaluation) && !initialStyleFailure) {
     if (snapshot.mode === 'enhance_existing_content' && parsedEvaluator.evaluation.styleEvidence.noOpDetected) {
@@ -2831,14 +2872,16 @@ export async function executeSummaryV3StyleServer(
   // A no-op is terminal.  A malformed or rejected no-op claim must fail closed,
   // never trigger a repair merely to manufacture a different Summary.
   if (snapshot.mode === 'enhance_existing_content' && parsedEvaluator.evaluation.styleEvidence.noOpDetected) {
-    return createSummaryV3StyleHandledFailure(snapshot, initialTerminalFailure || 'evaluator_rejected', initialEvidence);
+    return createSummaryV3StyleHandledFailure(snapshot, initialTerminalFailure || 'evaluator_rejected',
+      postEvaluatorFailureEvidence(initialEvidence, parsedEvaluator.evaluation, initialStyleFailure));
   }
   if (initialTerminalFailure === 'unsupported_claim'
     && sourceRetainingSafeNoOpAllowedForCandidate(snapshot, parsedWriter.candidate.text)) {
     return safeNoOpResult(snapshot, initialEvidence, initialUnsupportedCategory);
   }
   if (!canRepair(parsedEvaluator.evaluation) || !dependencies.repairWrite || !dependencies.repairEvaluate) {
-    return createSummaryV3StyleHandledFailure(snapshot, initialTerminalFailure || 'evaluator_rejected', initialEvidence);
+    return createSummaryV3StyleHandledFailure(snapshot, initialTerminalFailure || 'evaluator_rejected',
+      postEvaluatorFailureEvidence(initialEvidence, parsedEvaluator.evaluation, initialStyleFailure));
   }
 
   const violations = allViolations(parsedEvaluator.evaluation);
@@ -2908,7 +2951,9 @@ export async function executeSummaryV3StyleServer(
     evaluatorNoOpClaimed: repairNoOpClaimed,
   });
   if (!allPhasesPassed(parsedRepairEvaluator.evaluation) || repairStyleFailure) {
-    return createSummaryV3StyleHandledFailure(snapshot, repairStyleFailure || 'repair_rejected', repairEvidence);
+    return createSummaryV3StyleHandledFailure(snapshot, repairStyleFailure || 'repair_rejected',
+      postEvaluatorFailureEvidence(repairEvidence, parsedRepairEvaluator.evaluation,
+        repairStyleFailure === 'repair_rejected' ? null : repairStyleFailure));
   }
   return candidateReady(snapshot, parsedRepairWriter.candidate, repairEvidence);
 }

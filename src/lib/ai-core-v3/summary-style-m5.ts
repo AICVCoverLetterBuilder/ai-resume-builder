@@ -211,6 +211,17 @@ export type SummaryV3StyleViolationCode =
 
 export type SummaryV3StylePhaseStatus = 'passed' | 'failed';
 
+/** Diagnostic origin only; these values do not participate in validation. */
+export const SUMMARY_V3_STYLE_M5_POST_EVALUATOR_LOCAL_FAILURE_CLASSES = [
+  'employment_source_state_preservation',
+  'unsupported_claim',
+  'invalid_language_or_native_surface',
+  'style_not_fulfilled',
+  'evaluator_rejected',
+] as const;
+export type SummaryV3StylePostEvaluatorLocalFailureClass =
+  (typeof SUMMARY_V3_STYLE_M5_POST_EVALUATOR_LOCAL_FAILURE_CLASSES)[number];
+
 /**
  * Semantic labels are supplied only by the future trusted page owner. They
  * never come from a writer or evaluator and keep a bounded M5.1 predicate
@@ -516,6 +527,11 @@ export type SummaryV3StyleEvidence = Readonly<{
   readonly writerOutputContractFailureClass: SummaryV3StyleWriterOutputContractFailureClass | null;
   /** Finite full-evaluator parser class; never carries provider content. */
   readonly evaluatorOutputContractFailureClass: SummaryV3StyleEvaluatorOutputContractFailureClass | null;
+  /** Terminal rejection origin; absent on older evidence and non-rejection paths. */
+  readonly evaluatorTerminalPhase?: SummaryV3StylePhase | null;
+  readonly evaluatorViolationCode?: SummaryV3StyleViolationCode | null;
+  readonly evaluatorViolationRepairable?: boolean | null;
+  readonly postEvaluatorLocalFailureClass?: SummaryV3StylePostEvaluatorLocalFailureClass | null;
   readonly writerCandidateReachedValidation: boolean;
   readonly evaluatorReached: boolean;
   readonly safeNoOpConsidered: boolean;
