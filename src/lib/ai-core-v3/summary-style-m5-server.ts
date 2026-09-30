@@ -29,6 +29,7 @@ import {
   summaryV3StyleCandidateUnitHash,
   summaryV3StyleCalendarDateRanges,
   inspectSummaryV3StyleCandidateSourceFloor,
+  summaryV3StyleCandidateSourceFloorDecision,
   summaryV3StyleCandidateUnitsRepresentDeclaredFacts,
   summaryV3StyleLocalSemanticDecision,
   summaryV3StyleCandidatePreservesLocks,
@@ -1734,8 +1735,11 @@ function classifyWriterOutputContractFailure(
   // contract because its explicit predicate transformation is style-owned.
   if (snapshot.style === 'shorter' || snapshot.style === 'professional') {
     if (summaryV3StyleLocalSemanticDecision(snapshot, candidate.text) === 'invalid') return 'candidate_source_floor';
-  } else if (!(candidateSourceFloorInspection
-    ?? inspectSummaryV3StyleCandidateSourceFloor(snapshot, candidate.text)).represented) {
+  } else if (summaryV3StyleCandidateSourceFloorDecision(
+    snapshot,
+    candidate.text,
+    candidateSourceFloorInspection ?? inspectSummaryV3StyleCandidateSourceFloor(snapshot, candidate.text),
+  ) === 'invalid') {
     return 'candidate_source_floor';
   }
   if (!summaryV3StyleCandidateUnitsRepresentDeclaredFacts(snapshot, candidate)) return 'unit_declared_fact_binding';

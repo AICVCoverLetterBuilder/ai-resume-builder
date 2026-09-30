@@ -2412,6 +2412,40 @@ export function inspectSummaryV3StyleCandidateSourceFloor(
   };
 }
 
+/**
+ * Decide whether a Stronger source-floor result is conclusive locally or must
+ * be handed to the existing semantic evaluator. This owner consumes the
+ * detailed inspection above and does not duplicate its lexical rules.
+ */
+export function summaryV3StyleCandidateSourceFloorDecision(
+  snapshot: SummaryV3StyleOperationSnapshot,
+  candidateText: string,
+  inspection = inspectSummaryV3StyleCandidateSourceFloor(snapshot, candidateText),
+): SummaryV3StyleLocalSemanticDecision {
+  if (inspection.represented) return 'represented';
+  if (snapshot.style !== 'stronger' || snapshot.mode !== 'enhance_existing_content') return 'invalid';
+  const firstFailedFact = inspection.firstFailedFact;
+  const fallback = inspection.multiFactFallback;
+  if (!firstFailedFact
+    || inspection.sourceFloorFailureStage !== 'multi_fact_fallback'
+    || firstFailedFact.failureReason !== 'predicate_replacement_not_proven'
+    || firstFailedFact.missingAnchorCount !== 1
+    || firstFailedFact.missingNumericAnchorCount !== 0
+    || firstFailedFact.durationStatus === 'not_equivalent'
+    || !firstFailedFact.newCandidateTokenPresent
+    || firstFailedFact.predicateReplacementEligible
+    || firstFailedFact.groundedReplacementRecognized
+    || firstFailedFact.transformableDutyAvailable
+    || fallback.passed
+    || fallback.failureReason !== 'insufficient_changed_fact_count'
+    || fallback.failedFactIndex !== null) return 'invalid';
+  // The fallback inspection proves only that fewer than two facts changed.
+  // Reuse the individual inspection owner to require exactly one failed fact.
+  const failedFactCount = snapshot.requiredFacts.filter((fact) =>
+    !inspectSummaryV3StyleFactRepresentation(snapshot, fact, candidateText).represented).length;
+  return failedFactCount === 1 ? 'unresolved' : 'invalid';
+}
+
 function relationOccurrences(value: string, relationValue: string): readonly number[] {
   const normalized = normalizedRelationText(value);
   const needle = normalizedRelationText(relationValue);
@@ -2531,7 +2565,7 @@ export function summaryV3StyleCandidateRepresentsRequiredFacts(
   if (snapshot.style !== 'stronger') {
     return snapshot.requiredFacts.every((fact) => candidateTextRepresentsFact(snapshot, fact, candidateText));
   }
-  return inspectSummaryV3StyleCandidateSourceFloor(snapshot, candidateText).represented;
+  return summaryV3StyleCandidateSourceFloorDecision(snapshot, candidateText) === 'represented';
 }
 
 /**
@@ -2547,7 +2581,17 @@ export function summaryV3StyleCandidateUnitsRepresentDeclaredFacts(
   const factsById = new Map(snapshot.requiredFacts.map((fact) => [fact.id, fact] as const));
   if ((snapshot.style === 'shorter' || snapshot.style === 'professional')
     && summaryV3StyleLocalSemanticDecision(snapshot, candidate.text) === 'invalid') return false;
-  if (snapshot.style === 'stronger' && !summaryV3StyleCandidateRepresentsRequiredFacts(snapshot, candidate.text)) return false;
+  const strongerDecision = snapshot.style === 'stronger'
+    ? summaryV3StyleCandidateSourceFloorDecision(snapshot, candidate.text)
+    : null;
+  if (strongerDecision === 'invalid') return false;
+  const unresolvedFact = strongerDecision === 'unresolved'
+    ? snapshot.requiredFacts.find((fact) =>
+      !inspectSummaryV3StyleFactRepresentation(snapshot, fact, candidate.text).represented) ?? null
+    : null;
+  const unresolvedUnitId = unresolvedFact
+    ? candidate.units.find((unit) => unit.factIds.includes(unresolvedFact.id))?.unitId ?? null
+    : null;
   return candidate.units.every((unit) => {
     const declaredFacts = unit.factIds.map((factId) => factsById.get(factId));
     if (declaredFacts.some((fact) => !fact)) return false;
@@ -2555,8 +2599,27 @@ export function summaryV3StyleCandidateUnitsRepresentDeclaredFacts(
     if (snapshot.style === 'shorter' || snapshot.style === 'professional') {
       return boundedFacts.every((fact) => candidateFactLocalSemanticDecision(snapshot, fact, unit.text) !== 'invalid');
     }
-    return boundedFacts.every((fact) => candidateTextRepresentsFact(snapshot, fact, unit.text))
+    const baselineUnitRepresented = boundedFacts.every((fact) => candidateTextRepresentsFact(snapshot, fact, unit.text))
       || candidateRepresentsBoundedStrongerParaphrase(snapshot, boundedFacts, unit.text, 1);
+    if (baselineUnitRepresented) return true;
+    if (snapshot.style !== 'stronger' || strongerDecision !== 'unresolved'
+      || !unresolvedFact || unit.unitId !== unresolvedUnitId) return false;
+    return boundedFacts.every((fact) => {
+      if (fact.id === unresolvedFact.id) {
+        const inspection = inspectSummaryV3StyleFactRepresentation(snapshot, fact, unit.text);
+        return inspection.represented || (
+          inspection.failureReason === 'predicate_replacement_not_proven'
+          && inspection.missingAnchorCount === 1
+          && inspection.missingNumericAnchorCount === 0
+          && inspection.durationStatus !== 'not_equivalent'
+          && inspection.newCandidateTokenPresent
+          && !inspection.predicateReplacementEligible
+          && !inspection.groundedReplacementRecognized
+          && !inspection.transformableDutyAvailable
+        );
+      }
+      return candidateTextRepresentsFact(snapshot, fact, unit.text);
+    });
   });
 }
 

@@ -15,8 +15,10 @@ import {
   summaryV3StyleCandidatePreservesExactMaterialSurfaces,
   summaryV3StyleCandidatePreservesLocks,
   summaryV3StyleCandidateRepresentsRequiredFacts,
+  summaryV3StyleCandidateSourceFloorDecision,
   summaryV3StyleCandidateUnitsRepresentDeclaredFacts,
   summaryV3StyleCandidateUnitHash,
+  summaryV3StyleLocalSemanticDecision,
   type SummaryV3StyleRequest,
   type SummaryV3StyleResult,
 } from '../summary-style-m5';
@@ -310,6 +312,89 @@ async function runWithWriterUnitPlan(
 }
 
 describe('M8 AAB563 physical-equivalent M5 Stronger boundary', () => {
+  it('defers one unresolved nonnumeric predicate replacement to the existing evaluator', async () => {
+    const candidate = source.replace('locate and resolve', 'identify and resolve');
+    const snapshot = createSummaryV3StyleOperationSnapshot(request());
+    const inspection = inspectSummaryV3StyleCandidateSourceFloor(snapshot, candidate);
+    expect(summaryV3StyleCandidateSourceFloorDecision(snapshot, candidate, inspection)).toBe('unresolved');
+    expect(summaryV3StyleCandidateRepresentsRequiredFacts(snapshot, candidate)).toBe(false);
+    const { result, calls } = await runWithCandidate(candidate);
+    expect(result, JSON.stringify(result)).toMatchObject({ kind: 'candidate_ready' });
+    expect(calls).toEqual({ writer: 1, evaluator: 1 });
+  });
+
+  it('keeps the generic Stronger local semantic decision binary', () => {
+    const candidate = source.replace('locate and resolve', 'identify and resolve');
+    expect(summaryV3StyleLocalSemanticDecision(
+      createSummaryV3StyleOperationSnapshot(request()),
+      candidate,
+    )).toBe('invalid');
+  });
+
+  it('routes the new unresolved class to evaluator and preserves evaluator fact-loss rejection', async () => {
+    const candidate = source.replace('locate and resolve', 'identify and resolve');
+    const physicalRequest = unresolvedPhysicalRequest();
+    const snapshot = createSummaryV3StyleOperationSnapshot(physicalRequest);
+    expect(summaryV3StyleCandidateSourceFloorDecision(snapshot, candidate)).toBe('unresolved');
+    const { result, calls } = await runWithCandidate(candidate, {
+      request: physicalRequest,
+      evaluatorLostSourceFact: true,
+    });
+    expect(result, JSON.stringify(result)).toMatchObject({
+      kind: 'handled_failure',
+      typedReason: 'lost_source_fact',
+      evidence: {
+        writerAttempts: 1,
+        evaluatorAttempts: 1,
+        repairWriterAttempts: 0,
+        repairEvaluatorAttempts: 0,
+        writerCandidateReachedValidation: true,
+        evaluatorReached: true,
+      },
+    });
+    const event = createSummaryStrongerTerminalDiagnostic({
+      requestId: 'm8-aab563-unresolved-evaluator-loss',
+      requestedLocale: 'en',
+      mode: 'enhance_existing_content',
+      httpStatus: 422,
+      result,
+    });
+    expect(event).toMatchObject({
+      terminalReason: 'lost_source_fact',
+      finalApplyEligible: false,
+      usageDecision: 'no_increment',
+      repairAttempted: false,
+    });
+    expect(calls).toEqual({ writer: 1, evaluator: 1 });
+  });
+
+  it.each([
+    ['Serbian', 'sr', 'Trenutno radim kao Softverska inženjerka u Atlasu. Održavam pouzdane API-je, kontrolišem zalihe, i pripremam porudžbine.', 'Održavam', 'Razvijam'],
+    ['German', 'de', 'Ich arbeite aktuell als Produktentwicklerin bei Atlas. Entwickle zuverlässige APIs, kontrolliere Bestände und bereite Bestellungen vor.', 'Entwickle', 'Erstelle'],
+  ] as const)('defers one unresolved predicate without locale-specific ownership (%s)', (_label, locale, visibleSummary, oldPredicate, newPredicate) => {
+    const base = request();
+    const localized = request({
+      requestedLocale: locale,
+      sourceLocale: locale,
+      visibleSummary,
+      manifest: {
+        ...base.manifest,
+        sourceLocale: locale,
+        entries: [{
+          ...base.manifest.entries[0]!,
+          role: locale === 'sr' ? 'Softverska inženjerka' : 'Produktentwicklerin',
+          employer: 'Atlas',
+          roleSourceLocale: locale,
+          durationMonths: 0,
+          facts: [{ id: 'duty', text: `${oldPredicate} zuverlässige APIs` }],
+        }],
+      },
+    });
+    const snapshot = createSummaryV3StyleOperationSnapshot(localized);
+    const candidate = visibleSummary.replace(oldPredicate, newPredicate);
+    expect(summaryV3StyleCandidateSourceFloorDecision(snapshot, candidate)).toBe('unresolved');
+  });
+
   it('binds the physical mixed-locale request to the English visible Summary source floor', () => {
     const snapshot = createSummaryV3StyleOperationSnapshot(request());
     expect(snapshot.mode).toBe('enhance_existing_content');
@@ -1031,6 +1116,8 @@ describe('M8 AAB563 physical-equivalent M5 Stronger boundary', () => {
 describe('M8 AAB571 multi-unit writer source-floor regression', () => {
   const durationUnit = 'I bring approximately three years of experience.';
   const validBody = 'I currently work as an Electrical Service Technician at NordWerk Elektroservice Test, where I reliably maintain electrical systems, diagnose and resolve electrical faults, and support the installation of electrical components.';
+  const unresolvedCandidate = source.replace('locate and resolve', 'identify and resolve');
+  const unresolvedBody = unresolvedCandidate.slice(durationUnit.length + 1);
 
   it('admits a grounded multi-unit Stronger candidate to evaluator-owned mixed-locale role resolution', async () => {
     const { result, calls } = await runWithWriterUnitPlan([
@@ -1089,6 +1176,65 @@ describe('M8 AAB571 multi-unit writer source-floor regression', () => {
     ]);
     assertInitialWriterLostSourceFact(result, 'unit_declared_fact_binding', 5, 0);
     expect(calls).toEqual({ writer: 1, evaluator: 0 });
+  });
+
+  it('rejects a complete valid-ID unresolved candidate when the unresolved fact is assigned to the wrong unit', async () => {
+    const physicalRequest = unresolvedPhysicalRequest();
+    const snapshot = createSummaryV3StyleOperationSnapshot(physicalRequest);
+    const plans = [
+      { text: durationUnit, factIndexes: [3] },
+      { text: unresolvedBody, factIndexes: [0, 1, 2, 4] },
+    ] as const;
+    const candidate = createSummaryV3StyleCandidate(snapshot, plans.map((plan, index) => ({
+      unitId: `wrong-unit-${index + 1}`,
+      text: plan.text,
+      factIds: plan.factIndexes.map((factIndex) => snapshot.requiredFacts[factIndex]!.id),
+    })));
+    expect(summaryV3StyleCandidateSourceFloorDecision(snapshot, candidate.text)).toBe('unresolved');
+    expect(summarizeSummaryV3StyleFactCoverage(snapshot, candidate).missingFactCount).toBe(0);
+    expect(new Set(candidate.units.flatMap((unit) => unit.factIds)).size).toBe(snapshot.requiredFacts.length);
+    expect(summaryV3StyleCandidateUnitsRepresentDeclaredFacts(snapshot, candidate)).toBe(false);
+    const { result, calls } = await runWithWriterUnitPlan(plans, physicalRequest);
+    assertInitialWriterLostSourceFact(result, 'unit_declared_fact_binding', 5, 0);
+    expect(calls).toEqual({ writer: 1, evaluator: 0 });
+  });
+
+  it('passes the narrow unresolved allowance only when the unresolved fact stays on its semantic unit', async () => {
+    const physicalRequest = unresolvedPhysicalRequest();
+    const snapshot = createSummaryV3StyleOperationSnapshot(physicalRequest);
+    const plans = [
+      { text: durationUnit, factIndexes: [0] },
+      { text: unresolvedBody, factIndexes: [1, 2, 3, 4] },
+    ] as const;
+    const candidate = createSummaryV3StyleCandidate(snapshot, plans.map((plan, index) => ({
+      unitId: `correct-unit-${index + 1}`,
+      text: plan.text,
+      factIds: plan.factIndexes.map((factIndex) => snapshot.requiredFacts[factIndex]!.id),
+    })));
+    expect(summaryV3StyleCandidateSourceFloorDecision(snapshot, candidate.text)).toBe('unresolved');
+    expect(summaryV3StyleCandidateUnitsRepresentDeclaredFacts(snapshot, candidate)).toBe(true);
+    const { result, calls } = await runWithWriterUnitPlan(plans, physicalRequest);
+    expect(result, JSON.stringify(result)).toMatchObject({
+      kind: 'candidate_ready',
+      evidence: { writerAttempts: 1, evaluatorAttempts: 1, writerOutputContractFailureClass: null },
+    });
+    expect(calls).toEqual({ writer: 1, evaluator: 1 });
+  });
+
+  it('keeps the committed multi-fact fallback grouped rather than distributing it per fact', () => {
+    const physicalRequest = unresolvedPhysicalRequest();
+    const snapshot = createSummaryV3StyleOperationSnapshot(physicalRequest);
+    const plans = [
+      { text: durationUnit, factIndexes: [0] },
+      { text: validBody, factIndexes: [1, 2, 3, 4] },
+    ] as const;
+    const candidate = createSummaryV3StyleCandidate(snapshot, plans.map((plan, index) => ({
+      unitId: `distribution-unit-${index + 1}`,
+      text: plan.text,
+      factIds: plan.factIndexes.map((factIndex) => snapshot.requiredFacts[factIndex]!.id),
+    })));
+    expect(plans[1].factIndexes.length).toBeGreaterThan(1);
+    expect(summaryV3StyleCandidateUnitsRepresentDeclaredFacts(snapshot, candidate)).toBe(true);
   });
 
   it('classifies a calendar date source-floor failure with authoritative counts', async () => {
