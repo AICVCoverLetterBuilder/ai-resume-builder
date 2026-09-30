@@ -28,7 +28,7 @@ import {
   summaryV3StyleCandidatePreservesEntityFactBindings,
   summaryV3StyleCandidateUnitHash,
   summaryV3StyleCalendarDateRanges,
-  summaryV3StyleCandidateRepresentsRequiredFacts,
+  inspectSummaryV3StyleCandidateSourceFloor,
   summaryV3StyleCandidateUnitsRepresentDeclaredFacts,
   summaryV3StyleLocalSemanticDecision,
   summaryV3StyleCandidatePreservesLocks,
@@ -59,6 +59,7 @@ import {
   type SummaryV3StyleUnsupportedClaimCategory,
   type SummaryV3StyleSourceFloorMismatchClass,
   type SummaryV3StyleEmploymentStateContradictionClass,
+  type SummaryV3StyleCandidateSourceFloorInspection,
   type SummaryV3StyleEvaluatorOutputContractFailureClass,
   type SummaryV3StyleWriterOutputContractFailureClass,
   type SummaryV3StyleViolation,
@@ -217,6 +218,7 @@ type WriterParseResult =
     reason: 'lost_source_fact';
     writerOutputContractFailureClass: SummaryV3StyleWriterOutputContractFailureClass;
     candidate: SummaryV3StyleCandidate;
+    candidateSourceFloorInspection?: SummaryV3StyleCandidateSourceFloorInspection;
   }>;
 
 type EvaluatorParseResult =
@@ -232,12 +234,14 @@ function writerFailure(
   reason: Extract<WriterParseResult, { ok: false }>['reason'],
   writerOutputContractFailureClass?: SummaryV3StyleWriterOutputContractFailureClass,
   candidate?: SummaryV3StyleCandidate,
+  candidateSourceFloorInspection?: SummaryV3StyleCandidateSourceFloorInspection,
 ): WriterParseResult {
   return immutableCopy({
     ok: false as const,
     reason,
     ...(writerOutputContractFailureClass ? { writerOutputContractFailureClass } : {}),
     ...(candidate ? { candidate } : {}),
+    ...(candidateSourceFloorInspection ? { candidateSourceFloorInspection } : {}),
   }) as WriterParseResult;
 }
 
@@ -1709,6 +1713,7 @@ function classifyWriterOutputContractFailure(
   snapshot: SummaryV3StyleOperationSnapshot,
   candidate: SummaryV3StyleCandidate,
   coverage: ReturnType<typeof summarizeSummaryV3StyleFactCoverage>,
+  candidateSourceFloorInspection?: SummaryV3StyleCandidateSourceFloorInspection,
 ): SummaryV3StyleWriterOutputContractFailureClass | null {
   if (coverage.missingFactCount > 0) return 'required_fact_coverage';
   if (!summaryV3StyleCandidatePreservesLocks(snapshot, candidate.text)) return 'source_lock_preservation';
@@ -1729,7 +1734,8 @@ function classifyWriterOutputContractFailure(
   // contract because its explicit predicate transformation is style-owned.
   if (snapshot.style === 'shorter' || snapshot.style === 'professional') {
     if (summaryV3StyleLocalSemanticDecision(snapshot, candidate.text) === 'invalid') return 'candidate_source_floor';
-  } else if (!summaryV3StyleCandidateRepresentsRequiredFacts(snapshot, candidate.text)) {
+  } else if (!(candidateSourceFloorInspection
+    ?? inspectSummaryV3StyleCandidateSourceFloor(snapshot, candidate.text)).represented) {
     return 'candidate_source_floor';
   }
   if (!summaryV3StyleCandidateUnitsRepresentDeclaredFacts(snapshot, candidate)) return 'unit_declared_fact_binding';
@@ -1776,8 +1782,23 @@ function parseWriterOutput(value: unknown, snapshot: SummaryV3StyleOperationSnap
   if (suppliedFacts.some((factId) => !allowedFacts.has(factId)) || new Set(suppliedFacts).size !== suppliedFacts.length) {
     return writerFailure('candidate_malformed');
   }
-  const writerOutputContractFailureClass = classifyWriterOutputContractFailure(snapshot, candidate, coverage);
-  if (writerOutputContractFailureClass) return writerFailure('lost_source_fact', writerOutputContractFailureClass, candidate);
+  const candidateSourceFloorInspection = snapshot.style === 'stronger'
+    ? inspectSummaryV3StyleCandidateSourceFloor(snapshot, candidate.text)
+    : undefined;
+  const writerOutputContractFailureClass = classifyWriterOutputContractFailure(
+    snapshot,
+    candidate,
+    coverage,
+    candidateSourceFloorInspection,
+  );
+  if (writerOutputContractFailureClass) return writerFailure(
+    'lost_source_fact',
+    writerOutputContractFailureClass,
+    candidate,
+    writerOutputContractFailureClass === 'candidate_source_floor'
+      ? candidateSourceFloorInspection
+      : undefined,
+  );
   return immutableCopy({ ok: true, candidate });
 }
 
@@ -2261,6 +2282,7 @@ interface EvidenceUpdate {
   readonly localFailureReason?: SummaryV3StyleFailureReason | null;
   readonly unsupportedClaimCategory?: SummaryV3StyleUnsupportedClaimCategory | null;
   readonly writerOutputContractFailureClass?: SummaryV3StyleWriterOutputContractFailureClass | null;
+  readonly candidateSourceFloorInspection?: SummaryV3StyleCandidateSourceFloorInspection | null;
   readonly evaluatorOutputContractFailureClass?: SummaryV3StyleEvaluatorOutputContractFailureClass | null;
   readonly sourceFloorMismatchClass?: SummaryV3StyleSourceFloorMismatchClass | null;
   readonly employmentStateContradictionClass?: SummaryV3StyleEmploymentStateContradictionClass | null;
@@ -2364,6 +2386,27 @@ function makeEvidence(snapshot: SummaryV3StyleOperationSnapshot, update: Evidenc
       : evaluation ? !localViolation && styleNoOp(evaluation.styleEvidence) : false,
     unsupportedClaimCategory: update.unsupportedClaimCategory ?? null,
     sourceFloorMismatchClass: effectiveSourceFloorMismatchClass,
+    ...(update.candidateSourceFloorInspection ? {
+      sourceFloorFailureStage: update.candidateSourceFloorInspection.sourceFloorFailureStage,
+      factRepresentationFailureReason: update.candidateSourceFloorInspection.firstFailedFact?.failureReason ?? null,
+      factRepresentationFailedFactIndex: update.candidateSourceFloorInspection.firstFailedFactIndex,
+      factRepresentationFailedFactSemanticKind: update.candidateSourceFloorInspection.firstFailedFact?.semanticKind ?? null,
+      requiredAnchorCount: update.candidateSourceFloorInspection.firstFailedFact?.requiredAnchorCount ?? null,
+      missingAnchorCount: update.candidateSourceFloorInspection.firstFailedFact?.missingAnchorCount ?? null,
+      requiredNumericAnchorCount: update.candidateSourceFloorInspection.firstFailedFact?.requiredNumericAnchorCount ?? null,
+      missingNumericAnchorCount: update.candidateSourceFloorInspection.firstFailedFact?.missingNumericAnchorCount ?? null,
+      durationDiagnosticStatus: update.candidateSourceFloorInspection.firstFailedFact?.durationStatus ?? null,
+      transformableDutyAvailable: update.candidateSourceFloorInspection.firstFailedFact?.transformableDutyAvailable ?? null,
+      predicateReplacementEligible: update.candidateSourceFloorInspection.firstFailedFact?.predicateReplacementEligible ?? null,
+      groundedReplacementRecognized: update.candidateSourceFloorInspection.firstFailedFact?.groundedReplacementRecognized ?? null,
+      newCandidateTokenPresent: update.candidateSourceFloorInspection.firstFailedFact?.newCandidateTokenPresent ?? null,
+      multiFactFallbackResult: update.candidateSourceFloorInspection.multiFactFallback.passed ? 'pass' as const : 'fail' as const,
+      multiFactFallbackFailureReason: update.candidateSourceFloorInspection.multiFactFallback.failureReason,
+      multiFactFallbackFailedFactIndex: update.candidateSourceFloorInspection.multiFactFallback.failureReason === 'numeric_anchor_missing'
+        || update.candidateSourceFloorInspection.multiFactFallback.failureReason === 'fact_overlap_below_threshold'
+        ? update.candidateSourceFloorInspection.multiFactFallback.failedFactIndex
+        : null,
+    } : {}),
     employmentStateContradictionClass: effectiveSourceFloorMismatchClass === 'employment_state_contradiction'
       ? (update.employmentStateContradictionClass
         ?? employmentDecision?.class
@@ -2644,6 +2687,9 @@ export async function executeSummaryV3StyleServer(
     candidate: parsedWriter.reason === 'lost_source_fact' ? parsedWriter.candidate : null,
     writerOutputContractFailureClass: parsedWriter.reason === 'lost_source_fact'
       ? parsedWriter.writerOutputContractFailureClass
+      : null,
+    candidateSourceFloorInspection: parsedWriter.reason === 'lost_source_fact'
+      ? parsedWriter.candidateSourceFloorInspection ?? null
       : null,
   }));
   // A nonnumeric material-result injection is a source-floor failure that is

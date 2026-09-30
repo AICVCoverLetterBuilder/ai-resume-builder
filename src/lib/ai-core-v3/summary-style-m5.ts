@@ -125,6 +125,72 @@ export const SUMMARY_V3_STYLE_M5_EMPLOYMENT_STATE_CONTRADICTION_CLASSES = [
 export type SummaryV3StyleEmploymentStateContradictionClass =
   (typeof SUMMARY_V3_STYLE_M5_EMPLOYMENT_STATE_CONTRADICTION_CLASSES)[number];
 
+/**
+ * Finite, privacy-safe reasons for the existing Stronger source-floor
+ * decision. These values describe only deterministic branches in the local
+ * validator; they never describe provider text or semantic quality.
+ */
+export const SUMMARY_V3_STYLE_FACT_REPRESENTATION_FAILURE_REASONS = [
+  'numeric_anchor_missing',
+  'lexical_anchor_missing',
+  'predicate_replacement_not_proven',
+  'no_grounded_replacement',
+  'no_source_anchors',
+] as const;
+export type SummaryV3StyleFactRepresentationFailureReason =
+  (typeof SUMMARY_V3_STYLE_FACT_REPRESENTATION_FAILURE_REASONS)[number];
+
+export const SUMMARY_V3_STYLE_DURATION_DIAGNOSTIC_STATUSES = [
+  'not_applicable',
+  'equivalent',
+  'not_equivalent',
+  'required_non_duration_anchor_missing',
+] as const;
+export type SummaryV3StyleDurationDiagnosticStatus =
+  (typeof SUMMARY_V3_STYLE_DURATION_DIAGNOSTIC_STATUSES)[number];
+
+export const SUMMARY_V3_STYLE_MULTI_FACT_FALLBACK_FAILURE_REASONS = [
+  'insufficient_required_fact_count',
+  'transformable_duty_present',
+  'numeric_anchor_missing',
+  'fact_overlap_below_threshold',
+  'insufficient_changed_fact_count',
+  'no_new_candidate_token',
+  'pass',
+] as const;
+export type SummaryV3StyleMultiFactFallbackFailureReason =
+  (typeof SUMMARY_V3_STYLE_MULTI_FACT_FALLBACK_FAILURE_REASONS)[number];
+
+export interface SummaryV3StyleFactRepresentationInspection {
+  readonly represented: boolean;
+  readonly failureReason: SummaryV3StyleFactRepresentationFailureReason | null;
+  readonly semanticKind: SummaryV3StyleVisibleFactKind;
+  readonly requiredAnchorCount: number;
+  readonly missingAnchorCount: number;
+  readonly requiredNumericAnchorCount: number;
+  readonly missingNumericAnchorCount: number;
+  readonly durationStatus: SummaryV3StyleDurationDiagnosticStatus;
+  readonly transformableDutyAvailable: boolean;
+  readonly predicateReplacementEligible: boolean;
+  readonly groundedReplacementRecognized: boolean;
+  readonly newCandidateTokenPresent: boolean;
+}
+
+export interface SummaryV3StyleMultiFactFallbackInspection {
+  readonly passed: boolean;
+  readonly failureReason: SummaryV3StyleMultiFactFallbackFailureReason;
+  readonly failedFactIndex: number | null;
+}
+
+export interface SummaryV3StyleCandidateSourceFloorInspection {
+  readonly represented: boolean;
+  readonly sourceFloorFailureStage: 'fact_representation' | 'multi_fact_fallback' | null;
+  readonly firstFailedFact: SummaryV3StyleFactRepresentationInspection | null;
+  /** First required fact whose individual representation check failed. */
+  readonly firstFailedFactIndex: number | null;
+  readonly multiFactFallback: SummaryV3StyleMultiFactFallbackInspection;
+}
+
 export type SummaryV3StyleViolationCode =
   | 'missing_fact'
   | 'lost_source_fact'
@@ -402,6 +468,25 @@ export type SummaryV3StyleEvidence = Readonly<{
   readonly noOpDetected: boolean;
   readonly unsupportedClaimCategory: SummaryV3StyleUnsupportedClaimCategory | null;
   readonly sourceFloorMismatchClass: SummaryV3StyleSourceFloorMismatchClass | null;
+  /** Decisive Stronger source-floor evidence; absent for other terminal paths. */
+  readonly sourceFloorFailureStage?: 'fact_representation' | 'multi_fact_fallback' | null;
+  readonly factRepresentationFailureReason?: SummaryV3StyleFactRepresentationFailureReason | null;
+  /** These fields describe firstFailedFactIndex, never the fallback index. */
+  readonly factRepresentationFailedFactIndex?: number | null;
+  readonly factRepresentationFailedFactSemanticKind?: SummaryV3StyleVisibleFactKind | null;
+  /** Exact index from the multi-fact fallback loop, only for fact-tied failures. */
+  readonly multiFactFallbackFailedFactIndex?: number | null;
+  readonly requiredAnchorCount?: number | null;
+  readonly missingAnchorCount?: number | null;
+  readonly requiredNumericAnchorCount?: number | null;
+  readonly missingNumericAnchorCount?: number | null;
+  readonly durationDiagnosticStatus?: SummaryV3StyleDurationDiagnosticStatus | null;
+  readonly transformableDutyAvailable?: boolean | null;
+  readonly predicateReplacementEligible?: boolean | null;
+  readonly groundedReplacementRecognized?: boolean | null;
+  readonly newCandidateTokenPresent?: boolean | null;
+  readonly multiFactFallbackResult?: 'pass' | 'fail' | null;
+  readonly multiFactFallbackFailureReason?: SummaryV3StyleMultiFactFallbackFailureReason | null;
   readonly employmentStateContradictionClass: SummaryV3StyleEmploymentStateContradictionClass | null;
   readonly employmentOppositeFrameDetected: boolean;
   readonly evaluatorNoOpClaimed: boolean;
@@ -1961,30 +2046,40 @@ function withoutStructuredDurationSurfaces(value: string, spans: readonly string
   return normalized;
 }
 
-function candidateTextPreservesEquivalentStructuredDurationFact(
+function inspectEquivalentStructuredDurationFact(
   snapshot: SummaryV3StyleOperationSnapshot,
   factText: string,
   candidateText: string,
-): boolean {
+): { readonly status: SummaryV3StyleDurationDiagnosticStatus; readonly represented: boolean } {
   const authorizedMonths = new Set(snapshot.selectedEntries.map((entry) => entry.durationMonths));
   const sourceDurations = structuredDurationSemanticSpans(factText)
     .filter((span) => {
       const months = summaryV3StyleDurationMonthsFromSemanticSpan(span);
       return months !== null && authorizedMonths.has(months);
     });
-  if (sourceDurations.length === 0) return false;
+  if (sourceDurations.length === 0) return { status: 'not_applicable', represented: false };
   const candidateMonths = new Set(structuredDurationSemanticSpans(candidateText)
     .map(summaryV3StyleDurationMonthsFromSemanticSpan)
     .filter((months): months is number => months !== null));
   if (!sourceDurations.every((span) => {
     const months = summaryV3StyleDurationMonthsFromSemanticSpan(span);
     return months !== null && candidateMonths.has(months);
-  })) return false;
+  })) return { status: 'not_equivalent', represented: false };
   const sourceAnchors = summaryV3StyleFactAnchorTokens(withoutStructuredDurationSurfaces(factText, sourceDurations));
   const candidateAnchors = new Set(summaryV3StyleFactAnchorTokens(
     withoutStructuredDurationSurfaces(candidateText, structuredDurationSemanticSpans(candidateText)),
   ));
-  return sourceAnchors.every((anchor) => candidateAnchors.has(anchor));
+  return sourceAnchors.every((anchor) => candidateAnchors.has(anchor))
+    ? { status: 'equivalent', represented: true }
+    : { status: 'required_non_duration_anchor_missing', represented: false };
+}
+
+function candidateTextPreservesEquivalentStructuredDurationFact(
+  snapshot: SummaryV3StyleOperationSnapshot,
+  factText: string,
+  candidateText: string,
+): boolean {
+  return inspectEquivalentStructuredDurationFact(snapshot, factText, candidateText).represented;
 }
 
 /** Locale/script-aware lexical anchors used only as a local preservation floor. */
@@ -2036,21 +2131,37 @@ function markedTransformablePredicateAnchor(
     .find((anchor) => !anchor.startsWith('span:')) || null;
 }
 
-function candidateTextRepresentsFact(
+export function inspectSummaryV3StyleFactRepresentation(
   snapshot: SummaryV3StyleOperationSnapshot,
   fact: SummaryV3StyleFact,
   candidateText: string,
-): boolean {
+): SummaryV3StyleFactRepresentationInspection {
   const candidateTokens = new Set(summaryV3StyleFactAnchorTokens(candidateText));
   const sourceAnchorTokens = new Set(snapshot.requiredFacts.flatMap((fact) => summaryV3StyleFactAnchorTokens(fact.text)));
-  if (summaryV3StyleContainsExactSurface(candidateText, fact.text)) return true;
-  if (candidateTextPreservesEquivalentStructuredDurationFact(snapshot, fact.text, candidateText)) return true;
   const anchors = summaryV3StyleFactAnchorTokens(fact.text);
-  if (anchors.length === 0) return false;
   const numericAnchors = anchors.filter((anchor) => /\p{N}/u.test(anchor));
-  if (numericAnchors.some((anchor) => !candidateTokens.has(anchor))) return false;
   const missingAnchors = anchors.filter((anchor) => !candidateTokens.has(anchor));
-  if (missingAnchors.length === 0) return true;
+  const missingNumericAnchors = numericAnchors.filter((anchor) => !candidateTokens.has(anchor));
+  const exactSurface = summaryV3StyleContainsExactSurface(candidateText, fact.text);
+  const durationInspection = inspectEquivalentStructuredDurationFact(snapshot, fact.text, candidateText);
+  const base = {
+    represented: false,
+    failureReason: null as SummaryV3StyleFactRepresentationFailureReason | null,
+    semanticKind: fact.semanticKind,
+    requiredAnchorCount: anchors.length,
+    missingAnchorCount: missingAnchors.length,
+    requiredNumericAnchorCount: numericAnchors.length,
+    missingNumericAnchorCount: missingNumericAnchors.length,
+    durationStatus: durationInspection.status,
+    transformableDutyAvailable: false,
+    predicateReplacementEligible: false,
+    groundedReplacementRecognized: false,
+    newCandidateTokenPresent: Array.from(candidateTokens).some((token) => !sourceAnchorTokens.has(token)),
+  };
+  if (exactSurface || durationInspection.represented) return { ...base, represented: true, failureReason: null };
+  if (anchors.length === 0) return { ...base, failureReason: 'no_source_anchors' };
+  if (missingNumericAnchors.length > 0) return { ...base, failureReason: 'numeric_anchor_missing' };
+  if (missingAnchors.length === 0) return { ...base, represented: true, failureReason: null };
   // Stronger may replace only the first lexical predicate after an explicit
   // recognized subject/pronoun. Any other missing anchor (such as a name,
   // tool, employer, metric, or later duty token) fails closed. The injected
@@ -2067,12 +2178,36 @@ function candidateTextRepresentsFact(
   const markedPredicateReplacement = !!markedPredicate
     && missingAnchors.length === 1
     && missingAnchors[0] === markedPredicate;
+  const transformableDutyAvailable = !!snapshot.transformableDuty && fact.transformableDuty?.hash === snapshot.transformableDuty.hash;
+  const predicateReplacementEligible = missingAnchors.length === 1
+    && (markedPredicateReplacement || missingAnchors[0] === replaceablePredicate);
   const hasGroundedReplacement = snapshot.style === 'stronger'
     && snapshot.mode === 'enhance_existing_content'
-    && (markedPredicateReplacement
-      || (missingAnchors.length === 1 && missingAnchors[0] === replaceablePredicate))
-    && Array.from(candidateTokens).some((token) => !sourceAnchorTokens.has(token));
-  return hasGroundedReplacement;
+    && predicateReplacementEligible
+    && base.newCandidateTokenPresent;
+  const failureReason = hasGroundedReplacement
+    ? null
+    : missingAnchors.length === 1 && predicateReplacementEligible
+      ? 'no_grounded_replacement'
+      : missingAnchors.length === 1
+        ? 'predicate_replacement_not_proven'
+        : 'lexical_anchor_missing';
+  return {
+    ...base,
+    represented: hasGroundedReplacement,
+    failureReason,
+    transformableDutyAvailable,
+    predicateReplacementEligible,
+    groundedReplacementRecognized: hasGroundedReplacement,
+  };
+}
+
+function candidateTextRepresentsFact(
+  snapshot: SummaryV3StyleOperationSnapshot,
+  fact: SummaryV3StyleFact,
+  candidateText: string,
+): boolean {
+  return inspectSummaryV3StyleFactRepresentation(snapshot, fact, candidateText).represented;
 }
 
 export type SummaryV3StyleLocalSemanticDecision = 'represented' | 'invalid' | 'unresolved';
@@ -2168,8 +2303,113 @@ function candidateRepresentsUnmarkedMultiFactStrongerParaphrase(
   snapshot: SummaryV3StyleOperationSnapshot,
   candidateText: string,
 ): boolean {
-  if (snapshot.requiredFacts.length < 3) return false;
-  return candidateRepresentsBoundedStrongerParaphrase(snapshot, snapshot.requiredFacts, candidateText, 2);
+  return inspectUnmarkedMultiFactStrongerParaphrase(snapshot, candidateText).passed;
+}
+
+export function inspectUnmarkedMultiFactStrongerParaphrase(
+  snapshot: SummaryV3StyleOperationSnapshot,
+  candidateText: string,
+): SummaryV3StyleMultiFactFallbackInspection {
+  if (snapshot.style !== 'stronger'
+    || snapshot.mode !== 'enhance_existing_content'
+    || snapshot.transformableDuty
+    || snapshot.requiredFacts.length < 3) {
+    const failureReason = snapshot.transformableDuty
+      ? 'transformable_duty_present'
+      : 'insufficient_required_fact_count';
+    return { passed: false, failureReason, failedFactIndex: null };
+  }
+  const candidateTokens = new Set(summaryV3StyleFactAnchorTokens(candidateText));
+  const sourceTokens = new Set(snapshot.requiredFacts.flatMap((fact) => summaryV3StyleFactAnchorTokens(fact.text)));
+  let changedFactCount = 0;
+  for (const [index, fact] of snapshot.requiredFacts.entries()) {
+    if (inspectSummaryV3StyleFactRepresentation(snapshot, fact, candidateText).represented) continue;
+    const anchors = summaryV3StyleFactAnchorTokens(fact.text);
+    if (anchors.length === 0) {
+      return { passed: false, failureReason: 'fact_overlap_below_threshold', failedFactIndex: index };
+    }
+    const numericAnchors = anchors.filter((anchor) => /\p{N}/u.test(anchor));
+    if (numericAnchors.some((anchor) => !candidateTokens.has(anchor))) {
+      return { passed: false, failureReason: 'numeric_anchor_missing', failedFactIndex: index };
+    }
+    const overlap = anchors.filter((anchor) => candidateTokens.has(anchor)).length;
+    const requiredOverlap = Math.min(3, Math.max(1, anchors.length - 1));
+    if (overlap < requiredOverlap) {
+      return { passed: false, failureReason: 'fact_overlap_below_threshold', failedFactIndex: index };
+    }
+    changedFactCount += 1;
+  }
+  if (changedFactCount < 2) {
+    return { passed: false, failureReason: 'insufficient_changed_fact_count', failedFactIndex: null };
+  }
+  if (!Array.from(candidateTokens).some((token) => !sourceTokens.has(token))) {
+    return { passed: false, failureReason: 'no_new_candidate_token', failedFactIndex: null };
+  }
+  return { passed: true, failureReason: 'pass', failedFactIndex: null };
+}
+
+export function inspectSummaryV3StyleCandidateSourceFloor(
+  snapshot: SummaryV3StyleOperationSnapshot,
+  candidateText: string,
+): SummaryV3StyleCandidateSourceFloorInspection {
+  if (snapshot.mode === 'generate_from_context') {
+    return {
+      represented: true,
+      sourceFloorFailureStage: null,
+      firstFailedFact: null,
+      firstFailedFactIndex: null,
+      multiFactFallback: { passed: true, failureReason: 'pass', failedFactIndex: null },
+    };
+  }
+  if (snapshot.style !== 'stronger') {
+    const firstFailedFactIndex = snapshot.requiredFacts.findIndex((fact) =>
+      !inspectSummaryV3StyleFactRepresentation(snapshot, fact, candidateText).represented);
+    const represented = firstFailedFactIndex < 0;
+    return {
+      represented,
+      sourceFloorFailureStage: represented ? null : 'fact_representation',
+      firstFailedFact: represented ? null : inspectSummaryV3StyleFactRepresentation(
+        snapshot,
+        snapshot.requiredFacts[firstFailedFactIndex]!,
+        candidateText,
+      ),
+      firstFailedFactIndex: represented ? null : firstFailedFactIndex,
+      multiFactFallback: { passed: false, failureReason: 'insufficient_required_fact_count', failedFactIndex: null },
+    };
+  }
+  const firstFailedFactIndex = snapshot.requiredFacts.findIndex((fact) =>
+    !inspectSummaryV3StyleFactRepresentation(snapshot, fact, candidateText).represented);
+  if (firstFailedFactIndex < 0) {
+    return {
+      represented: true,
+      sourceFloorFailureStage: null,
+      firstFailedFact: null,
+      firstFailedFactIndex: null,
+      multiFactFallback: { passed: true, failureReason: 'pass', failedFactIndex: null },
+    };
+  }
+  const firstFailedFact = inspectSummaryV3StyleFactRepresentation(
+    snapshot,
+    snapshot.requiredFacts[firstFailedFactIndex]!,
+    candidateText,
+  );
+  const multiFactFallback = inspectUnmarkedMultiFactStrongerParaphrase(snapshot, candidateText);
+  if (multiFactFallback.passed) {
+    return {
+      represented: true,
+      sourceFloorFailureStage: 'fact_representation',
+      firstFailedFact,
+      firstFailedFactIndex,
+      multiFactFallback,
+    };
+  }
+  return {
+    represented: false,
+    sourceFloorFailureStage: 'multi_fact_fallback',
+    firstFailedFact,
+    firstFailedFactIndex,
+    multiFactFallback,
+  };
 }
 
 function relationOccurrences(value: string, relationValue: string): readonly number[] {
@@ -2288,8 +2528,10 @@ export function summaryV3StyleCandidateRepresentsRequiredFacts(
   if (snapshot.style === 'shorter') {
     return summaryV3StyleLocalSemanticDecision(snapshot, candidateText) === 'represented';
   }
-  return snapshot.requiredFacts.every((fact) => candidateTextRepresentsFact(snapshot, fact, candidateText))
-    || candidateRepresentsUnmarkedMultiFactStrongerParaphrase(snapshot, candidateText);
+  if (snapshot.style !== 'stronger') {
+    return snapshot.requiredFacts.every((fact) => candidateTextRepresentsFact(snapshot, fact, candidateText));
+  }
+  return inspectSummaryV3StyleCandidateSourceFloor(snapshot, candidateText).represented;
 }
 
 /**

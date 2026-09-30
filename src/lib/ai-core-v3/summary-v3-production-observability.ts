@@ -8,6 +8,10 @@ import type {
   SummaryV3StyleMode,
   SummaryV3StyleResult,
   SummaryV3StyleWriterOutputContractFailureClass,
+  SummaryV3StyleFactRepresentationFailureReason,
+  SummaryV3StyleDurationDiagnosticStatus,
+  SummaryV3StyleMultiFactFallbackFailureReason,
+  SummaryV3StyleVisibleFactKind,
 } from './summary-style-m5';
 import type { SummaryV3StyleM5RouteFailure } from './summary-style-m5-transport';
 
@@ -62,6 +66,23 @@ export interface SummaryStrongerTerminalDiagnosticEvent {
   /** Existing bounded fact coverage from the server evidence; never recomputed here. */
   readonly coveredFactCount: number | null;
   readonly missingFactCount: number | null;
+  /** Present only for the decisive initial Stronger candidate source-floor branch. */
+  readonly sourceFloorFailureStage?: 'fact_representation' | 'multi_fact_fallback';
+  readonly factRepresentationFailureReason?: SummaryV3StyleFactRepresentationFailureReason;
+  readonly factRepresentationFailedFactIndex?: number;
+  readonly factRepresentationFailedFactSemanticKind?: SummaryV3StyleVisibleFactKind;
+  readonly requiredAnchorCount?: number;
+  readonly missingAnchorCount?: number;
+  readonly requiredNumericAnchorCount?: number;
+  readonly missingNumericAnchorCount?: number;
+  readonly durationDiagnosticStatus?: SummaryV3StyleDurationDiagnosticStatus;
+  readonly transformableDutyAvailable?: boolean;
+  readonly predicateReplacementEligible?: boolean;
+  readonly groundedReplacementRecognized?: boolean;
+  readonly newCandidateTokenPresent?: boolean;
+  readonly multiFactFallbackResult?: 'pass' | 'fail';
+  readonly multiFactFallbackFailureReason?: SummaryV3StyleMultiFactFallbackFailureReason;
+  readonly multiFactFallbackFailedFactIndex?: number;
   readonly repairAttempted: boolean;
   readonly repairProviderRequestAttempted: boolean;
   readonly evaluatorAttempted: boolean;
@@ -298,6 +319,30 @@ export function createSummaryStrongerTerminalDiagnostic(
         : input.result.typedReason === 'safe_no_op'
           ? 'safe_no_op'
           : safeCode(input.result.typedReason, 'unknown_failure');
+  const candidateSourceFloorEvidence: SummaryV3StyleEvidence | null = !routeFailure
+    && input.result.kind !== 'not_applicable'
+    ? input.result.evidence
+    : null;
+  const sourceFloorEvidence = candidateSourceFloorEvidence?.writerOutputContractFailureClass === 'candidate_source_floor'
+    ? {
+      ...(candidateSourceFloorEvidence.sourceFloorFailureStage ? { sourceFloorFailureStage: candidateSourceFloorEvidence.sourceFloorFailureStage } : {}),
+      ...(candidateSourceFloorEvidence.factRepresentationFailureReason ? { factRepresentationFailureReason: candidateSourceFloorEvidence.factRepresentationFailureReason } : {}),
+      ...(typeof candidateSourceFloorEvidence.factRepresentationFailedFactIndex === 'number' ? { factRepresentationFailedFactIndex: safeNonNegativeInteger(candidateSourceFloorEvidence.factRepresentationFailedFactIndex) } : {}),
+      ...(candidateSourceFloorEvidence.factRepresentationFailedFactSemanticKind ? { factRepresentationFailedFactSemanticKind: candidateSourceFloorEvidence.factRepresentationFailedFactSemanticKind } : {}),
+      ...(typeof candidateSourceFloorEvidence.requiredAnchorCount === 'number' ? { requiredAnchorCount: safeNonNegativeInteger(candidateSourceFloorEvidence.requiredAnchorCount) } : {}),
+      ...(typeof candidateSourceFloorEvidence.missingAnchorCount === 'number' ? { missingAnchorCount: safeNonNegativeInteger(candidateSourceFloorEvidence.missingAnchorCount) } : {}),
+      ...(typeof candidateSourceFloorEvidence.requiredNumericAnchorCount === 'number' ? { requiredNumericAnchorCount: safeNonNegativeInteger(candidateSourceFloorEvidence.requiredNumericAnchorCount) } : {}),
+      ...(typeof candidateSourceFloorEvidence.missingNumericAnchorCount === 'number' ? { missingNumericAnchorCount: safeNonNegativeInteger(candidateSourceFloorEvidence.missingNumericAnchorCount) } : {}),
+      ...(candidateSourceFloorEvidence.durationDiagnosticStatus ? { durationDiagnosticStatus: candidateSourceFloorEvidence.durationDiagnosticStatus } : {}),
+      ...(typeof candidateSourceFloorEvidence.transformableDutyAvailable === 'boolean' ? { transformableDutyAvailable: candidateSourceFloorEvidence.transformableDutyAvailable } : {}),
+      ...(typeof candidateSourceFloorEvidence.predicateReplacementEligible === 'boolean' ? { predicateReplacementEligible: candidateSourceFloorEvidence.predicateReplacementEligible } : {}),
+      ...(typeof candidateSourceFloorEvidence.groundedReplacementRecognized === 'boolean' ? { groundedReplacementRecognized: candidateSourceFloorEvidence.groundedReplacementRecognized } : {}),
+      ...(typeof candidateSourceFloorEvidence.newCandidateTokenPresent === 'boolean' ? { newCandidateTokenPresent: candidateSourceFloorEvidence.newCandidateTokenPresent } : {}),
+      ...(candidateSourceFloorEvidence.multiFactFallbackResult ? { multiFactFallbackResult: candidateSourceFloorEvidence.multiFactFallbackResult } : {}),
+      ...(candidateSourceFloorEvidence.multiFactFallbackFailureReason ? { multiFactFallbackFailureReason: candidateSourceFloorEvidence.multiFactFallbackFailureReason } : {}),
+      ...(typeof candidateSourceFloorEvidence.multiFactFallbackFailedFactIndex === 'number' ? { multiFactFallbackFailedFactIndex: safeNonNegativeInteger(candidateSourceFloorEvidence.multiFactFallbackFailedFactIndex) } : {}),
+    }
+    : {};
 
   return {
     event: SUMMARY_STRONGER_TERMINAL_EVENT_NAME,
@@ -319,6 +364,7 @@ export function createSummaryStrongerTerminalDiagnostic(
     missingFactCount: evidence && 'missingFactCount' in evidence
       ? safeNonNegativeInteger(evidence.missingFactCount)
       : null,
+    ...sourceFloorEvidence,
     repairAttempted,
     repairProviderRequestAttempted: styleRepairProviderRequestAttempted(input.result),
     evaluatorAttempted: evidence?.evaluatorReached === true

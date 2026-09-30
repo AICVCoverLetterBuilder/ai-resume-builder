@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
+  SUMMARY_V3_STYLE_FACT_REPRESENTATION_FAILURE_REASONS,
   SUMMARY_V3_STYLE_M5_EVALUATOR_TOOL_NAME,
   SUMMARY_V3_STYLE_M5_WRITER_TOOL_NAME,
   createSummaryV3StyleCandidate,
   createSummaryV3StyleOperationSnapshot,
   hashSummaryV3StyleValue,
+  inspectSummaryV3StyleCandidateSourceFloor,
+  inspectSummaryV3StyleFactRepresentation,
+  inspectUnmarkedMultiFactStrongerParaphrase,
   summarizeSummaryV3StyleFactCoverage,
   summaryV3StyleCandidatePreservesCalendarDateSurfaces,
   summaryV3StyleCandidatePreservesEntityFactBindings,
@@ -789,6 +793,238 @@ describe('M8 AAB563 physical-equivalent M5 Stronger boundary', () => {
       },
     });
     expect(calls).toEqual({ writer: 1, evaluator: 1 });
+  });
+  it('exposes bounded fact and fallback source-floor reasons without raw source material', () => {
+    const snapshot = createSummaryV3StyleOperationSnapshot(request());
+    const exact = inspectSummaryV3StyleFactRepresentation(snapshot, snapshot.requiredFacts[0]!, source);
+    expect(exact.represented).toBe(true);
+    expect(exact.failureReason).toBeNull();
+    expect(exact.requiredAnchorCount).toBeGreaterThan(0);
+
+    const numericSnapshot = createSummaryV3StyleOperationSnapshot(request({
+      visibleSummary: source.replace('three years', '3 years'),
+    }));
+    const durationFact = numericSnapshot.requiredFacts.find((fact) => fact.text.includes('3 years'))
+      || numericSnapshot.requiredFacts[0]!;
+    const equivalentDuration = inspectSummaryV3StyleFactRepresentation(
+      numericSnapshot,
+      durationFact,
+      durationFact.text.replace('3 years', '36 months'),
+    );
+    expect(equivalentDuration.represented).toBe(true);
+    expect(equivalentDuration.durationStatus).toBe('equivalent');
+    const numericLoss = inspectSummaryV3StyleFactRepresentation(
+      numericSnapshot,
+      durationFact,
+      source.replace('three years', '2 years'),
+    );
+    expect(numericLoss.represented).toBe(false);
+    expect(numericLoss.failureReason).toBe('numeric_anchor_missing');
+    expect(numericLoss.durationStatus).toBe('not_equivalent');
+    expect(numericLoss.missingNumericAnchorCount).toBeGreaterThan(0);
+
+    const lexicalLoss = inspectSummaryV3StyleFactRepresentation(
+      snapshot,
+      snapshot.requiredFacts.find((fact) => fact.text.includes('installation')) || snapshot.requiredFacts[2]!,
+      source.replace('installation of electrical components', 'warehouse administration'),
+    );
+    expect(lexicalLoss.represented).toBe(false);
+    expect(['lexical_anchor_missing', 'predicate_replacement_not_proven', 'no_grounded_replacement'])
+      .toContain(lexicalLoss.failureReason);
+
+    const floor = inspectSummaryV3StyleCandidateSourceFloor(snapshot, source.replace('three years', ''));
+    expect(floor.represented).toBe(false);
+    expect(floor.firstFailedFactIndex).toBeTypeOf('number');
+    expect(floor.firstFailedFact?.semanticKind).toBeTypeOf('string');
+    expect(floor.multiFactFallback.passed).toBe(false);
+    expect(JSON.stringify(floor)).not.toContain('Electrical');
+    expect(JSON.stringify(floor)).not.toContain('NordWerk');
+    expect(JSON.stringify(floor)).not.toContain('three years');
+  });
+
+  it('keeps fact failure reasons finite, reachable, and truthfully counted', () => {
+    expect(SUMMARY_V3_STYLE_FACT_REPRESENTATION_FAILURE_REASONS).toEqual([
+      'numeric_anchor_missing',
+      'lexical_anchor_missing',
+      'predicate_replacement_not_proven',
+      'no_grounded_replacement',
+      'no_source_anchors',
+    ]);
+
+    const base = createSummaryV3StyleOperationSnapshot(request());
+    const synthetic = (text: string, candidate: string) => {
+      const fact = { ...base.requiredFacts[0]!, text, semanticKind: 'duty' as const };
+      const snapshot = { ...base, sourceSummary: text, requiredFacts: [fact] };
+      return inspectSummaryV3StyleFactRepresentation(snapshot, fact, candidate);
+    };
+
+    const lexical = synthetic('I build APIs', 'I engineer');
+    expect(lexical.failureReason).toBe('lexical_anchor_missing');
+    expect(lexical.missingAnchorCount).toBeGreaterThan(0);
+    expect('missingPredicateAnchorCount' in lexical).toBe(false);
+
+    expect(synthetic('Technician builds APIs', 'Technician engineers APIs').failureReason)
+      .toBe('predicate_replacement_not_proven');
+    expect(synthetic('I build APIs', 'I APIs').failureReason).toBe('no_grounded_replacement');
+    expect(synthetic('I', 'unrelated').failureReason).toBe('no_source_anchors');
+  });
+
+  it('keeps the physical candidate-source-floor terminal singular and projects only bounded evidence', async () => {
+    const candidate = 'I currently work as an Electrical Service Technician at NordWerk Elektroservice Test, where I reliably maintain electrical systems, diagnose and resolve electrical faults, and support the installation of electrical components.';
+    const { result, calls } = await runWithCandidate(candidate);
+    expect(result).toMatchObject({
+      kind: 'handled_failure',
+      typedReason: 'lost_source_fact',
+      evidence: {
+        writerOutputContractFailureClass: 'candidate_source_floor',
+        writerCandidateReachedValidation: true,
+        evaluatorReached: false,
+        sourceFloorFailureStage: 'multi_fact_fallback',
+        factRepresentationFailureReason: expect.any(String),
+        factRepresentationFailedFactIndex: expect.any(Number),
+        factRepresentationFailedFactSemanticKind: expect.any(String),
+        multiFactFallbackFailedFactIndex: expect.any(Number),
+        multiFactFallbackResult: 'fail',
+      },
+    });
+    const event = createSummaryStrongerTerminalDiagnostic({
+      requestId: 'bounded-source-floor-test',
+      requestedLocale: 'en',
+      mode: 'enhance_existing_content',
+      httpStatus: 422,
+      result,
+    });
+    expect(event.event).toBe('summary_stronger_terminal');
+    expect(event.writerFailureClass).toBe('candidate_source_floor');
+    expect(event.writerCandidateReachedValidation).toBe(true);
+    expect(event.evaluatorAttempted).toBe(false);
+    expect(JSON.stringify(event)).not.toContain('NordWerk');
+    expect(JSON.stringify(event)).not.toContain('Electrical');
+    expect(calls).toEqual({ writer: 1, evaluator: 0 });
+  });
+
+  it('retains boolean parity for the unmarked multi-fact Stronger fallback', () => {
+    const snapshot = createSummaryV3StyleOperationSnapshot(request());
+    const candidate = 'I bring approximately three years of experience. I currently maintain electrical systems, diagnose and resolve electrical faults, and support installation of electrical components at NordWerk Elektroservice Test.';
+    const inspection = inspectUnmarkedMultiFactStrongerParaphrase(snapshot, candidate);
+    expect(inspection.passed).toBe(summaryV3StyleCandidateRepresentsRequiredFacts(snapshot, candidate));
+    expect(inspection.failureReason).toBeTypeOf('string');
+  });
+
+  it('distinguishes every finite multi-fact fallback branch without token values', () => {
+    const snapshot = createSummaryV3StyleOperationSnapshot(request());
+    const withFacts = (texts: readonly string[]) => ({
+      ...snapshot,
+      requiredFacts: texts.map((text, index) => ({
+        ...snapshot.requiredFacts[index % snapshot.requiredFacts.length]!,
+        id: `diagnostic-fact-${index}`,
+        text,
+        hash: `diagnostic-hash-${index}`,
+        semanticKind: 'other' as const,
+      })),
+      sourceSummary: texts.join('. '),
+      sourceSummaryHash: 'diagnostic-source',
+    });
+    expect(inspectUnmarkedMultiFactStrongerParaphrase({ ...snapshot, requiredFacts: snapshot.requiredFacts.slice(0, 2) }, 'unrelated'))
+      .toMatchObject({ failureReason: 'insufficient_required_fact_count', failedFactIndex: null });
+    expect(inspectUnmarkedMultiFactStrongerParaphrase({
+      ...snapshot,
+      transformableDuty: { sourceFactId: 'duty', sourcePredicate: 'builds', predicateAnchor: 'builds', hash: 'duty-hash' },
+    }, 'unrelated')).toMatchObject({ failureReason: 'transformable_duty_present', failedFactIndex: null });
+    expect(inspectUnmarkedMultiFactStrongerParaphrase(
+      withFacts(['alpha 20 beta', 'delta epsilon zeta', 'eta theta iota']),
+      'alpha beta delta epsilon eta theta',
+    )).toMatchObject({ failureReason: 'numeric_anchor_missing', failedFactIndex: 0 });
+    expect(inspectUnmarkedMultiFactStrongerParaphrase(
+      withFacts(['alpha beta gamma', 'delta epsilon zeta', 'eta theta iota']),
+      'unrelated',
+    )).toMatchObject({ failureReason: 'fact_overlap_below_threshold', failedFactIndex: 0 });
+    expect(inspectUnmarkedMultiFactStrongerParaphrase(snapshot, source))
+      .toMatchObject({ failureReason: 'insufficient_changed_fact_count', failedFactIndex: null });
+    const noNew = inspectUnmarkedMultiFactStrongerParaphrase(
+      withFacts(['alpha beta gamma', 'delta epsilon zeta', 'eta theta iota']),
+      'alpha beta delta epsilon eta theta',
+    );
+    expect(noNew).toMatchObject({ failureReason: 'no_new_candidate_token', failedFactIndex: null });
+    const passed = inspectUnmarkedMultiFactStrongerParaphrase(
+      withFacts(['alpha beta gamma', 'delta epsilon zeta', 'eta theta iota']),
+      'alpha beta new delta epsilon eta theta',
+    );
+    expect(passed).toMatchObject({ passed: true, failureReason: 'pass' });
+    expect(passed.failedFactIndex).toBeNull();
+    expect(JSON.stringify(noNew)).not.toContain('alpha');
+  });
+
+  it('preserves distinct individual and fallback failure indices in terminal evidence', async () => {
+    const physicalRequest = request({
+      visibleSummary: 'Technician builds APIs in Berlin. I processed 20 orders. I managed logistics.',
+      visibleSummaryFacts: [
+        { id: 'first', text: 'Technician builds APIs in Berlin', semanticKind: 'duty' },
+        { id: 'second', text: 'I processed 20 orders', semanticKind: 'achievement' },
+        { id: 'third', text: 'I managed logistics', semanticKind: 'duty' },
+      ],
+      manifest: {
+        ...request().manifest,
+        entries: [{ ...request().manifest.entries[0]!, role: 'Technician', employer: 'Acme', facts: [] }],
+      },
+    });
+    const candidate = 'Technician engineers APIs in Berlin and processed orders while managed logistics.';
+    const snapshot = createSummaryV3StyleOperationSnapshot(physicalRequest);
+    const floor = inspectSummaryV3StyleCandidateSourceFloor(snapshot, candidate);
+    expect(floor.represented).toBe(false);
+    expect(floor.sourceFloorFailureStage).toBe('multi_fact_fallback');
+    expect(floor.firstFailedFactIndex).toBe(0);
+    expect(floor.multiFactFallback).toMatchObject({
+      failureReason: 'numeric_anchor_missing',
+      failedFactIndex: 1,
+    });
+
+    const { result } = await runWithCandidate(candidate, { request: physicalRequest });
+    expect(result).toMatchObject({
+      kind: 'handled_failure',
+      evidence: {
+        sourceFloorFailureStage: 'multi_fact_fallback',
+        factRepresentationFailedFactIndex: 0,
+        factRepresentationFailedFactSemanticKind: expect.any(String),
+        multiFactFallbackResult: 'fail',
+        multiFactFallbackFailureReason: 'numeric_anchor_missing',
+        multiFactFallbackFailedFactIndex: 1,
+      },
+    });
+    const event = createSummaryStrongerTerminalDiagnostic({
+      requestId: 'distinct-index-test',
+      requestedLocale: 'en',
+      mode: 'enhance_existing_content',
+      httpStatus: 422,
+      result,
+    });
+    expect(event).toMatchObject({
+      factRepresentationFailedFactIndex: 0,
+      factRepresentationFailedFactSemanticKind: expect.any(String),
+      multiFactFallbackFailureReason: 'numeric_anchor_missing',
+      multiFactFallbackFailedFactIndex: 1,
+    });
+    expect(JSON.stringify(event)).not.toContain('Technician');
+    expect(JSON.stringify(event)).not.toContain('Berlin');
+  });
+
+  it('records predicate replacement eligibility and rejection as bounded state', () => {
+    const base = createSummaryV3StyleOperationSnapshot(request({
+      visibleSummary: 'Ava builds APIs.',
+      protectedEntities: ['Ava'],
+      visibleSummaryFacts: [{
+        id: 'duty', text: 'Ava builds APIs.', semanticKind: 'duty',
+        transformableDuty: { sourcePredicate: 'builds', predicateAnchor: 'builds' },
+      }],
+    }));
+    const markedFact = base.requiredFacts.find((fact) => fact.text.includes('builds')) || base.requiredFacts[0]!;
+    const marked = inspectSummaryV3StyleFactRepresentation(base, markedFact, 'Ava engineers APIs.');
+    expect(marked.represented).toBe(true);
+    expect(marked.predicateReplacementEligible).toBe(true);
+    expect(marked.groundedReplacementRecognized).toBe(true);
+    const rejected = inspectSummaryV3StyleFactRepresentation(base, markedFact, 'Ava engineers.');
+    expect(rejected.represented).toBe(false);
+    expect(rejected.failureReason).toBe('lexical_anchor_missing');
   });
 });
 
