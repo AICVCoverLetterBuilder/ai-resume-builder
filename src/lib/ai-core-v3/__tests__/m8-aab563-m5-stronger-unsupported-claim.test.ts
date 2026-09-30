@@ -434,6 +434,39 @@ describe('M8 AAB563 physical-equivalent M5 Stronger boundary', () => {
     expect(calls).toEqual({ writer: 1, evaluator: 1 });
   });
 
+  it('uses the same source-lock inspection for writer classification and bounded evidence', async () => {
+    const candidate = 'I bring approximately three years of experience. I currently work as an Electrical Service Technician, maintaining electrical systems, diagnosing and resolving electrical faults, and supporting the installation of electrical components.';
+    const { result, calls } = await runWithCandidate(candidate);
+    expect(result, JSON.stringify(result)).toMatchObject({
+      kind: 'handled_failure',
+      typedReason: 'lost_source_fact',
+      evidence: {
+        writerOutputContractFailureClass: 'source_lock_preservation',
+        sourceLockFailureKind: 'employer',
+        sourceLockFailureReason: 'identity_surface_missing',
+        sourceLockFailedIndex: expect.any(Number),
+        writerCandidateReachedValidation: true,
+        evaluatorReached: false,
+      },
+    });
+    const event = createSummaryStrongerTerminalDiagnostic({
+      requestId: 'source-lock-terminal-test',
+      requestedLocale: 'en',
+      mode: 'enhance_existing_content',
+      httpStatus: 422,
+      result,
+    });
+    expect(event).toMatchObject({
+      writerFailureClass: 'source_lock_preservation',
+      sourceLockFailureKind: 'employer',
+      sourceLockFailureReason: 'identity_surface_missing',
+      evaluatorAttempted: false,
+      usageDecision: 'no_increment',
+    });
+    expect(JSON.stringify(event)).not.toContain('NordWerk');
+    expect(calls).toEqual({ writer: 1, evaluator: 0 });
+  });
+
   it('keeps evaluator-origin lost_source_fact distinct from initial writer parser loss', async () => {
     const candidate = 'I bring approximately three years of experience. I currently work as an Electrical Service Technician at NordWerk Elektroservice Test, maintaining electrical systems, diagnosing and resolving electrical faults, and supporting the installation of electrical components.';
     const { result, calls } = await runWithCandidate(candidate, { evaluatorLostSourceFact: true });

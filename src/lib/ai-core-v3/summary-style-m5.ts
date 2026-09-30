@@ -312,6 +312,25 @@ export interface SummaryV3StyleEntityLock {
   readonly value: string;
 }
 
+export const SUMMARY_V3_STYLE_SOURCE_LOCK_FAILURE_REASONS = [
+  'identity_surface_missing',
+  'identity_unattested_suffix',
+  'identity_unattested_terminal_extension',
+  'identity_unattested_prefix',
+  'duration_surface_missing',
+] as const;
+
+export type SummaryV3StyleSourceLockFailureReason =
+  (typeof SUMMARY_V3_STYLE_SOURCE_LOCK_FAILURE_REASONS)[number];
+
+/** Privacy-safe explanation of the first deterministic source-lock failure. */
+export type SummaryV3StyleSourceLockInspection = Readonly<{
+  readonly preserved: boolean;
+  readonly failureKind: SummaryV3StyleEntityLock['kind'] | null;
+  readonly failureReason: SummaryV3StyleSourceLockFailureReason | null;
+  readonly failedIndex: number | null;
+}>;
+
 export interface SummaryV3StyleSourceUnit {
   readonly id: string;
   readonly hash: string;
@@ -470,6 +489,10 @@ export type SummaryV3StyleEvidence = Readonly<{
   readonly sourceFloorMismatchClass: SummaryV3StyleSourceFloorMismatchClass | null;
   /** Decisive Stronger source-floor evidence; absent for other terminal paths. */
   readonly sourceFloorFailureStage?: 'fact_representation' | 'multi_fact_fallback' | null;
+  /** Decisive source-lock evidence; emitted only for source-lock rejection. */
+  readonly sourceLockFailureKind?: SummaryV3StyleEntityLock['kind'] | null;
+  readonly sourceLockFailureReason?: SummaryV3StyleSourceLockFailureReason | null;
+  readonly sourceLockFailedIndex?: number | null;
   readonly factRepresentationFailureReason?: SummaryV3StyleFactRepresentationFailureReason | null;
   /** These fields describe firstFailedFactIndex, never the fallback index. */
   readonly factRepresentationFailedFactIndex?: number | null;
@@ -3446,18 +3469,33 @@ export function summaryV3StyleLocaleContentMatches(value: string, locale: Summar
   return strongestForeign < 2 || own >= strongestForeign;
 }
 
-export function summaryV3StyleCandidatePreservesLocks(
+type SummaryV3StyleIdentityLockInspection = Readonly<{
+  readonly preserved: boolean;
+  readonly failureReason: SummaryV3StyleSourceLockFailureReason | null;
+}>;
+
+function preservedIdentityLock(): SummaryV3StyleIdentityLockInspection {
+  return immutableCopy({ preserved: true, failureReason: null }) as SummaryV3StyleIdentityLockInspection;
+}
+
+function failedIdentityLock(failureReason: Extract<SummaryV3StyleSourceLockFailureReason, `identity_${string}`>): SummaryV3StyleIdentityLockInspection {
+  return immutableCopy({ preserved: false, failureReason }) as SummaryV3StyleIdentityLockInspection;
+}
+
+export function inspectSummaryV3StyleCandidatePreservesLocks(
   snapshot: SummaryV3StyleOperationSnapshot,
   candidateText: string,
-): boolean {
+): SummaryV3StyleSourceLockInspection {
   // The empty-state writer may use supported locale inflection (`Atlas` ->
   // `Atlasu`) when synthesizing from the manifest. Literal source locks are
   // an enhance-existing-content preservation floor; generated semantic
   // grounding remains bound by the evaluator's immutable manifest contract.
-  if (snapshot.mode === 'generate_from_context') return true;
+  if (snapshot.mode === 'generate_from_context') {
+    return immutableCopy({ preserved: true, failureKind: null, failureReason: null, failedIndex: null }) as SummaryV3StyleSourceLockInspection;
+  }
   const normalizedCandidate = normalizeSummaryV3StyleText(candidateText);
   const normalizedNumericCandidate = normalizeSummaryV3StyleNumericSurface(normalizedCandidate);
-  return snapshot.entityLocks.every((lock) => {
+  for (const [failedIndex, lock] of snapshot.entityLocks.entries()) {
     const normalizedLock = normalizeSummaryV3StyleText(lock.value);
     // Future callers explicitly designate `entity` locks (for example a
     // person name) as literal-preservation values. Every identity lock also
@@ -3471,10 +3509,10 @@ export function summaryV3StyleCandidatePreservesLocks(
           && normalizeSummaryV3StyleText(fact.text) === normalizedLock))
         ?.rolePresentation?.text;
       if (rolePresentation
-        && summaryV3StyleContainsExactSurface(candidateText, rolePresentation, true)) return true;
+        && summaryV3StyleContainsExactSurface(candidateText, rolePresentation, true)) continue;
     }
-    return lock.kind === 'entity' || lock.kind === 'role' || lock.kind === 'employer'
-      ? candidatePreservesUnexpandedIdentityLock(
+    const lockInspection = lock.kind === 'entity' || lock.kind === 'role' || lock.kind === 'employer'
+      ? inspectCandidatePreservesUnexpandedIdentityLock(
         snapshot,
         normalizedCandidate,
         normalizedLock,
@@ -3484,13 +3522,33 @@ export function summaryV3StyleCandidatePreservesLocks(
       // numeral must bind to the same duration without permitting `24` to
       // match `240` as a substring.
       : lock.kind === 'duration'
-        ? summaryV3StyleContainsExactSurface(
+        ? (summaryV3StyleContainsExactSurface(
           normalizedNumericCandidate,
           normalizeSummaryV3StyleNumericSurface(normalizedLock),
           true,
         )
-      : summaryV3StyleContainsExactSurface(normalizedCandidate, normalizedLock);
-  });
+          ? preservedIdentityLock()
+          : immutableCopy({ preserved: false, failureReason: 'duration_surface_missing' }) as SummaryV3StyleIdentityLockInspection)
+      : (summaryV3StyleContainsExactSurface(normalizedCandidate, normalizedLock)
+          ? preservedIdentityLock()
+          : failedIdentityLock('identity_surface_missing'));
+    if (!lockInspection.preserved) {
+      return immutableCopy({
+        preserved: false,
+        failureKind: lock.kind,
+        failureReason: lockInspection.failureReason,
+        failedIndex,
+      }) as SummaryV3StyleSourceLockInspection;
+    }
+  }
+  return immutableCopy({ preserved: true, failureKind: null, failureReason: null, failedIndex: null }) as SummaryV3StyleSourceLockInspection;
+}
+
+export function summaryV3StyleCandidatePreservesLocks(
+  snapshot: SummaryV3StyleOperationSnapshot,
+  candidateText: string,
+): boolean {
+  return inspectSummaryV3StyleCandidatePreservesLocks(snapshot, candidateText).preserved;
 }
 
 /**
@@ -3656,15 +3714,16 @@ const NONMATERIAL_IDENTITY_PREFIXES = new Set([
   'senior', 'principal',
 ]);
 
-function candidatePreservesUnexpandedIdentityLock(
+function inspectCandidatePreservesUnexpandedIdentityLock(
   snapshot: SummaryV3StyleOperationSnapshot,
   candidateText: string,
   lockValue: string,
   lockKind: Extract<SummaryV3StyleEntityLock['kind'], 'entity' | 'role' | 'employer'>,
-): boolean {
+): SummaryV3StyleIdentityLockInspection {
   const caseSensitive = lockKind === 'entity';
   const haystack = normalizeSummaryV3StyleText(candidateText);
   const needle = normalizeSummaryV3StyleText(lockValue);
+  if (!needle || !haystack) return failedIdentityLock('identity_surface_missing');
   const searchableHaystack = caseSensitive ? haystack : haystack.toLocaleLowerCase();
   const searchableNeedle = caseSensitive ? needle : needle.toLocaleLowerCase();
   const source = normalizeSummaryV3StyleText(snapshot.sourceSummary);
@@ -3708,12 +3767,22 @@ function candidatePreservesUnexpandedIdentityLock(
         // fluent reformats such as `Atlas who builds ...` are not rejected.
         || (firstSuffix && sourceHasTerminalLock && !sourceSuffixes.has(firstSuffix)
           && (lockKind === 'entity' || immediateIdentitySuffixIsTerminalExtension(followingText)))
-        || (prefixIntroducesUnattestedMaterial && followsSourceIdentityContext)) return false;
+        || (prefixIntroducesUnattestedMaterial && followsSourceIdentityContext)) {
+        const suffixChainFailure = (firstSuffix && suffixes.slice(1).some((suffix) => sourceSuffixes.has(suffix)) && !sourceSuffixes.has(firstSuffix))
+          || (firstSuffix && punctuationDelimitedSuccessor && sourceSuffixes.has(punctuationDelimitedSuccessor)
+            && !sourceSuffixes.has(firstSuffix));
+        if (suffixChainFailure) return failedIdentityLock('identity_unattested_suffix');
+        if (firstSuffix && sourceHasTerminalLock && !sourceSuffixes.has(firstSuffix)
+          && (lockKind === 'entity' || immediateIdentitySuffixIsTerminalExtension(followingText))) {
+          return failedIdentityLock('identity_unattested_terminal_extension');
+        }
+        return failedIdentityLock('identity_unattested_prefix');
+      }
       foundStandalone = true;
     }
     start = index + searchableNeedle.length;
   }
-  return foundStandalone;
+  return foundStandalone ? preservedIdentityLock() : failedIdentityLock('identity_surface_missing');
 }
 
 export function createSummaryV3StyleCandidate(

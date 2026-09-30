@@ -27,12 +27,12 @@ import {
   summaryV3StyleCandidatePreservesExactMaterialSurfaces,
   summaryV3StyleCandidatePreservesEntityFactBindings,
   summaryV3StyleCandidateUnitHash,
+  inspectSummaryV3StyleCandidatePreservesLocks,
   summaryV3StyleCalendarDateRanges,
   inspectSummaryV3StyleCandidateSourceFloor,
   summaryV3StyleCandidateSourceFloorDecision,
   summaryV3StyleCandidateUnitsRepresentDeclaredFacts,
   summaryV3StyleLocalSemanticDecision,
-  summaryV3StyleCandidatePreservesLocks,
   summaryV3StyleDurationMonthsFromSemanticSpan,
   summaryV3StyleFactAnchorTokens,
   summaryV3StyleOrderedFactTokens,
@@ -59,6 +59,7 @@ import {
   type SummaryV3StyleSafeNoOpEligibilityReason,
   type SummaryV3StyleUnsupportedClaimCategory,
   type SummaryV3StyleSourceFloorMismatchClass,
+  type SummaryV3StyleSourceLockInspection,
   type SummaryV3StyleEmploymentStateContradictionClass,
   type SummaryV3StyleCandidateSourceFloorInspection,
   type SummaryV3StyleEvaluatorOutputContractFailureClass,
@@ -220,6 +221,7 @@ type WriterParseResult =
     writerOutputContractFailureClass: SummaryV3StyleWriterOutputContractFailureClass;
     candidate: SummaryV3StyleCandidate;
     candidateSourceFloorInspection?: SummaryV3StyleCandidateSourceFloorInspection;
+    sourceLockInspection?: SummaryV3StyleSourceLockInspection;
   }>;
 
 type EvaluatorParseResult =
@@ -236,6 +238,7 @@ function writerFailure(
   writerOutputContractFailureClass?: SummaryV3StyleWriterOutputContractFailureClass,
   candidate?: SummaryV3StyleCandidate,
   candidateSourceFloorInspection?: SummaryV3StyleCandidateSourceFloorInspection,
+  sourceLockInspection?: SummaryV3StyleSourceLockInspection,
 ): WriterParseResult {
   return immutableCopy({
     ok: false as const,
@@ -243,6 +246,7 @@ function writerFailure(
     ...(writerOutputContractFailureClass ? { writerOutputContractFailureClass } : {}),
     ...(candidate ? { candidate } : {}),
     ...(candidateSourceFloorInspection ? { candidateSourceFloorInspection } : {}),
+    ...(sourceLockInspection ? { sourceLockInspection } : {}),
   }) as WriterParseResult;
 }
 
@@ -1715,9 +1719,10 @@ function classifyWriterOutputContractFailure(
   candidate: SummaryV3StyleCandidate,
   coverage: ReturnType<typeof summarizeSummaryV3StyleFactCoverage>,
   candidateSourceFloorInspection?: SummaryV3StyleCandidateSourceFloorInspection,
+  sourceLockInspection: SummaryV3StyleSourceLockInspection = inspectSummaryV3StyleCandidatePreservesLocks(snapshot, candidate.text),
 ): SummaryV3StyleWriterOutputContractFailureClass | null {
   if (coverage.missingFactCount > 0) return 'required_fact_coverage';
-  if (!summaryV3StyleCandidatePreservesLocks(snapshot, candidate.text)) return 'source_lock_preservation';
+  if (!sourceLockInspection.preserved) return 'source_lock_preservation';
   if (!summaryV3StyleCandidatePreservesCalendarDateSurfaces(snapshot, candidate.text)) return 'calendar_date_source_floor';
   // Title-cased duty nouns (for example German `Systeme`) are not immutable
   // identity locks.  In Shorter and Professional they may be paraphrased and
@@ -1789,11 +1794,13 @@ function parseWriterOutput(value: unknown, snapshot: SummaryV3StyleOperationSnap
   const candidateSourceFloorInspection = snapshot.style === 'stronger'
     ? inspectSummaryV3StyleCandidateSourceFloor(snapshot, candidate.text)
     : undefined;
+  const sourceLockInspection = inspectSummaryV3StyleCandidatePreservesLocks(snapshot, candidate.text);
   const writerOutputContractFailureClass = classifyWriterOutputContractFailure(
     snapshot,
     candidate,
     coverage,
     candidateSourceFloorInspection,
+    sourceLockInspection,
   );
   if (writerOutputContractFailureClass) return writerFailure(
     'lost_source_fact',
@@ -1801,6 +1808,9 @@ function parseWriterOutput(value: unknown, snapshot: SummaryV3StyleOperationSnap
     candidate,
     writerOutputContractFailureClass === 'candidate_source_floor'
       ? candidateSourceFloorInspection
+      : undefined,
+    writerOutputContractFailureClass === 'source_lock_preservation'
+      ? sourceLockInspection
       : undefined,
   );
   return immutableCopy({ ok: true, candidate });
@@ -2287,6 +2297,7 @@ interface EvidenceUpdate {
   readonly unsupportedClaimCategory?: SummaryV3StyleUnsupportedClaimCategory | null;
   readonly writerOutputContractFailureClass?: SummaryV3StyleWriterOutputContractFailureClass | null;
   readonly candidateSourceFloorInspection?: SummaryV3StyleCandidateSourceFloorInspection | null;
+  readonly sourceLockInspection?: SummaryV3StyleSourceLockInspection | null;
   readonly evaluatorOutputContractFailureClass?: SummaryV3StyleEvaluatorOutputContractFailureClass | null;
   readonly sourceFloorMismatchClass?: SummaryV3StyleSourceFloorMismatchClass | null;
   readonly employmentStateContradictionClass?: SummaryV3StyleEmploymentStateContradictionClass | null;
@@ -2410,6 +2421,11 @@ function makeEvidence(snapshot: SummaryV3StyleOperationSnapshot, update: Evidenc
         || update.candidateSourceFloorInspection.multiFactFallback.failureReason === 'fact_overlap_below_threshold'
         ? update.candidateSourceFloorInspection.multiFactFallback.failedFactIndex
         : null,
+    } : {}),
+    ...(update.writerOutputContractFailureClass === 'source_lock_preservation' && update.sourceLockInspection ? {
+      sourceLockFailureKind: update.sourceLockInspection.failureKind,
+      sourceLockFailureReason: update.sourceLockInspection.failureReason,
+      sourceLockFailedIndex: update.sourceLockInspection.failedIndex,
     } : {}),
     employmentStateContradictionClass: effectiveSourceFloorMismatchClass === 'employment_state_contradiction'
       ? (update.employmentStateContradictionClass
@@ -2694,6 +2710,9 @@ export async function executeSummaryV3StyleServer(
       : null,
     candidateSourceFloorInspection: parsedWriter.reason === 'lost_source_fact'
       ? parsedWriter.candidateSourceFloorInspection ?? null
+      : null,
+    sourceLockInspection: parsedWriter.reason === 'lost_source_fact'
+      ? parsedWriter.sourceLockInspection ?? null
       : null,
   }));
   // A nonnumeric material-result injection is a source-floor failure that is

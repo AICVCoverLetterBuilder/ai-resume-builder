@@ -12,6 +12,8 @@ import type {
   SummaryV3StyleDurationDiagnosticStatus,
   SummaryV3StyleMultiFactFallbackFailureReason,
   SummaryV3StyleVisibleFactKind,
+  SummaryV3StyleSourceLockFailureReason,
+  SummaryV3StyleEntityLock,
 } from './summary-style-m5';
 import type { SummaryV3StyleM5RouteFailure } from './summary-style-m5-transport';
 
@@ -68,6 +70,10 @@ export interface SummaryStrongerTerminalDiagnosticEvent {
   readonly missingFactCount: number | null;
   /** Present only for the decisive initial Stronger candidate source-floor branch. */
   readonly sourceFloorFailureStage?: 'fact_representation' | 'multi_fact_fallback';
+  /** Present only for the decisive initial Stronger source-lock branch. */
+  readonly sourceLockFailureKind?: SummaryV3StyleEntityLock['kind'];
+  readonly sourceLockFailureReason?: SummaryV3StyleSourceLockFailureReason;
+  readonly sourceLockFailedIndex?: number;
   readonly factRepresentationFailureReason?: SummaryV3StyleFactRepresentationFailureReason;
   readonly factRepresentationFailedFactIndex?: number;
   readonly factRepresentationFailedFactSemanticKind?: SummaryV3StyleVisibleFactKind;
@@ -343,6 +349,13 @@ export function createSummaryStrongerTerminalDiagnostic(
       ...(typeof candidateSourceFloorEvidence.multiFactFallbackFailedFactIndex === 'number' ? { multiFactFallbackFailedFactIndex: safeNonNegativeInteger(candidateSourceFloorEvidence.multiFactFallbackFailedFactIndex) } : {}),
     }
     : {};
+  const sourceLockEvidence = candidateSourceFloorEvidence?.writerOutputContractFailureClass === 'source_lock_preservation'
+    ? {
+      ...(candidateSourceFloorEvidence.sourceLockFailureKind ? { sourceLockFailureKind: candidateSourceFloorEvidence.sourceLockFailureKind } : {}),
+      ...(candidateSourceFloorEvidence.sourceLockFailureReason ? { sourceLockFailureReason: candidateSourceFloorEvidence.sourceLockFailureReason } : {}),
+      ...(typeof candidateSourceFloorEvidence.sourceLockFailedIndex === 'number' ? { sourceLockFailedIndex: safeNonNegativeInteger(candidateSourceFloorEvidence.sourceLockFailedIndex) } : {}),
+    }
+    : {};
 
   return {
     event: SUMMARY_STRONGER_TERMINAL_EVENT_NAME,
@@ -365,6 +378,7 @@ export function createSummaryStrongerTerminalDiagnostic(
       ? safeNonNegativeInteger(evidence.missingFactCount)
       : null,
     ...sourceFloorEvidence,
+    ...sourceLockEvidence,
     repairAttempted,
     repairProviderRequestAttempted: styleRepairProviderRequestAttempted(input.result),
     evaluatorAttempted: evidence?.evaluatorReached === true

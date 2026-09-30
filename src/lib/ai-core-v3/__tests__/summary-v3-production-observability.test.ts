@@ -356,6 +356,51 @@ describe('Summary V3 production terminal observability', () => {
     info.mockRestore();
   });
 
+  it('projects only finite source-lock evidence for the initial writer rejection', () => {
+    const source = styleFailure('lost_source_fact', {
+      writerAttempts: 1,
+      writerCandidateReachedValidation: true,
+      writerOutputContractFailureClass: 'source_lock_preservation',
+      sourceLockFailureKind: 'entity',
+      sourceLockFailureReason: 'identity_unattested_prefix',
+      sourceLockFailedIndex: 3,
+      sourceSummaryHash: 'private-source-hash',
+      candidateHash: 'private-candidate-hash',
+    });
+    const event = createSummaryStrongerTerminalDiagnostic({
+      requestId: 'safe-lock-correlation',
+      requestedLocale: 'en',
+      mode: 'enhance_existing_content',
+      httpStatus: 422,
+      result: source,
+    });
+    expect(event).toMatchObject({
+      writerFailureClass: 'source_lock_preservation',
+      sourceLockFailureKind: 'entity',
+      sourceLockFailureReason: 'identity_unattested_prefix',
+      sourceLockFailedIndex: 3,
+      evaluatorAttempted: false,
+      usageDecision: 'no_increment',
+    });
+    expect(JSON.stringify(event)).not.toContain('private-source-hash');
+    expect(JSON.stringify(event)).not.toContain('private-candidate-hash');
+    const unrelated = createSummaryStrongerTerminalDiagnostic({
+      requestId: 'unrelated-source-floor',
+      requestedLocale: 'en',
+      mode: 'enhance_existing_content',
+      httpStatus: 422,
+      result: styleFailure('lost_source_fact', {
+        writerAttempts: 1,
+        writerCandidateReachedValidation: true,
+        writerOutputContractFailureClass: 'candidate_source_floor',
+        sourceFloorFailureStage: 'multi_fact_fallback',
+      }),
+    });
+    expect(unrelated).not.toHaveProperty('sourceLockFailureKind');
+    expect(unrelated).not.toHaveProperty('sourceLockFailureReason');
+    expect(unrelated).not.toHaveProperty('sourceLockFailedIndex');
+  });
+
   it('defines writer result and writer output fields from bounded stage evidence', () => {
     const notAttempted = createSummaryStrongerTerminalDiagnostic({
       requestId: 'not-attempted', requestedLocale: 'en', mode: 'generate_from_context', httpStatus: 422,

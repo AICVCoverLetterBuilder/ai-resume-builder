@@ -7,6 +7,7 @@ import {
   decideSummaryV3StyleOwnership,
   hashSummaryV3StyleValue,
   normalizedSummaryV3StyleLength,
+  inspectSummaryV3StyleCandidatePreservesLocks,
   summaryV3StyleCandidatePreservesLocks,
   summaryV3StyleCalendarDateRanges,
   SUMMARY_V3_STYLE_M5_EVALUATOR_TOOL,
@@ -274,6 +275,65 @@ describe('M5 Summary style ownership and source contract', () => {
     });
     expect(summaryV3StyleCandidatePreservesLocks(snapshot, 'Lina builds APIs at Atlas for 24 months.')).toBe(false);
     expect(summaryV3StyleCandidatePreservesLocks(snapshot, 'Li builds APIs at Atlas for 24 months.')).toBe(true);
+  });
+
+  it('reports finite source-lock reasons with boolean parity across identity and duration branches', () => {
+    const snapshot = createSummaryV3StyleOperationSnapshot({
+      ...requestFor('stronger'),
+      visibleSummary: 'Li is Engineer at Atlas for 24 months.',
+      protectedEntities: ['Li'],
+      visibleSummaryFacts: undefined,
+      manifest: {
+        ...requestFor('stronger').manifest,
+        entries: [{
+          stableId: 'entry-current',
+          role: 'Engineer',
+          employer: 'Atlas',
+          employmentState: 'present',
+          durationMonths: 24,
+          facts: [{ id: 'duty-api', text: 'builds APIs' }],
+        }],
+      },
+    });
+    const terminalSnapshot = createSummaryV3StyleOperationSnapshot({
+      ...requestFor('stronger'),
+      visibleSummary: 'Li.',
+      protectedEntities: ['Li'],
+      visibleSummaryFacts: undefined,
+    });
+    const cases = [
+      [snapshot, 'Li is Engineer at Atlas for 24 months.', null],
+      [snapshot, 'Lina is Engineer at Atlas for 24 months.', 'identity_surface_missing'],
+      [snapshot, 'Li Priya is Engineer at Atlas for 24 months.', 'identity_unattested_suffix'],
+      [snapshot, 'Brilliant Li is Engineer at Atlas for 24 months.', 'identity_unattested_prefix'],
+      [terminalSnapshot, 'Li Priya.', 'identity_unattested_terminal_extension'],
+      [snapshot, 'Li is Engineer at Atlas for 12 months.', 'duration_surface_missing'],
+    ] as const;
+    for (const [caseSnapshot, candidate, reason] of cases) {
+      const inspection = inspectSummaryV3StyleCandidatePreservesLocks(caseSnapshot, candidate);
+      expect(inspection.preserved).toBe(summaryV3StyleCandidatePreservesLocks(caseSnapshot, candidate));
+      if (reason) {
+        expect(inspection).toMatchObject({ preserved: false, failureReason: reason });
+        expect(inspection.failureKind).toBeTruthy();
+        expect(inspection.failedIndex).toEqual(expect.any(Number));
+      } else {
+        expect(inspection).toEqual({ preserved: true, failureKind: null, failureReason: null, failedIndex: null });
+      }
+    }
+    expect(inspectSummaryV3StyleCandidatePreservesLocks(snapshot, 'Li is Engineer at Atlas for 24 months.').failureKind).toBeNull();
+    expect(inspectSummaryV3StyleCandidatePreservesLocks(snapshot, 'Li at Atlas for 24 months.')).toMatchObject({ failureKind: 'role' });
+    expect(inspectSummaryV3StyleCandidatePreservesLocks(snapshot, 'Li is Engineer for 24 months.')).toMatchObject({ failureKind: 'employer' });
+    expect(inspectSummaryV3StyleCandidatePreservesLocks(snapshot, 'Li is Engineer at Atlas.')).toMatchObject({ failureKind: 'duration' });
+    expect(inspectSummaryV3StyleCandidatePreservesLocks(snapshot, 'Lina is Engineer at Atlas for 24 months.')).toMatchObject({ failureKind: 'entity' });
+    const generatedSnapshot = createSummaryV3StyleOperationSnapshot({
+      ...requestFor('stronger'),
+      visibleSummary: '',
+      visibleSummaryFacts: undefined,
+      protectedEntities: undefined,
+    });
+    expect(inspectSummaryV3StyleCandidatePreservesLocks(generatedSnapshot, 'Atlasu')).toEqual({
+      preserved: true, failureKind: null, failureReason: null, failedIndex: null,
+    });
   });
 
   it('binds request time, current-role identity, and entity locks into distinct immutable snapshot identities', () => {
