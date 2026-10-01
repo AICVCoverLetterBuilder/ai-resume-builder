@@ -75,6 +75,7 @@ import {
   type SummaryStyleHardPredicate,
   type SummaryStyleRoleFailure,
   type SummaryStyleSafeNoOpEligibility,
+  type SummaryStyleSourceFloorFirstProducer,
 } from './summary-style-m5-local-observability';
 import { detectRoleLabelSourceLocale } from '@/lib/cv-summary-structured-role-localization';
 import {
@@ -1359,24 +1360,24 @@ function sourceManifestDecimalPercentComparison(snapshot: SummaryV3StyleOperatio
   }).join('');
 }
 
-function hasUnsupportedSourceInconsistency(snapshot: SummaryV3StyleOperationSnapshot): boolean {
-  if (snapshot.mode !== 'enhance_existing_content') return false;
-  if (hasExplicitSourceIdentityInconsistency(snapshot)) return true;
-  if (hasUnannotatedSourceRoleEmployerFrameInconsistency(snapshot)) return true;
-  if (hasUnsupportedSourceNonnumericMaterialResultRelation(snapshot)) return true;
+function sourceFloorFirstPositiveProducer(snapshot: SummaryV3StyleOperationSnapshot): SummaryStyleSourceFloorFirstProducer | null {
+  if (snapshot.mode !== 'enhance_existing_content') return null;
+  if (hasExplicitSourceIdentityInconsistency(snapshot)) return 'explicit_source_identity_inconsistency';
+  if (hasUnannotatedSourceRoleEmployerFrameInconsistency(snapshot)) return 'unannotated_source_role_employer_frame_inconsistency';
+  if (hasUnsupportedSourceNonnumericMaterialResultRelation(snapshot)) return 'unsupported_source_nonnumeric_material_result_relation';
   const manifestText = snapshot.manifestFacts.map((fact) => fact.text).join(' ');
   const manifestNumbers = new Set(numericTokens(manifestText));
   const percentComparisonSource = sourceManifestDecimalPercentComparison(snapshot);
   const sourceNumbers = numericTokensOutsideValidatedStructuredDurationSurfaces(snapshot, percentComparisonSource, true);
-  if (sourceNumbers.some((number) => !manifestNumbers.has(number))) return true;
-  if (hasRoleLocalSourceDurationContradiction(snapshot)) return true;
+  if (sourceNumbers.some((number) => !manifestNumbers.has(number))) return 'source_numeric_membership_mismatch';
+  if (hasRoleLocalSourceDurationContradiction(snapshot)) return 'role_local_source_duration_contradiction';
   const manifestSemanticClaims = new Set(snapshot.manifestFacts
     .flatMap((fact) => summaryV3StyleFactAnchorTokens(fact.text))
     .filter((token) => token.startsWith('span:')));
   const sourceSemanticClaims = summaryV3StyleFactAnchorTokens(percentComparisonSource)
     .filter((token) => token.startsWith('span:'));
   if (sourceSemanticClaims.some((claim) => !manifestSemanticClaims.has(claim)
-    && !isStructuredDurationSemanticSpan(claim, snapshot))) return true;
+    && !isStructuredDurationSemanticSpan(claim, snapshot))) return 'source_semantic_claim_membership_mismatch';
   const manifestRelationAnchors = new Set(snapshot.manifestFacts
     .flatMap((fact) => summaryV3StyleFactAnchorTokens(fact.text)));
   const identityAnchors = new Set(snapshot.entityLocks
@@ -1401,13 +1402,18 @@ function hasUnsupportedSourceInconsistency(snapshot: SummaryV3StyleOperationSnap
     // evaluator-owned, but never let a directly material numeric-relation
     // noun such as `revenue` become source authority merely by sharing a
     // structured duration with a manifest entry.
-    if (unmanifestedTerms.some((term) => MATERIAL_NUMERIC_RELATION_TERMS.has(term))) return true;
+    if (unmanifestedTerms.some((term) => MATERIAL_NUMERIC_RELATION_TERMS.has(term))) return 'unmanifested_material_numeric_relation_term';
   }
   const explicitSourceTools = snapshot.requiredFacts.filter((fact) => fact.origin === 'visible_summary' && fact.semanticKind === 'tool');
-  if (explicitSourceTools.some((fact) => !manifestHasExactNamedToolAuthority(snapshot, fact.text))) return true;
-  if (hasUnmanifestedNamedSourceToolSurface(snapshot)) return true;
+  if (explicitSourceTools.some((fact) => !manifestHasExactNamedToolAuthority(snapshot, fact.text))) return 'explicit_source_tool_without_manifest_authority';
+  if (hasUnmanifestedNamedSourceToolSurface(snapshot)) return 'unmanifested_named_source_tool_surface';
   const manifestAuthority = new Set(authorityTerms(manifestText));
-  return authorityTerms(snapshot.sourceSummary).some((term) => !manifestAuthority.has(term));
+  return authorityTerms(snapshot.sourceSummary).some((term) => !manifestAuthority.has(term))
+    ? 'source_authority_term_membership_mismatch' : null;
+}
+
+function hasUnsupportedSourceInconsistency(snapshot: SummaryV3StyleOperationSnapshot): boolean {
+  return sourceFloorFirstPositiveProducer(snapshot) !== null;
 }
 
 function semanticSpanHasEquivalentSourceAuthority(
@@ -1611,6 +1617,7 @@ function hasInjectedManifestFact(snapshot: SummaryV3StyleOperationSnapshot, cand
 
 /** Local hard rejections run before any evaluator-directed repair decision. */
 interface LocalHardDecision {
+  readonly sourceFloorFirstProducer?: SummaryStyleSourceFloorFirstProducer;
   readonly reason: Extract<SummaryV3StyleFailureReason, 'unsupported_claim' | 'lost_source_fact'> | null;
   readonly predicate: SummaryStyleHardPredicate | null;
 }
@@ -1628,7 +1635,8 @@ function localHardRejectionDecision(
   // opposite relation, but it cannot silently erase an explicit source state.
   if (employmentSourceStatePreservationFailure(snapshot, candidateText)) return { reason: 'lost_source_fact', predicate: null };
   // The same ordered short-circuit execution returns both reason and winner.
-  if (hasUnsupportedSourceInconsistency(snapshot)) return { reason: 'unsupported_claim', predicate: 'unsupported_source_inconsistency' };
+  const sourceFloorFirstProducer = sourceFloorFirstPositiveProducer(snapshot);
+  if (sourceFloorFirstProducer !== null) return { reason: 'unsupported_claim', predicate: 'unsupported_source_inconsistency', sourceFloorFirstProducer };
   if (hasInjectedManifestFact(snapshot, candidateText)) return { reason: 'unsupported_claim', predicate: 'injected_manifest_fact' };
   if (hasUnsupportedAuthorityOrSeniority(snapshot, candidateText)) return { reason: 'unsupported_claim', predicate: 'unsupported_authority_or_seniority' };
   if (hasUnsupportedNumericMetric(snapshot, candidateText)) return { reason: 'unsupported_claim', predicate: 'unsupported_numeric_metric' };
@@ -2771,6 +2779,8 @@ function withLocalDecisionDiagnostics(
     : owner === 'role_identity_resolution' ? 'role_identity_rejection' : null;
   const evidence = result.kind === 'not_applicable' ? null : result.evidence;
   return recordSummaryStyleLocalDiagnostics(result, {
+    sourceFloorFirstProducer: owner === 'hard_guard' && predicate === 'unsupported_source_inconsistency'
+      ? hardDecision.sourceFloorFirstProducer ?? null : null,
     postEvaluatorLocalOwner: owner,
     postEvaluatorHardPredicate: predicate,
     postEvaluatorRoleIdentityFailureClass: owner === 'role_identity_resolution' ? roleFailure : null,

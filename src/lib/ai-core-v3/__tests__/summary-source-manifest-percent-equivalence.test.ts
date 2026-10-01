@@ -137,7 +137,11 @@ function assess(g: Graph, f: Fixture) {
     forcedTool: { toolName: g.domain.SUMMARY_V3_STYLE_M5_WRITER_TOOL_NAME } } as Server.SummaryV3StyleWriterInput, text);
   const parsed = g.server.audit.parseWriter(raw, snapshot);
   const before = JSON.stringify(snapshot);
-  const result = { source: g.server.audit.source(snapshot), hard: g.server.audit.hard(snapshot, text),
+  // Task 068 adds only same-execution diagnostic provenance to this private
+  // decision. Keep every original functional field in the Task 062 oracle.
+  const hard = { ...g.server.audit.hard(snapshot, text) } as ReturnType<Audit['hard']> & { sourceFloorFirstProducer?: unknown };
+  delete hard.sourceFloorFirstProducer;
+  const result = { source: g.server.audit.source(snapshot), hard,
     eligibility: g.server.audit.eligibility(snapshot), floor: g.domain.summaryV3StyleCandidateSourceFloorDecision(snapshot, text),
     writerAccepted: parsed.ok, writerFailure: parsed.writerOutputContractFailureClass ?? null };
   expect(JSON.stringify(snapshot)).toBe(before);
@@ -198,7 +202,12 @@ describe('Task 062 local source/manifest decimal-percent repair', () => {
     expect(before.diagnostic).toMatchObject({ coveredFactCount: 5, missingFactCount: 0, writerResult: 'accepted',
       evaluatorAllPhasesPassed: true, evaluatorViolationCount: 0, postEvaluatorHardPredicate: 'unsupported_source_inconsistency' });
     if (different) {
-      expect(after).toEqual(before);
+      const withoutProducer = (value: typeof after) => {
+        const diagnostic: Record<string, unknown> = { ...value.diagnostic };
+        delete diagnostic.sourceFloorFirstProducer;
+        return { ...value, diagnostic };
+      };
+      expect(withoutProducer(after)).toEqual(withoutProducer(before));
       expect(after.diagnostic).toMatchObject({ postEvaluatorLocalOwner: 'hard_guard',
         postEvaluatorSourceFloorMismatchClass: 'source_inconsistency', finalApplyEligible: false, usageDecision: 'no_increment' });
     } else {
@@ -244,8 +253,10 @@ describe('Task 062 local source/manifest decimal-percent repair', () => {
       'summaryV3StyleCandidateSourceFloorDecision']) {
       expect(functionText(readFileSync(domainPath, 'utf8'), name)).toBe(functionText(domainBefore, name));
     }
-    for (const relative of ['summary-style-m5-provider.ts', 'summary-style-m5-local-observability.ts',
-      'summary-v3-production-observability.ts']) {
+    // Task 068's sidecar-only extension is checked against its exact Git
+    // baseline by that task's declaration/functional parity gate. The
+    // provider and terminal projector remain byte-exact here.
+    for (const relative of ['summary-style-m5-provider.ts', 'summary-v3-production-observability.ts']) {
       expect(readFileSync(resolve(root, 'src/lib/ai-core-v3', relative), 'utf8')).toBe(
         execFileSync('git', ['show', BASELINE + ':src/lib/ai-core-v3/' + relative], { cwd: root, encoding: 'utf8' }));
     }

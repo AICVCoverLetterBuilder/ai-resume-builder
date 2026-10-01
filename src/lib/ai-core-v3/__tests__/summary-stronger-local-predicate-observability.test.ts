@@ -287,7 +287,8 @@ describe('Task 058 same-execution local predicate provenance', () => {
     const observations: HardDecision[] = [];
     const reason = candidate.server.audit.hard(snapshot, text, (decision) => observations.push(decision));
     expect(reason).toBe(baseline.server.audit.hard(snapshot, text));
-    expect(observations).toEqual([{ reason: 'unsupported_claim', predicate: 'unsupported_source_inconsistency' }]);
+    expect(observations).toEqual([{ reason: 'unsupported_claim', predicate: 'unsupported_source_inconsistency',
+      sourceFloorFirstProducer: 'source_numeric_membership_mismatch' }]);
   });
   it('counts all four validated phase collections before local terminal suppression', async () => {
     const findings = domain.SUMMARY_V3_STYLE_M5_PHASES.flatMap((phase) =>
@@ -340,10 +341,11 @@ describe('Task 058 privacy, provider and identity noninterference', () => {
       evaluatorAllPhasesPassed: null, evaluatorViolationCount: null, evaluatorRoleIdentityResolution: null,
       strongerSafeNoOpEligibility: null });
   });
-  it('serializes only the nine approved finite fields for an actual local terminal', async () => {
+  it('serializes only the ten approved finite fields for an actual local terminal', async () => {
     const { result, diagnostic } = await parity(hardCases[6]![1]);
     const local = candidate.sidecar!.readSummaryStyleLocalDiagnostics(result);
-    expect(Object.keys(local)).toHaveLength(9);
+    expect(Object.keys(local)).toHaveLength(10);
+    expect(local.sourceFloorFirstProducer).toBeNull();
     expect(Object.isFrozen(local)).toBe(true);
     const serialized = JSON.stringify(diagnostic);
     for (const prohibited of [source, strengthened, 'Ava Patel', 'Atlas', 'Product Engineer', 'Kubernetes', 'factIds', 'snapshotHash']) {

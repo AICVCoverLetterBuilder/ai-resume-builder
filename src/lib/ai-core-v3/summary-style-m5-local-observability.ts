@@ -21,6 +21,20 @@ export const SUMMARY_STYLE_ROLE_FAILURES = [
   'evaluator_role_contradiction', 'evaluator_role_unresolved',
   'snapshot_role_unresolved_without_equivalence',
 ] as const;
+// One value per positive source-consistency branch, in execution order.
+export const SUMMARY_STYLE_SOURCE_FLOOR_FIRST_PRODUCERS = [
+  'explicit_source_identity_inconsistency',
+  'unannotated_source_role_employer_frame_inconsistency',
+  'unsupported_source_nonnumeric_material_result_relation',
+  'source_numeric_membership_mismatch',
+  'role_local_source_duration_contradiction',
+  'source_semantic_claim_membership_mismatch',
+  'unmanifested_material_numeric_relation_term',
+  'explicit_source_tool_without_manifest_authority',
+  'unmanifested_named_source_tool_surface',
+  'source_authority_term_membership_mismatch',
+] as const;
+export type SummaryStyleSourceFloorFirstProducer = (typeof SUMMARY_STYLE_SOURCE_FLOOR_FIRST_PRODUCERS)[number];
 const UNSUPPORTED_CATEGORIES = [
   'unsupported_metric', 'unsupported_result_relation', 'unsupported_achievement',
   'unsupported_authority', 'source_floor_mismatch', 'manifest_ceiling_mismatch',
@@ -42,6 +56,7 @@ export const SUMMARY_STYLE_MAX_EVALUATOR_VIOLATIONS = SUMMARY_V3_STYLE_M5_PHASES
   * SUMMARY_V3_STYLE_M5_EVALUATOR_TOOL.input_schema.properties.phases.properties.structural.properties.violations.maxItems;
 
 export interface SummaryStyleLocalDiagnostics {
+  readonly sourceFloorFirstProducer: SummaryStyleSourceFloorFirstProducer | null;
   readonly postEvaluatorLocalOwner: (typeof SUMMARY_STYLE_LOCAL_OWNERS)[number] | null;
   readonly postEvaluatorHardPredicate: SummaryStyleHardPredicate | null;
   readonly postEvaluatorRoleIdentityFailureClass: SummaryStyleRoleFailure | null;
@@ -61,10 +76,15 @@ const finite = <T extends string>(value: unknown, allowed: readonly T[]): T | nu
 
 export function recordSummaryStyleLocalDiagnostics(
   result: SummaryV3StyleResult,
-  value: SummaryStyleLocalDiagnostics,
+  value: Omit<SummaryStyleLocalDiagnostics, 'sourceFloorFirstProducer'> & {
+    readonly sourceFloorFirstProducer?: SummaryStyleSourceFloorFirstProducer | null;
+  },
 ): SummaryV3StyleResult {
   const owner = finite(value.postEvaluatorLocalOwner, SUMMARY_STYLE_LOCAL_OWNERS);
   diagnostics.set(result, Object.freeze({
+    sourceFloorFirstProducer: owner === 'hard_guard'
+      && value.postEvaluatorHardPredicate === 'unsupported_source_inconsistency'
+      ? finite(value.sourceFloorFirstProducer, SUMMARY_STYLE_SOURCE_FLOOR_FIRST_PRODUCERS) : null,
     postEvaluatorLocalOwner: owner,
     postEvaluatorHardPredicate: owner === 'hard_guard'
       ? finite(value.postEvaluatorHardPredicate, SUMMARY_STYLE_HARD_PREDICATES) : null,
@@ -85,6 +105,7 @@ export function recordSummaryStyleLocalDiagnostics(
 
 export function readSummaryStyleLocalDiagnostics(result: object): SummaryStyleLocalDiagnostics {
   return diagnostics.get(result) ?? {
+    sourceFloorFirstProducer: null,
     postEvaluatorLocalOwner: null, postEvaluatorHardPredicate: null,
     postEvaluatorRoleIdentityFailureClass: null, postEvaluatorUnsupportedClaimCategory: null,
     postEvaluatorSourceFloorMismatchClass: null, evaluatorAllPhasesPassed: null,
