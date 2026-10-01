@@ -1316,6 +1316,49 @@ function hasUnannotatedSourceRoleEmployerFrameInconsistency(snapshot: SummaryV3S
  * Numeric membership alone is deliberately insufficient: `20%` and `24`
  * elsewhere in a manifest do not authorize `revenue by 24% over 20 months`.
  */
+/**
+ * Comparison-only view of source percentages, never snapshot/provider prose.
+ * Admit at most one unsigned decimal percent per identical relation clause.
+ * One/two fractional digits are unambiguous here; grouping-like three-digit
+ * fractions, compound separators and non-percent numbers retain exact rules.
+ * String decimal keys avoid floating-point rounding and permit trailing zeros.
+ */
+function sourceManifestDecimalPercentComparison(snapshot: SummaryV3StyleOperationSnapshot): string {
+  const clauses = (text: string): string[] => text.split(
+    /((?<=[!?。！？।])\s+|(?<=\.)\s+(?=\S)|(?<!\d),|,(?!\d)|[;:，、؛])/u,
+  );
+  const relation = (text: string): Readonly<{ key: string; template: string; surface: string; start: number }> | null => {
+    const percentages = Array.from(text.matchAll(
+      /(?<![\p{L}\p{N}_.+,\p{Pd}−±\p{Sc}])((?:0|[1-9][0-9]{0,11}))[.,]([0-9]{1,2})\s*%(?![\p{L}\p{N}_%])/gu,
+    ));
+    if (percentages.length !== 1) return null;
+    const match = percentages[0]!;
+    const start = match.index!;
+    const before = text.slice(0, start);
+    const after = text.slice(start + match[0].length);
+    if (!/\p{L}/u.test(before + after)) return null;
+    return {
+      key: match[1] + '.' + match[2]!.replace(/0+$/u, ''),
+      template: normalizeSummaryV3StyleText(before + '<percent>' + after).toLocaleLowerCase(),
+      surface: match[0],
+      start,
+    };
+  };
+  const manifestRelations = snapshot.manifestFacts.flatMap((fact) =>
+    clauses(normalizeSummaryV3StyleNumericSurface(fact.text))
+      .map(relation).filter((item): item is NonNullable<typeof item> => item !== null));
+  return clauses(normalizeSummaryV3StyleNumericSurface(snapshot.sourceSummary)).map((clause) => {
+    const sourceRelation = relation(clause);
+    if (!sourceRelation) return clause;
+    const equivalent = manifestRelations.find((item) =>
+      item.key === sourceRelation.key && item.template === sourceRelation.template);
+    return equivalent
+      ? clause.slice(0, sourceRelation.start) + equivalent.surface
+        + clause.slice(sourceRelation.start + sourceRelation.surface.length)
+      : clause;
+  }).join('');
+}
+
 function hasUnsupportedSourceInconsistency(snapshot: SummaryV3StyleOperationSnapshot): boolean {
   if (snapshot.mode !== 'enhance_existing_content') return false;
   if (hasExplicitSourceIdentityInconsistency(snapshot)) return true;
@@ -1323,13 +1366,14 @@ function hasUnsupportedSourceInconsistency(snapshot: SummaryV3StyleOperationSnap
   if (hasUnsupportedSourceNonnumericMaterialResultRelation(snapshot)) return true;
   const manifestText = snapshot.manifestFacts.map((fact) => fact.text).join(' ');
   const manifestNumbers = new Set(numericTokens(manifestText));
-  const sourceNumbers = numericTokensOutsideValidatedStructuredDurationSurfaces(snapshot, snapshot.sourceSummary, true);
+  const percentComparisonSource = sourceManifestDecimalPercentComparison(snapshot);
+  const sourceNumbers = numericTokensOutsideValidatedStructuredDurationSurfaces(snapshot, percentComparisonSource, true);
   if (sourceNumbers.some((number) => !manifestNumbers.has(number))) return true;
   if (hasRoleLocalSourceDurationContradiction(snapshot)) return true;
   const manifestSemanticClaims = new Set(snapshot.manifestFacts
     .flatMap((fact) => summaryV3StyleFactAnchorTokens(fact.text))
     .filter((token) => token.startsWith('span:')));
-  const sourceSemanticClaims = summaryV3StyleFactAnchorTokens(snapshot.sourceSummary)
+  const sourceSemanticClaims = summaryV3StyleFactAnchorTokens(percentComparisonSource)
     .filter((token) => token.startsWith('span:'));
   if (sourceSemanticClaims.some((claim) => !manifestSemanticClaims.has(claim)
     && !isStructuredDurationSemanticSpan(claim, snapshot))) return true;
