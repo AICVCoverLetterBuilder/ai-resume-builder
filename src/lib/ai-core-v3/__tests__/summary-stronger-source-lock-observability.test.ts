@@ -155,14 +155,14 @@ describe('Task 055 diagnostics-only source-lock origin and match topology', () =
     expect(calls).toEqual(['writer']);
   });
 
-  it('C. preserves the Serbian automatic-capitalized-verb rejection without policy repair', async () => {
+  it('C. clears only the repaired automatic-subject case lock without manufacturing failure telemetry', async () => {
     const fixture = request(true);
     expect(inspect(fixture, serbianSource).inspection.preserved).toBe(true);
     const { diagnostic, calls } = await run(fixture, serbianSource.replace('. Održava', '. održava'));
-    expect(diagnostic).toMatchObject({ sourceLockOrigin: 'automatic_relation_subject', sourceLockFailedIndex: 4,
-      sourceLockFailureKind: 'entity', sourceLockFailureReason: 'identity_surface_missing',
-      sourceLockSurfaceMatchClass: 'case_variant_only', sourceLockRequiredFactBindingCount: 1,
-      sourceLockDeclaredFactBindingCount: 1, coveredFactCount: 5, missingFactCount: 0 });
+    expect(inspect(fixture, serbianSource.replace('. Održava', '. održava')).inspection.preserved).toBe(true);
+    expect(diagnostic).toMatchObject({ ...nullDiagnostics, writerFailureClass: 'exact_material_source_floor',
+      coveredFactCount: 5, missingFactCount: 0, finalApplyEligible: false, usageDecision: 'no_increment' });
+    expect(diagnostic.sourceLockFailureReason).toBeUndefined();
     expect(calls).toEqual(['writer']);
   });
 

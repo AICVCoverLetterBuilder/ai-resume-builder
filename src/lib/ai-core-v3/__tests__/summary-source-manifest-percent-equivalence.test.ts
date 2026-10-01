@@ -229,7 +229,22 @@ describe('Task 062 local source/manifest decimal-percent repair', () => {
     expect(JSON.stringify(after.invocations)).toBe(JSON.stringify(before.invocations));
     expect(before.result.kind).toBe('handled_failure');
     expect(after.result.kind).toBe('safe_no_op');
-    for (const relative of ['summary-style-m5.ts', 'summary-style-m5-provider.ts', 'summary-style-m5-local-observability.ts',
+    // Task 065 changes only identity-lock comparison in the domain module.
+    // Keep the Task 062 snapshot/source-floor authorities byte-exact instead
+    // of incorrectly treating the whole module as permanently immutable.
+    const domainPath = resolve(root, 'src/lib/ai-core-v3/summary-style-m5.ts');
+    const domainBefore = execFileSync('git', ['show', BASELINE + ':src/lib/ai-core-v3/summary-style-m5.ts'], { cwd: root, encoding: 'utf8' });
+    const functionText = (text: string, name: string) => {
+      const file = ts.createSourceFile(domainPath, text, ts.ScriptTarget.Latest, true);
+      const declaration = file.statements.filter(ts.isFunctionDeclaration).find(node => node.name?.text === name);
+      if (!declaration) throw new Error('Missing decimal-percent authority: ' + name);
+      return declaration.getText(file).replaceAll('\r\n', '\n');
+    };
+    for (const name of ['createSummaryV3StyleOperationSnapshot', 'inspectSummaryV3StyleCandidateSourceFloor',
+      'summaryV3StyleCandidateSourceFloorDecision']) {
+      expect(functionText(readFileSync(domainPath, 'utf8'), name)).toBe(functionText(domainBefore, name));
+    }
+    for (const relative of ['summary-style-m5-provider.ts', 'summary-style-m5-local-observability.ts',
       'summary-v3-production-observability.ts']) {
       expect(readFileSync(resolve(root, 'src/lib/ai-core-v3', relative), 'utf8')).toBe(
         execFileSync('git', ['show', BASELINE + ':src/lib/ai-core-v3/' + relative], { cwd: root, encoding: 'utf8' }));

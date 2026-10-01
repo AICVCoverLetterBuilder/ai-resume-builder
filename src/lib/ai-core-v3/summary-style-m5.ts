@@ -342,8 +342,8 @@ export interface SummaryV3StyleSourceLockDiagnostics {
   readonly sourceLockDeclaredFactBindingCount: number | null;
 }
 
-// Construction provenance only: never a snapshot property, hash input, provider
-// payload or validation authority. Losing the sidecar yields unknown, not a guess.
+// Construction provenance only: never a snapshot property, hash input or provider
+// payload. The existing lock decision may consult origin; loss yields unknown.
 const sourceLockOrigins = new WeakMap<SummaryV3StyleOperationSnapshot, readonly SummaryV3StyleSourceLockOrigin[]>();
 
 export const SUMMARY_V3_STYLE_SOURCE_LOCK_FAILURE_REASONS = [
@@ -3571,6 +3571,7 @@ export function inspectSummaryV3StyleCandidatePreservesLocks(
         normalizedCandidate,
         normalizedLock,
         lock.kind,
+        sourceLockOrigins.get(snapshot)?.[failedIndex] ?? 'unknown',
       )
       // Manifest duration values are structured numbers; a native source
       // numeral must bind to the same duration without permitting `24` to
@@ -3814,11 +3815,26 @@ const NONMATERIAL_IDENTITY_PREFIXES = new Set([
   'senior', 'principal',
 ]);
 
+/** Case-only occurrence lookup; original offsets keep every context guard intact. */
+function automaticSubjectCaseVariantIndexes(haystack: string, needle: string): readonly number[] {
+  return Array.from(haystack.matchAll(new RegExp(escapeSummaryV3StyleLiteral(needle), 'giu')))
+    .filter((match) => {
+      const index = match.index!;
+      const before = Array.from(haystack.slice(0, index)).at(-1);
+      const after = haystack.slice(index + match[0].length);
+      const first = Array.from(after)[0];
+      return match[0].length === needle.length
+        && !(first && first.length > 1 && /[\p{L}\p{N}]/u.test(first))
+        && isExactSurfaceBoundary(needle, before, after);
+    }).map((match) => match.index!);
+}
+
 function inspectCandidatePreservesUnexpandedIdentityLock(
   snapshot: SummaryV3StyleOperationSnapshot,
   candidateText: string,
   lockValue: string,
   lockKind: Extract<SummaryV3StyleEntityLock['kind'], 'entity' | 'role' | 'employer'>,
+  lockOrigin: SummaryV3StyleSourceLockOrigin = 'unknown',
 ): SummaryV3StyleIdentityLockInspection {
   const caseSensitive = lockKind === 'entity';
   const haystack = normalizeSummaryV3StyleText(candidateText);
@@ -3826,6 +3842,9 @@ function inspectCandidatePreservesUnexpandedIdentityLock(
   if (!needle || !haystack) return failedIdentityLock('identity_surface_missing');
   const searchableHaystack = caseSensitive ? haystack : haystack.toLocaleLowerCase();
   const searchableNeedle = caseSensitive ? needle : needle.toLocaleLowerCase();
+  const caseVariantIndexes = lockKind === 'entity' && lockOrigin === 'automatic_relation_subject'
+    && !summaryV3StyleContainsExactSurface(haystack, needle, true)
+    ? automaticSubjectCaseVariantIndexes(haystack, needle) : [];
   const source = normalizeSummaryV3StyleText(snapshot.sourceSummary);
   const sourceContexts = exactSummaryV3StyleSurfaceIndexes(source, needle, caseSensitive)
     .map((index) => immutableCopy({
@@ -3838,7 +3857,9 @@ function inspectCandidatePreservesUnexpandedIdentityLock(
   let start = 0;
   let foundStandalone = false;
   while (start < searchableHaystack.length) {
-    const index = searchableHaystack.indexOf(searchableNeedle, start);
+    const index = caseVariantIndexes.length > 0
+      ? caseVariantIndexes.find((offset) => offset >= start) ?? -1
+      : searchableHaystack.indexOf(searchableNeedle, start);
     if (index < 0) break;
     const precedingText = haystack.slice(0, index);
     const followingText = haystack.slice(index + needle.length);
