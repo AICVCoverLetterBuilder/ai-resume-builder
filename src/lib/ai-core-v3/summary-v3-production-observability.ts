@@ -29,6 +29,7 @@ import {
   isSummaryV3StyleViolationCode,
 } from './summary-style-m5';
 import type { SummaryV3StyleM5RouteFailure } from './summary-style-m5-transport';
+import { readSummaryStyleLocalDiagnostics, type SummaryStyleLocalDiagnostics } from './summary-style-m5-local-observability';
 
 export const SUMMARY_V3_TERMINAL_EVENT_NAME = 'summary_v3_terminal' as const;
 export const SUMMARY_STRONGER_TERMINAL_EVENT_NAME = 'summary_stronger_terminal' as const;
@@ -61,7 +62,7 @@ export interface SummaryStrongerTerminalDiagnosticInput {
   readonly result: SummaryStrongerResult;
 }
 
-export interface SummaryStrongerTerminalDiagnosticEvent {
+export interface SummaryStrongerTerminalDiagnosticEvent extends SummaryStyleLocalDiagnostics {
   readonly event: typeof SUMMARY_STRONGER_TERMINAL_EVENT_NAME;
   readonly requestCorrelationId: string | null;
   readonly operation: 'summary_style';
@@ -421,6 +422,7 @@ export function createSummaryStrongerTerminalDiagnostic(
     postEvaluatorLocalFailureClass: candidateSourceFloorEvidence?.postEvaluatorLocalFailureClass
       && SUMMARY_V3_STYLE_M5_POST_EVALUATOR_LOCAL_FAILURE_CLASSES.includes(candidateSourceFloorEvidence.postEvaluatorLocalFailureClass)
       ? candidateSourceFloorEvidence.postEvaluatorLocalFailureClass : null,
+    ...readSummaryStyleLocalDiagnostics(input.result),
     ...sourceFloorEvidence,
     ...sourceLockEvidence,
     sourceLockOrigin: lockFailure

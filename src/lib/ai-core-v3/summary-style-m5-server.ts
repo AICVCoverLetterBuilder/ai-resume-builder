@@ -70,6 +70,12 @@ import {
   type SummaryV3StyleViolationCode,
 } from './summary-style-m5';
 import { immutableCopy } from './immutability';
+import {
+  recordSummaryStyleLocalDiagnostics,
+  type SummaryStyleHardPredicate,
+  type SummaryStyleRoleFailure,
+  type SummaryStyleSafeNoOpEligibility,
+} from './summary-style-m5-local-observability';
 import { detectRoleLabelSourceLocale } from '@/lib/cv-summary-structured-role-localization';
 import {
   SummaryV3ProviderTransportError,
@@ -1560,26 +1566,42 @@ function hasInjectedManifestFact(snapshot: SummaryV3StyleOperationSnapshot, cand
 }
 
 /** Local hard rejections run before any evaluator-directed repair decision. */
-function localHardRejection(
+interface LocalHardDecision {
+  readonly reason: Extract<SummaryV3StyleFailureReason, 'unsupported_claim' | 'lost_source_fact'> | null;
+  readonly predicate: SummaryStyleHardPredicate | null;
+}
+
+function localHardRejectionDecision(
   snapshot: SummaryV3StyleOperationSnapshot,
   candidateText: string,
-): Extract<SummaryV3StyleFailureReason, 'unsupported_claim' | 'lost_source_fact'> | null {
+): LocalHardDecision {
   // Language/native surface has the more specific typed terminal. Let the
   // regular local style guard classify it before considering ceiling facts.
   if (!summaryV3StyleLocaleSurfaceMatches(candidateText, snapshot.requestedLocale)
-    || !summaryV3StyleLocaleContentMatches(candidateText, snapshot.requestedLocale)) return null;
+    || !summaryV3StyleLocaleContentMatches(candidateText, snapshot.requestedLocale)) return { reason: null, predicate: null };
   // A visible source employment relation is a source fact in its own right.
   // Preserve it independently from contradiction: neutral wording is not an
   // opposite relation, but it cannot silently erase an explicit source state.
-  if (employmentSourceStatePreservationFailure(snapshot, candidateText)) return 'lost_source_fact';
-  if (hasUnsupportedSourceInconsistency(snapshot)
-    || hasInjectedManifestFact(snapshot, candidateText)
-    || hasUnsupportedAuthorityOrSeniority(snapshot, candidateText)
-    || hasUnsupportedNumericMetric(snapshot, candidateText)
-    || hasUnsupportedCandidateSemanticMaterial(snapshot, candidateText)
-    || hasUnsupportedCandidateNamedToolSurface(snapshot, candidateText)
-    || hasEmploymentStateContradiction(snapshot, candidateText)) return 'unsupported_claim';
-  return null;
+  if (employmentSourceStatePreservationFailure(snapshot, candidateText)) return { reason: 'lost_source_fact', predicate: null };
+  // The same ordered short-circuit execution returns both reason and winner.
+  if (hasUnsupportedSourceInconsistency(snapshot)) return { reason: 'unsupported_claim', predicate: 'unsupported_source_inconsistency' };
+  if (hasInjectedManifestFact(snapshot, candidateText)) return { reason: 'unsupported_claim', predicate: 'injected_manifest_fact' };
+  if (hasUnsupportedAuthorityOrSeniority(snapshot, candidateText)) return { reason: 'unsupported_claim', predicate: 'unsupported_authority_or_seniority' };
+  if (hasUnsupportedNumericMetric(snapshot, candidateText)) return { reason: 'unsupported_claim', predicate: 'unsupported_numeric_metric' };
+  if (hasUnsupportedCandidateSemanticMaterial(snapshot, candidateText)) return { reason: 'unsupported_claim', predicate: 'unsupported_candidate_semantic_material' };
+  if (hasUnsupportedCandidateNamedToolSurface(snapshot, candidateText)) return { reason: 'unsupported_claim', predicate: 'unsupported_named_tool_surface' };
+  if (hasEmploymentStateContradiction(snapshot, candidateText)) return { reason: 'unsupported_claim', predicate: 'employment_state_contradiction' };
+  return { reason: null, predicate: null };
+}
+
+function localHardRejection(
+  snapshot: SummaryV3StyleOperationSnapshot,
+  candidateText: string,
+  observe?: (decision: LocalHardDecision) => void,
+): LocalHardDecision['reason'] {
+  const decision = localHardRejectionDecision(snapshot, candidateText);
+  observe?.(decision);
+  return decision.reason;
 }
 
 function styleContentTokens(value: string): ReadonlySet<string> {
@@ -2132,19 +2154,26 @@ function sourceRetainingSafeNoOpEligibilityReason(
 function sourceRetainingSafeNoOpAllowed(
   snapshot: SummaryV3StyleOperationSnapshot,
   evaluatorRoleIdentityResolution?: SummaryV3StyleRoleIdentityResolution,
+  observe?: (reason: SummaryStyleSafeNoOpEligibility) => void,
 ): boolean {
-  return sourceRetainingSafeNoOpEligibilityReason(snapshot, evaluatorRoleIdentityResolution) === 'eligible';
+  const reason = sourceRetainingSafeNoOpEligibilityReason(snapshot, evaluatorRoleIdentityResolution);
+  observe?.(reason);
+  return reason === 'eligible';
 }
 
 function sourceRetainingSafeNoOpAllowedForCandidate(
   snapshot: SummaryV3StyleOperationSnapshot,
   candidateText: string,
   evaluatorRoleIdentityResolution?: SummaryV3StyleRoleIdentityResolution,
+  observe?: (reason: SummaryStyleSafeNoOpEligibility) => void,
 ): boolean {
   // A source-retaining no-op may preserve an unchanged source, but it must
   // never mask an explicit opposite employment state in the candidate.
-  return !hasEmploymentStateContradiction(snapshot, candidateText)
-    && sourceRetainingSafeNoOpAllowed(snapshot, evaluatorRoleIdentityResolution);
+  if (hasEmploymentStateContradiction(snapshot, candidateText)) {
+    observe?.('employment_state_contradiction');
+    return false;
+  }
+  return sourceRetainingSafeNoOpAllowed(snapshot, evaluatorRoleIdentityResolution, observe);
 }
 
 function sameOrderedFactIds(
@@ -2200,14 +2229,21 @@ function allPhasesPassed(evaluation: ParsedEvaluation): boolean {
   return REQUIRED_PHASES.every((phase) => evaluation.phases[phase].status === 'passed');
 }
 
+function roleIdentityResolutionFailureClass(
+  snapshot: SummaryV3StyleOperationSnapshot,
+  evaluation: ParsedEvaluation,
+): SummaryStyleRoleFailure | null {
+  if (evaluation.roleIdentityResolution === 'contradiction') return 'evaluator_role_contradiction';
+  if (evaluation.roleIdentityResolution === 'unresolved') return 'evaluator_role_unresolved';
+  return roleEmployerIdentityDecision(snapshot).status === 'unresolved'
+    && evaluation.roleIdentityResolution !== 'equivalent' ? 'snapshot_role_unresolved_without_equivalence' : null;
+}
+
 function roleIdentityResolutionFailure(
   snapshot: SummaryV3StyleOperationSnapshot,
   evaluation: ParsedEvaluation,
 ): Extract<SummaryV3StyleFailureReason, 'unsupported_claim'> | null {
-  if (evaluation.roleIdentityResolution === 'contradiction'
-    || evaluation.roleIdentityResolution === 'unresolved') return 'unsupported_claim';
-  return roleEmployerIdentityDecision(snapshot).status === 'unresolved'
-    && evaluation.roleIdentityResolution !== 'equivalent' ? 'unsupported_claim' : null;
+  return roleIdentityResolutionFailureClass(snapshot, evaluation) ? 'unsupported_claim' : null;
 }
 
 function styleFulfilled(styleEvidence: ParsedStyleEvidence): boolean {
@@ -2651,6 +2687,61 @@ function postEvaluatorFailureEvidence(
   }) as SummaryV3StyleEvidence;
 }
 
+function withLocalDecisionDiagnostics(
+  result: SummaryV3StyleResult,
+  snapshot: SummaryV3StyleOperationSnapshot,
+  evaluation: ParsedEvaluation,
+  hardDecision: LocalHardDecision,
+  roleFailure: SummaryStyleRoleFailure | null,
+  safeNoOpEligibility: SummaryStyleSafeNoOpEligibility,
+): SummaryV3StyleResult {
+  if (snapshot.style !== 'stronger') return result;
+  const ownsUnsupportedTerminal = result.kind === 'handled_failure'
+    && result.typedReason === 'unsupported_claim'
+    && result.evidence.postEvaluatorLocalFailureClass === 'unsupported_claim';
+  const owner = !ownsUnsupportedTerminal ? null
+    : hardDecision.reason === 'unsupported_claim' ? 'hard_guard'
+      : roleFailure ? 'role_identity_resolution' : null;
+  const predicate = owner === 'hard_guard' ? hardDecision.predicate : null;
+  // Existing category/mismatch helpers have different precedence. Publish an
+  // existing value only if it is attributable to this captured winning branch;
+  // never rerun those helpers (or any predicate) to manufacture provenance.
+  const categoryForPredicate: Record<SummaryStyleHardPredicate, SummaryV3StyleUnsupportedClaimCategory> = {
+    unsupported_source_inconsistency: 'source_floor_mismatch',
+    injected_manifest_fact: 'manifest_ceiling_mismatch',
+    unsupported_authority_or_seniority: 'unsupported_authority',
+    unsupported_numeric_metric: 'unsupported_metric',
+    unsupported_candidate_semantic_material: 'source_floor_mismatch',
+    unsupported_named_tool_surface: 'source_floor_mismatch',
+    employment_state_contradiction: 'source_floor_mismatch',
+  };
+  const mismatchForPredicate: Partial<Record<SummaryStyleHardPredicate, SummaryV3StyleSourceFloorMismatchClass>> = {
+    unsupported_source_inconsistency: 'source_inconsistency',
+    unsupported_candidate_semantic_material: 'candidate_semantic_material',
+    unsupported_named_tool_surface: 'candidate_named_tool_surface',
+    employment_state_contradiction: 'employment_state_contradiction',
+  };
+  const expectedCategory = predicate ? categoryForPredicate[predicate]
+    : owner === 'role_identity_resolution' ? 'source_floor_mismatch' : null;
+  const expectedMismatch = predicate ? mismatchForPredicate[predicate] ?? null
+    : owner === 'role_identity_resolution' ? 'role_identity_rejection' : null;
+  const evidence = result.kind === 'not_applicable' ? null : result.evidence;
+  return recordSummaryStyleLocalDiagnostics(result, {
+    postEvaluatorLocalOwner: owner,
+    postEvaluatorHardPredicate: predicate,
+    postEvaluatorRoleIdentityFailureClass: owner === 'role_identity_resolution' ? roleFailure : null,
+    postEvaluatorUnsupportedClaimCategory: expectedCategory !== null
+      && evidence?.unsupportedClaimCategory === expectedCategory ? expectedCategory : null,
+    postEvaluatorSourceFloorMismatchClass: expectedMismatch !== null
+      && evidence?.sourceFloorMismatchClass === expectedMismatch ? expectedMismatch : null,
+    evaluatorAllPhasesPassed: allPhasesPassed(evaluation),
+    evaluatorViolationCount: allViolations(evaluation).length,
+    evaluatorRoleIdentityResolution: evaluation.roleIdentityResolution,
+    strongerSafeNoOpEligibility: safeNoOpEligibility !== 'not_evaluated' || ownsUnsupportedTerminal
+      ? safeNoOpEligibility : null,
+  });
+}
+
 function candidateReady(snapshot: SummaryV3StyleOperationSnapshot, candidate: SummaryV3StyleCandidate, evidence: SummaryV3StyleEvidence): SummaryV3StyleResult {
   if (JSON.stringify(evidence).length > 8_192) return createSummaryV3StyleHandledFailure(snapshot, 'diagnostic_size_exceeded', evidence);
   return immutableCopy({ kind: 'candidate_ready', style: snapshot.style, mode: snapshot.mode, candidate, evidence }) as SummaryV3StyleResult;
@@ -2798,8 +2889,16 @@ export async function executeSummaryV3StyleServer(
       ? parsedEvaluator.evaluatorOutputContractFailureClass
       : null,
   }));
-  const initialHardRejection = localHardRejection(snapshot, parsedWriter.candidate.text);
-  const initialRoleIdentityFailure = roleIdentityResolutionFailure(snapshot, parsedEvaluator.evaluation);
+  let initialHardDecision: LocalHardDecision = { reason: null, predicate: null };
+  const initialHardRejection = localHardRejection(snapshot, parsedWriter.candidate.text,
+    (decision) => { initialHardDecision = decision; });
+  const initialRoleFailureClass = roleIdentityResolutionFailureClass(snapshot, parsedEvaluator.evaluation);
+  const initialRoleIdentityFailure = initialRoleFailureClass ? 'unsupported_claim' as const : null;
+  let safeNoOpEligibility: SummaryStyleSafeNoOpEligibility = 'not_evaluated';
+  const observeSafeNoOpEligibility = (reason: SummaryStyleSafeNoOpEligibility) => { safeNoOpEligibility = reason; };
+  const finishInitial = (result: SummaryV3StyleResult) => withLocalDecisionDiagnostics(
+    result, snapshot, parsedEvaluator.evaluation, initialHardDecision, initialRoleFailureClass, safeNoOpEligibility,
+  );
   const initialStyleFailure = initialHardRejection || initialRoleIdentityFailure || (allPhasesPassed(parsedEvaluator.evaluation)
     ? localStyleFailure(snapshot, parsedWriter.candidate, parsedEvaluator.evaluation.styleEvidence)
     : null);
@@ -2823,11 +2922,11 @@ export async function executeSummaryV3StyleServer(
       && sourceRetainingSafeNoOpAllowedForCandidate(snapshot, parsedWriter.candidate.text),
   });
   if (initialHardRejection) {
-    return initialHardRejection === 'unsupported_claim'
-      && sourceRetainingSafeNoOpAllowedForCandidate(snapshot, parsedWriter.candidate.text)
+    return finishInitial(initialHardRejection === 'unsupported_claim'
+      && sourceRetainingSafeNoOpAllowedForCandidate(snapshot, parsedWriter.candidate.text, undefined, observeSafeNoOpEligibility)
       ? safeNoOpResult(snapshot, initialEvidence, initialUnsupportedCategory)
       : createSummaryV3StyleHandledFailure(snapshot, initialHardRejection,
-        postEvaluatorFailureEvidence(initialEvidence, parsedEvaluator.evaluation, initialHardRejection));
+        postEvaluatorFailureEvidence(initialEvidence, parsedEvaluator.evaluation, initialHardRejection)));
   }
   if (allPhasesPassed(parsedEvaluator.evaluation) && !initialStyleFailure) {
     if (snapshot.mode === 'enhance_existing_content' && parsedEvaluator.evaluation.styleEvidence.noOpDetected) {
@@ -2837,12 +2936,13 @@ export async function executeSummaryV3StyleServer(
           snapshot,
           parsedWriter.candidate.text,
           evaluatorRoleIdentityResolution,
+          observeSafeNoOpEligibility,
         );
       const effectiveEligibilityReason = sourceRetainingSafeNoOpEligibilityReason(
         snapshot,
         evaluatorRoleIdentityResolution,
       );
-      return sourceRetainingAllowed
+      return finishInitial(sourceRetainingAllowed
         ? safeNoOpResult(snapshot, makeEvidence(snapshot, {
           writerAttempts: 1,
           evaluatorAttempts: 1,
@@ -2867,23 +2967,23 @@ export async function executeSummaryV3StyleServer(
           ),
           safeNoOpEligibilityReason: effectiveEligibilityReason,
           evaluatorNoOpClaimed: true,
-        }));
+        })));
     }
-    return candidateReady(snapshot, parsedWriter.candidate, initialEvidence);
+    return finishInitial(candidateReady(snapshot, parsedWriter.candidate, initialEvidence));
   }
   // A no-op is terminal.  A malformed or rejected no-op claim must fail closed,
   // never trigger a repair merely to manufacture a different Summary.
   if (snapshot.mode === 'enhance_existing_content' && parsedEvaluator.evaluation.styleEvidence.noOpDetected) {
-    return createSummaryV3StyleHandledFailure(snapshot, initialTerminalFailure || 'evaluator_rejected',
-      postEvaluatorFailureEvidence(initialEvidence, parsedEvaluator.evaluation, initialStyleFailure));
+    return finishInitial(createSummaryV3StyleHandledFailure(snapshot, initialTerminalFailure || 'evaluator_rejected',
+      postEvaluatorFailureEvidence(initialEvidence, parsedEvaluator.evaluation, initialStyleFailure)));
   }
   if (initialTerminalFailure === 'unsupported_claim'
-    && sourceRetainingSafeNoOpAllowedForCandidate(snapshot, parsedWriter.candidate.text)) {
-    return safeNoOpResult(snapshot, initialEvidence, initialUnsupportedCategory);
+    && sourceRetainingSafeNoOpAllowedForCandidate(snapshot, parsedWriter.candidate.text, undefined, observeSafeNoOpEligibility)) {
+    return finishInitial(safeNoOpResult(snapshot, initialEvidence, initialUnsupportedCategory));
   }
   if (!canRepair(parsedEvaluator.evaluation) || !dependencies.repairWrite || !dependencies.repairEvaluate) {
-    return createSummaryV3StyleHandledFailure(snapshot, initialTerminalFailure || 'evaluator_rejected',
-      postEvaluatorFailureEvidence(initialEvidence, parsedEvaluator.evaluation, initialStyleFailure));
+    return finishInitial(createSummaryV3StyleHandledFailure(snapshot, initialTerminalFailure || 'evaluator_rejected',
+      postEvaluatorFailureEvidence(initialEvidence, parsedEvaluator.evaluation, initialStyleFailure)));
   }
 
   const violations = allViolations(parsedEvaluator.evaluation);
@@ -2939,8 +3039,14 @@ export async function executeSummaryV3StyleServer(
     }));
   }
   const repairNoOpClaimed = snapshot.mode === 'enhance_existing_content' && parsedRepairEvaluator.evaluation.styleEvidence.noOpDetected;
-  const repairHardRejection = localHardRejection(snapshot, parsedRepairWriter.candidate.text);
-  const repairRoleIdentityFailure = roleIdentityResolutionFailure(snapshot, parsedRepairEvaluator.evaluation);
+  let repairHardDecision: LocalHardDecision = { reason: null, predicate: null };
+  const repairHardRejection = localHardRejection(snapshot, parsedRepairWriter.candidate.text,
+    (decision) => { repairHardDecision = decision; });
+  const repairRoleFailureClass = roleIdentityResolutionFailureClass(snapshot, parsedRepairEvaluator.evaluation);
+  const repairRoleIdentityFailure = repairRoleFailureClass ? 'unsupported_claim' as const : null;
+  const finishRepair = (result: SummaryV3StyleResult) => withLocalDecisionDiagnostics(
+    result, snapshot, parsedRepairEvaluator.evaluation, repairHardDecision, repairRoleFailureClass, safeNoOpEligibility,
+  );
   const repairStyleFailure = repairNoOpClaimed
     ? 'repair_rejected' as const
     : repairHardRejection || repairRoleIdentityFailure || (allPhasesPassed(parsedRepairEvaluator.evaluation)
@@ -2953,9 +3059,9 @@ export async function executeSummaryV3StyleServer(
     evaluatorNoOpClaimed: repairNoOpClaimed,
   });
   if (!allPhasesPassed(parsedRepairEvaluator.evaluation) || repairStyleFailure) {
-    return createSummaryV3StyleHandledFailure(snapshot, repairStyleFailure || 'repair_rejected',
+    return finishRepair(createSummaryV3StyleHandledFailure(snapshot, repairStyleFailure || 'repair_rejected',
       postEvaluatorFailureEvidence(repairEvidence, parsedRepairEvaluator.evaluation,
-        repairStyleFailure === 'repair_rejected' ? null : repairStyleFailure));
+        repairStyleFailure === 'repair_rejected' ? null : repairStyleFailure)));
   }
-  return candidateReady(snapshot, parsedRepairWriter.candidate, repairEvidence);
+  return finishRepair(candidateReady(snapshot, parsedRepairWriter.candidate, repairEvidence));
 }
