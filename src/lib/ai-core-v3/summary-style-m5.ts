@@ -35,7 +35,7 @@ export type SummaryV3StyleRoleIdentityResolution = (typeof SUMMARY_V3_STYLE_M5_R
 /** Input ceilings keep the immutable M5.1 snapshot and its provider contracts bounded. */
 const SUMMARY_V3_STYLE_MAX_MANIFEST_ENTRIES = 64;
 const SUMMARY_V3_STYLE_MAX_ENTRY_FACTS = 64;
-const SUMMARY_V3_STYLE_MAX_TOTAL_FACTS = 256;
+export const SUMMARY_V3_STYLE_MAX_TOTAL_FACTS = 256;
 const SUMMARY_V3_STYLE_MAX_PROTECTED_ENTITIES = 64;
 
 export type SummaryV3StyleNotApplicableReason =
@@ -323,6 +323,29 @@ export interface SummaryV3StyleEntityLock {
   readonly value: string;
 }
 
+export const SUMMARY_V3_STYLE_SOURCE_LOCK_ORIGINS = [
+  'protected_entity', 'automatic_relation_subject', 'manifest_role',
+  'manifest_employer', 'manifest_duration', 'unknown',
+] as const;
+export type SummaryV3StyleSourceLockOrigin = (typeof SUMMARY_V3_STYLE_SOURCE_LOCK_ORIGINS)[number];
+
+export const SUMMARY_V3_STYLE_SOURCE_LOCK_SURFACE_MATCH_CLASSES = [
+  'absent_exact_surface', 'exact_surface_nonstandalone_only', 'case_variant_only',
+  'normalized_standalone_present', 'not_applicable',
+] as const;
+export type SummaryV3StyleSourceLockSurfaceMatchClass = (typeof SUMMARY_V3_STYLE_SOURCE_LOCK_SURFACE_MATCH_CLASSES)[number];
+
+export interface SummaryV3StyleSourceLockDiagnostics {
+  readonly sourceLockOrigin: SummaryV3StyleSourceLockOrigin;
+  readonly sourceLockSurfaceMatchClass: SummaryV3StyleSourceLockSurfaceMatchClass;
+  readonly sourceLockRequiredFactBindingCount: number | null;
+  readonly sourceLockDeclaredFactBindingCount: number | null;
+}
+
+// Construction provenance only: never a snapshot property, hash input, provider
+// payload or validation authority. Losing the sidecar yields unknown, not a guess.
+const sourceLockOrigins = new WeakMap<SummaryV3StyleOperationSnapshot, readonly SummaryV3StyleSourceLockOrigin[]>();
+
 export const SUMMARY_V3_STYLE_SOURCE_LOCK_FAILURE_REASONS = [
   'identity_surface_missing',
   'identity_unattested_suffix',
@@ -504,6 +527,10 @@ export type SummaryV3StyleEvidence = Readonly<{
   readonly sourceLockFailureKind?: SummaryV3StyleEntityLock['kind'] | null;
   readonly sourceLockFailureReason?: SummaryV3StyleSourceLockFailureReason | null;
   readonly sourceLockFailedIndex?: number | null;
+  readonly sourceLockOrigin?: SummaryV3StyleSourceLockOrigin | null;
+  readonly sourceLockSurfaceMatchClass?: SummaryV3StyleSourceLockSurfaceMatchClass | null;
+  readonly sourceLockRequiredFactBindingCount?: number | null;
+  readonly sourceLockDeclaredFactBindingCount?: number | null;
   readonly factRepresentationFailureReason?: SummaryV3StyleFactRepresentationFailureReason | null;
   /** These fields describe firstFailedFactIndex, never the fallback index. */
   readonly factRepresentationFailedFactIndex?: number | null;
@@ -2738,6 +2765,7 @@ const AUTO_RELATION_STATE_WORDS = new Set(['current', 'former', 'previous', 'pas
 function automaticRelationEntityLocks(
   source: string,
   locks: readonly SummaryV3StyleEntityLock[],
+  origins: SummaryV3StyleSourceLockOrigin[],
 ): readonly SummaryV3StyleEntityLock[] {
   const existing = new Set(locks.map((lock) => normalizedRelationText(lock.value)));
   const candidates = Array.from(new Set(sourceMaterialFactTexts(source)
@@ -2751,6 +2779,7 @@ function automaticRelationEntityLocks(
   if (candidates.length < 2) return locks;
   const additions = candidates
     .map((value) => ({ kind: 'entity' as const, value, hash: hashSummaryV3StyleValue(`entity:auto:${value}`) }));
+  for (let index = 0; index < additions.length; index += 1) origins.push('automatic_relation_subject');
   return immutableCopy([...locks, ...additions]) as readonly SummaryV3StyleEntityLock[];
 }
 
@@ -2930,6 +2959,7 @@ function entityLocks(
   entries: readonly SummaryV3StyleExperienceInput[],
   visibleSummary: string,
   protectedEntities: readonly string[] | undefined,
+  origins: SummaryV3StyleSourceLockOrigin[],
 ): readonly SummaryV3StyleEntityLock[] {
   const candidateLocks = entries.flatMap((entry) => [
     ['role', entry.role], ['employer', entry.employer], ['duration', String(entry.durationMonths)],
@@ -2943,6 +2973,9 @@ function entityLocks(
         && summaryV3StyleContainsExactSurface(clause, other.value))));
   const locks: SummaryV3StyleEntityLock[] = visibleCandidateLocks
     .map((lock) => ({ kind: lock.kind, value: lock.value, hash: hashSummaryV3StyleValue(`${lock.kind}:${lock.value}`) }));
+  for (const lock of visibleCandidateLocks) {
+    origins.push(lock.kind === 'role' ? 'manifest_role' : lock.kind === 'employer' ? 'manifest_employer' : 'manifest_duration');
+  }
   if (protectedEntities !== undefined) {
     if (!Array.isArray(protectedEntities) || protectedEntities.length > SUMMARY_V3_STYLE_MAX_PROTECTED_ENTITIES) {
       throw new SummaryV3StyleInputError('malformed_request', 'protectedEntities');
@@ -2953,6 +2986,7 @@ function entityLocks(
         throw new SummaryV3StyleInputError('source_fact_not_visible', 'protected entity is not visible in source');
       }
       locks.push({ kind: 'entity', value: entity, hash: hashSummaryV3StyleValue(`entity:${entity}`) });
+      origins.push('protected_entity');
     }
   }
   return immutableCopy(locks) as readonly SummaryV3StyleEntityLock[];
@@ -3160,9 +3194,11 @@ export function createSummaryV3StyleOperationSnapshot(request: SummaryV3StyleReq
     ? immutableManifestFacts
     : visibleFacts(request.visibleSummaryFacts, sourceSummary);
   if (facts.length === 0) throw new SummaryV3StyleInputError('insufficient_context', 'no required facts');
+  const origins: SummaryV3StyleSourceLockOrigin[] = [];
   const locks = automaticRelationEntityLocks(
     sourceSummary,
-    entityLocks(manifestState.entries, sourceSummary, request.protectedEntities),
+    entityLocks(manifestState.entries, sourceSummary, request.protectedEntities, origins),
+    origins,
   );
   const transformableDuty = validateTransformableDuty(facts, sourceSummary, ownership.style, mode, locks);
   const relationBindings = entityRelationBindings(sourceSummary, locks, facts);
@@ -3234,7 +3270,7 @@ export function createSummaryV3StyleOperationSnapshot(request: SummaryV3StyleReq
     sourceUnits: sourceUnits(sourceSummary).map((unit) => [unit.id, unit.hash]),
     structuredDurationMonths: manifestState.totalDurationMonths,
   }));
-  return immutableCopy({
+  const snapshot = immutableCopy({
     operationId: request.operationId,
     style: ownership.style,
     mode,
@@ -3260,6 +3296,8 @@ export function createSummaryV3StyleOperationSnapshot(request: SummaryV3StyleReq
     requestIdentityHash,
     createdAt,
   }) as SummaryV3StyleOperationSnapshot;
+  sourceLockOrigins.set(snapshot, Object.freeze(origins));
+  return snapshot;
 }
 
 export function createSummaryV3StyleInitialEvidence(snapshot: SummaryV3StyleOperationSnapshot): SummaryV3StyleEvidence {
@@ -3565,6 +3603,52 @@ export function summaryV3StyleCandidatePreservesLocks(
   candidateText: string,
 ): boolean {
   return inspectSummaryV3StyleCandidatePreservesLocks(snapshot, candidateText).preserved;
+}
+
+/** Observe a rejected lock; never participate in admission or provider inputs. */
+export function summarizeSummaryV3StyleSourceLockDiagnostics(
+  snapshot: SummaryV3StyleOperationSnapshot,
+  candidate: SummaryV3StyleCandidate,
+  inspection: SummaryV3StyleSourceLockInspection,
+): SummaryV3StyleSourceLockDiagnostics {
+  const index = inspection.failedIndex;
+  const lock = typeof index === 'number' && Number.isSafeInteger(index) && index >= 0
+    ? snapshot.entityLocks[index] : undefined;
+  if (inspection.preserved || !lock || snapshot.requiredFacts.length > SUMMARY_V3_STYLE_MAX_TOTAL_FACTS) {
+    return Object.freeze({ sourceLockOrigin: 'unknown', sourceLockSurfaceMatchClass: 'not_applicable',
+      sourceLockRequiredFactBindingCount: null, sourceLockDeclaredFactBindingCount: null });
+  }
+  const caseSensitive = lock.kind === 'entity';
+  const surface = normalizeSummaryV3StyleText(lock.value);
+  const text = normalizeSummaryV3StyleText(candidate.text);
+  let matchClass: SummaryV3StyleSourceLockSurfaceMatchClass = 'not_applicable';
+  if (lock.kind !== 'duration' && surface && text) {
+    const exactHaystack = caseSensitive ? text : text.toLocaleLowerCase();
+    const exactNeedle = caseSensitive ? surface : surface.toLocaleLowerCase();
+    matchClass = summaryV3StyleContainsExactSurface(text, surface, caseSensitive)
+      ? 'normalized_standalone_present'
+      : exactHaystack.includes(exactNeedle) ? 'exact_surface_nonstandalone_only'
+        : caseSensitive && summaryV3StyleContainsExactSurface(text, surface)
+          ? 'case_variant_only' : 'absent_exact_surface';
+  }
+  const declared = new Set(candidate.units.flatMap((unit) => unit.factIds));
+  let requiredCount = 0;
+  let declaredCount = 0;
+  for (const fact of snapshot.requiredFacts) {
+    const bound = lock.kind === 'duration'
+      ? summaryV3StyleContainsExactSurface(normalizeSummaryV3StyleNumericSurface(fact.text), normalizeSummaryV3StyleNumericSurface(surface), true)
+      : summaryV3StyleContainsExactSurface(fact.text, surface, caseSensitive);
+    if (bound) {
+      requiredCount += 1;
+      if (declared.has(fact.id)) declaredCount += 1;
+    }
+  }
+  return Object.freeze({
+    sourceLockOrigin: sourceLockOrigins.get(snapshot)?.[index!] ?? 'unknown',
+    sourceLockSurfaceMatchClass: matchClass,
+    sourceLockRequiredFactBindingCount: requiredCount,
+    sourceLockDeclaredFactBindingCount: declaredCount,
+  });
 }
 
 /**

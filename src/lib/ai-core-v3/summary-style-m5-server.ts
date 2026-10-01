@@ -23,6 +23,7 @@ import {
   normalizeSummaryV3StyleText,
   normalizedSummaryV3StyleLength,
   summarizeSummaryV3StyleFactCoverage,
+  summarizeSummaryV3StyleSourceLockDiagnostics,
   summaryV3StyleCandidatePreservesCalendarDateSurfaces,
   summaryV3StyleCandidatePreservesExactMaterialSurfaces,
   summaryV3StyleCandidatePreservesEntityFactBindings,
@@ -2427,6 +2428,7 @@ function makeEvidence(snapshot: SummaryV3StyleOperationSnapshot, update: Evidenc
       sourceLockFailureKind: update.sourceLockInspection.failureKind,
       sourceLockFailureReason: update.sourceLockInspection.failureReason,
       sourceLockFailedIndex: update.sourceLockInspection.failedIndex,
+      ...(candidate ? summarizeSummaryV3StyleSourceLockDiagnostics(snapshot, candidate, update.sourceLockInspection) : {}),
     } : {}),
     employmentStateContradictionClass: effectiveSourceFloorMismatchClass === 'employment_state_contradiction'
       ? (update.employmentStateContradictionClass

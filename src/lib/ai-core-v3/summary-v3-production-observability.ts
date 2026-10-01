@@ -13,6 +13,8 @@ import type {
   SummaryV3StyleMultiFactFallbackFailureReason,
   SummaryV3StyleVisibleFactKind,
   SummaryV3StyleSourceLockFailureReason,
+  SummaryV3StyleSourceLockOrigin,
+  SummaryV3StyleSourceLockSurfaceMatchClass,
   SummaryV3StyleEntityLock,
   SummaryV3StylePhase,
   SummaryV3StyleViolationCode,
@@ -21,6 +23,9 @@ import type {
 import {
   SUMMARY_V3_STYLE_M5_PHASES,
   SUMMARY_V3_STYLE_M5_POST_EVALUATOR_LOCAL_FAILURE_CLASSES,
+  SUMMARY_V3_STYLE_SOURCE_LOCK_ORIGINS,
+  SUMMARY_V3_STYLE_SOURCE_LOCK_SURFACE_MATCH_CLASSES,
+  SUMMARY_V3_STYLE_MAX_TOTAL_FACTS,
   isSummaryV3StyleViolationCode,
 } from './summary-style-m5';
 import type { SummaryV3StyleM5RouteFailure } from './summary-style-m5-transport';
@@ -86,6 +91,10 @@ export interface SummaryStrongerTerminalDiagnosticEvent {
   readonly sourceLockFailureKind?: SummaryV3StyleEntityLock['kind'];
   readonly sourceLockFailureReason?: SummaryV3StyleSourceLockFailureReason;
   readonly sourceLockFailedIndex?: number;
+  readonly sourceLockOrigin: SummaryV3StyleSourceLockOrigin | null;
+  readonly sourceLockSurfaceMatchClass: SummaryV3StyleSourceLockSurfaceMatchClass | null;
+  readonly sourceLockRequiredFactBindingCount: number | null;
+  readonly sourceLockDeclaredFactBindingCount: number | null;
   readonly factRepresentationFailureReason?: SummaryV3StyleFactRepresentationFailureReason;
   readonly factRepresentationFailedFactIndex?: number;
   readonly factRepresentationFailedFactSemanticKind?: SummaryV3StyleVisibleFactKind;
@@ -373,6 +382,14 @@ export function createSummaryStrongerTerminalDiagnostic(
       ...(typeof candidateSourceFloorEvidence.sourceLockFailedIndex === 'number' ? { sourceLockFailedIndex: safeNonNegativeInteger(candidateSourceFloorEvidence.sourceLockFailedIndex) } : {}),
     }
     : {};
+  const lockFailure = input.result.kind === 'handled_failure'
+    && input.result.typedReason === 'lost_source_fact'
+    && candidateSourceFloorEvidence?.writerOutputContractFailureClass === 'source_lock_preservation'
+    ? candidateSourceFloorEvidence : null;
+  const bindingCount = (value: unknown): number | null => typeof value === 'number'
+    && Number.isSafeInteger(value) && value >= 0 && value <= SUMMARY_V3_STYLE_MAX_TOTAL_FACTS ? value : null;
+  const requiredBindingCount = bindingCount(lockFailure?.sourceLockRequiredFactBindingCount);
+  const declaredBindingCount = bindingCount(lockFailure?.sourceLockDeclaredFactBindingCount);
 
   return {
     event: SUMMARY_STRONGER_TERMINAL_EVENT_NAME,
@@ -406,6 +423,17 @@ export function createSummaryStrongerTerminalDiagnostic(
       ? candidateSourceFloorEvidence.postEvaluatorLocalFailureClass : null,
     ...sourceFloorEvidence,
     ...sourceLockEvidence,
+    sourceLockOrigin: lockFailure
+      ? lockFailure.sourceLockOrigin && SUMMARY_V3_STYLE_SOURCE_LOCK_ORIGINS.includes(lockFailure.sourceLockOrigin)
+        ? lockFailure.sourceLockOrigin : 'unknown'
+      : null,
+    sourceLockSurfaceMatchClass: lockFailure
+      ? lockFailure.sourceLockSurfaceMatchClass && SUMMARY_V3_STYLE_SOURCE_LOCK_SURFACE_MATCH_CLASSES.includes(lockFailure.sourceLockSurfaceMatchClass)
+        ? lockFailure.sourceLockSurfaceMatchClass : 'not_applicable'
+      : null,
+    sourceLockRequiredFactBindingCount: requiredBindingCount,
+    sourceLockDeclaredFactBindingCount: requiredBindingCount !== null && declaredBindingCount !== null && declaredBindingCount <= requiredBindingCount
+      ? declaredBindingCount : null,
     repairAttempted,
     repairProviderRequestAttempted: styleRepairProviderRequestAttempted(input.result),
     evaluatorAttempted: evidence?.evaluatorReached === true
