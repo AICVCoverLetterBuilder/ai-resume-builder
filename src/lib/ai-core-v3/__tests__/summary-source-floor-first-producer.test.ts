@@ -162,6 +162,32 @@ async function parity(req: Domain.SummaryV3StyleRequest, text?: string, scenario
   return b;
 }
 
+function restoreTask071Comparison(text: string): string {
+  const source = ts.createSourceFile('task-071-oracle.ts', text, ts.ScriptTarget.Latest, true);
+  const owner = source.statements.filter(ts.isFunctionDeclaration)
+    .find(node => node.name?.text === 'sourceFloorFirstPositiveProducer');
+  if (!owner?.body) throw new Error('Missing authoritative source-floor owner');
+  const find = (name: string) => {
+    const matches = owner.body!.statements.filter(ts.isVariableStatement).filter(node =>
+      node.declarationList.declarations.some(declaration =>
+        ts.isIdentifier(declaration.name) && declaration.name.text === name));
+    expect(matches).toHaveLength(1);
+    return matches[0]!;
+  };
+  const comparison = find('numericComparisonSource');
+  const approved = ts.createSourceFile('approved.ts', "const numericComparisonSource = /[.,٫]\\p{N}{3,}|[\\p{Pd}−±+]\\s*\\p{N}/u.test(percentComparisonSource)\n    ? percentComparisonSource : percentComparisonSource.replace(/\\s+/gu, ' ').trim();", ts.ScriptTarget.Latest, true);
+  const printer = ts.createPrinter({ removeComments: true });
+  expect(printer.printNode(ts.EmitHint.Unspecified, comparison, source))
+    .toBe(printer.printNode(ts.EmitHint.Unspecified, approved.statements[0]!, approved));
+  const initializer = find('sourceNumbers').declarationList.declarations[0]!.initializer!;
+  const call = 'numericTokensOutsideValidatedStructuredDurationSurfaces(snapshot, numericComparisonSource, true)';
+  expect(initializer.getText(source)).toBe(call);
+  expect(text.split(call)).toHaveLength(2);
+  // Remove only the approved declaration/trivia; AST offsets are indentation-independent.
+  return (text.slice(0, comparison.getFullStart()) + text.slice(comparison.getEnd()))
+    .replace(call, 'numericTokensOutsideValidatedStructuredDurationSurfaces(snapshot, percentComparisonSource, true)');
+}
+
 describe('Task 068 first positive source-floor producer', () => {
   it.each(producers)('A: real isolated %s is the first positive branch', (producer, req) => {
     const snapshot = after.domain.createSummaryV3StyleOperationSnapshot(req);
@@ -290,13 +316,21 @@ describe('Task 068 first positive source-floor producer', () => {
         node.getText(source).replaceAll('\r\n', '\n')]));
     };
     const a = declarations(old), b = declarations(current);
-    const restored = b.get('sourceFloorFirstPositiveProducer')!
+    const restore068 = (text: string) => restoreTask071Comparison(text)
       .replace('sourceFloorFirstPositiveProducer', 'hasUnsupportedSourceInconsistency')
       .replace('SummaryStyleSourceFloorFirstProducer | null', 'boolean')
       .replace('return null;', 'return false;')
       .replace(/return '[a-z_]+';/gu, 'return true;')
       .replace(/\n    \? 'source_authority_term_membership_mismatch' : null;/u, ';');
+    const decision = b.get('sourceFloorFirstPositiveProducer')!;
+    const restored = restore068(decision);
     expect(restored).toBe(a.get('hasUnsupportedSourceInconsistency'));
+    // Mutation controls: the bounded adapter cannot erase order or predicate defects.
+    const first = "  if (hasExplicitSourceIdentityInconsistency(snapshot)) return 'explicit_source_identity_inconsistency';";
+    const second = "  if (hasUnannotatedSourceRoleEmployerFrameInconsistency(snapshot)) return 'unannotated_source_role_employer_frame_inconsistency';";
+    expect(decision).toContain(first + '\n' + second);
+    expect(restore068(decision.replace(first + '\n' + second, second + '\n' + first))).not.toBe(a.get('hasUnsupportedSourceInconsistency'));
+    expect(restore068(decision.replace('!manifestNumbers.has(number)', 'manifestNumbers.has(number)'))).not.toBe(a.get('hasUnsupportedSourceInconsistency'));
     const allowed = new Set(['hasUnsupportedSourceInconsistency', 'localHardRejectionDecision', 'withLocalDecisionDiagnostics']);
     for (const [name, body] of a) if (!allowed.has(name)) expect(b.get(name), name).toBe(body);
     expect([...b.keys()].filter(name => !a.has(name))).toEqual(['sourceFloorFirstPositiveProducer']);

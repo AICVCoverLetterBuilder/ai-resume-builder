@@ -1368,7 +1368,12 @@ function sourceFloorFirstPositiveProducer(snapshot: SummaryV3StyleOperationSnaps
   const manifestText = snapshot.manifestFacts.map((fact) => fact.text).join(' ');
   const manifestNumbers = new Set(numericTokens(manifestText));
   const percentComparisonSource = sourceManifestDecimalPercentComparison(snapshot);
-  const sourceNumbers = numericTokensOutsideValidatedStructuredDurationSurfaces(snapshot, percentComparisonSource, true);
+  // Typed duration/calendar ranges use collapsed whitespace. Align only this
+  // comparison view, never snapshot/provider text or candidate validation.
+  // Grouping-like fractions and signed/range surfaces retain the exact path.
+  const numericComparisonSource = /[.,٫]\p{N}{3,}|[\p{Pd}−±+]\s*\p{N}/u.test(percentComparisonSource)
+    ? percentComparisonSource : percentComparisonSource.replace(/\s+/gu, ' ').trim();
+  const sourceNumbers = numericTokensOutsideValidatedStructuredDurationSurfaces(snapshot, numericComparisonSource, true);
   if (sourceNumbers.some((number) => !manifestNumbers.has(number))) return 'source_numeric_membership_mismatch';
   if (hasRoleLocalSourceDurationContradiction(snapshot)) return 'role_local_source_duration_contradiction';
   const manifestSemanticClaims = new Set(snapshot.manifestFacts
