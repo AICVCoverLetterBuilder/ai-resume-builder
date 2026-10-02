@@ -205,6 +205,8 @@ describe('Task 062 local source/manifest decimal-percent repair', () => {
       const withoutProducer = (value: typeof after) => {
         const diagnostic: Record<string, unknown> = { ...value.diagnostic };
         delete diagnostic.sourceFloorFirstProducer;
+        delete diagnostic.sourceNumericMismatchClass;
+        delete diagnostic.sourceNumericMismatchComparisonClass;
         return { ...value, diagnostic };
       };
       expect(withoutProducer(after)).toEqual(withoutProducer(before));

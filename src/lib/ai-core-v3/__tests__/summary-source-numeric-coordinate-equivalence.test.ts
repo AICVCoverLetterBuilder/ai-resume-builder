@@ -9,6 +9,7 @@ import type * as Server from '../summary-style-m5-server';
 import type * as Provider from '../summary-style-m5-provider';
 import type * as Projector from '../summary-v3-production-observability';
 import * as Sidecar from '../summary-style-m5-local-observability';
+import { removeTask075ObservationFootprint } from './fixtures/summary-numeric-mismatch-observation-footprint';
 
 const BASELINE = '8cd06554718c8a0fba232035e5c8cdf328774fed';
 const root = process.cwd();
@@ -352,7 +353,7 @@ describe('Tasks 071/072 bounded source numeric coordinate equivalence', () => {
   it('only the approved comparison view changes; every other authority remains Git-byte-identical', () => {
     const relative = 'src/lib/ai-core-v3/summary-style-m5-server.ts';
     const original = execFileSync('git', ['show', BASELINE + ':' + relative], { cwd: root, encoding: 'utf8' }).replaceAll('\r\n', '\n');
-    const current = readFileSync(resolve(root, relative), 'utf8').replaceAll('\r\n', '\n');
+    const current = removeTask075ObservationFootprint(readFileSync(resolve(root, relative), 'utf8').replaceAll('\r\n', '\n'), 'summary-style-m5-server.ts');
     const restored = restoreTask071Comparison(current);
     expect(restored).toBe(original);
     const calls = (text: string) => {
@@ -377,7 +378,10 @@ describe('Tasks 071/072 bounded source numeric coordinate equivalence', () => {
       'src/lib/ai-core-v3/summary-style-m5-local-observability.ts',
       'src/lib/ai-core-v3/summary-v3-production-observability.ts',
       'src/app/api/generate/route.ts', 'src/app/cv-builder/page.tsx', 'android/app/build.gradle']) {
-      expect(readFileSync(resolve(root, file))).toEqual(execFileSync('git', ['show', BASELINE + ':' + file], { cwd: root }));
+      const actual = readFileSync(resolve(root, file));
+      const comparable = file.endsWith('/summary-style-m5-local-observability.ts')
+        ? Buffer.from(removeTask075ObservationFootprint(actual.toString('utf8'), 'summary-style-m5-local-observability.ts')) : actual;
+      expect(comparable).toEqual(execFileSync('git', ['show', BASELINE + ':' + file], { cwd: root }));
     }
   });
 

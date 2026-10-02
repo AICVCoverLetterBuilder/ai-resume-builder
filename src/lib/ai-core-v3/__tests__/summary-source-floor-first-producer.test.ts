@@ -9,6 +9,7 @@ import type * as Server from '../summary-style-m5-server';
 import type * as Provider from '../summary-style-m5-provider';
 import type * as Projector from '../summary-v3-production-observability';
 import * as Sidecar from '../summary-style-m5-local-observability';
+import { removeTask075ObservationFootprint } from './fixtures/summary-numeric-mismatch-observation-footprint';
 
 const BASELINE = '1b7426f98c0dcc4806048beab4c04df1483d8d40';
 const root = process.cwd();
@@ -101,6 +102,8 @@ const producers: readonly [Sidecar.SummaryStyleSourceFloorFirstProducer, Domain.
 function strip(value: unknown): Record<string, unknown> {
   const result = { ...value as Record<string, unknown> };
   delete result.sourceFloorFirstProducer;
+  delete result.sourceNumericMismatchClass;
+  delete result.sourceNumericMismatchComparisonClass;
   return result;
 }
 function projected(g: Graph, result: Domain.SummaryV3StyleResult) {
@@ -309,7 +312,7 @@ describe('Task 068 first positive source-floor producer', () => {
   it('same ordered decision body; all other server declarations and provider/projector/domain remain unchanged', () => {
     const relative = 'src/lib/ai-core-v3/summary-style-m5-server.ts';
     const old = execFileSync('git', ['show', BASELINE + ':' + relative], { cwd: root, encoding: 'utf8' });
-    const current = readFileSync(resolve(root, relative), 'utf8');
+    const current = removeTask075ObservationFootprint(readFileSync(resolve(root, relative), 'utf8'), 'summary-style-m5-server.ts');
     const declarations = (text: string) => {
       const source = ts.createSourceFile(relative, text, ts.ScriptTarget.Latest, true);
       return new Map(source.statements.filter(ts.isFunctionDeclaration).map(node => [node.name!.text,
@@ -344,7 +347,7 @@ describe('Task 068 first positive source-floor producer', () => {
   it('sidecar extension retains every previous declaration/property after removing only authorized field/type', () => {
     const relative = 'src/lib/ai-core-v3/summary-style-m5-local-observability.ts';
     const old = execFileSync('git', ['show', BASELINE + ':' + relative], { cwd: root, encoding: 'utf8' }).replaceAll('\r\n', '\n');
-    const current = readFileSync(resolve(root, relative), 'utf8').replaceAll('\r\n', '\n');
+    const current = removeTask075ObservationFootprint(readFileSync(resolve(root, relative), 'utf8').replaceAll('\r\n', '\n'), 'summary-style-m5-local-observability.ts');
     const restored = current
       .replace(/\/\/ One value per positive source-consistency branch, in execution order\.\nexport const SUMMARY_STYLE_SOURCE_FLOOR_FIRST_PRODUCERS = \[[\s\S]*?\] as const;\nexport type SummaryStyleSourceFloorFirstProducer = [^\n]+\n/u, '')
       .replace('  readonly sourceFloorFirstProducer: SummaryStyleSourceFloorFirstProducer | null;\n', '')

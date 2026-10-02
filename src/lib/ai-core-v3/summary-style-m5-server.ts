@@ -76,6 +76,7 @@ import {
   type SummaryStyleRoleFailure,
   type SummaryStyleSafeNoOpEligibility,
   type SummaryStyleSourceFloorFirstProducer,
+  type SummaryStyleSourceNumericMismatchEvidence,
 } from './summary-style-m5-local-observability';
 import { detectRoleLabelSourceLocale } from '@/lib/cv-summary-structured-role-localization';
 import {
@@ -914,10 +915,17 @@ function validatedStructuredDurationRanges(
   return durationRanges;
 }
 
+interface SourceNumericTokenLocation {
+  readonly source: string;
+  readonly start: number;
+  readonly end: number;
+}
+
 function numericTokensOutsideValidatedStructuredDurationSurfaces(
   snapshot: SummaryV3StyleOperationSnapshot,
   value = snapshot.sourceSummary,
   ignoreCalendarDates = false,
+  locations?: SourceNumericTokenLocation[],
 ): readonly string[] {
   const source = normalizeSummaryV3StyleNumericSurface(value).toLocaleLowerCase();
   const durationRanges = validatedStructuredDurationRanges(snapshot, value);
@@ -925,7 +933,10 @@ function numericTokensOutsideValidatedStructuredDurationSurfaces(
   return Array.from(source.matchAll(NUMBER_TOKEN_PATTERN))
     .filter((match) => match.index !== undefined
       && !excludedRanges.some(([start, end]) => match.index! >= start && match.index! + match[0].length <= end))
-    .map((match) => match[0]);
+    .map((match) => {
+      locations?.push({ source, start: match.index!, end: match.index! + match[0].length });
+      return match[0];
+    });
 }
 
 /**
@@ -1360,7 +1371,72 @@ function sourceManifestDecimalPercentComparison(snapshot: SummaryV3StyleOperatio
   }).join('');
 }
 
-function sourceFloorFirstPositiveProducer(snapshot: SummaryV3StyleOperationSnapshot): SummaryStyleSourceFloorFirstProducer | null {
+/** Classify only a captured authoritative token location; never compare numbers again. */
+function sourceNumericMismatchEvidence(
+  snapshot: SummaryV3StyleOperationSnapshot,
+  location: SourceNumericTokenLocation,
+): SummaryStyleSourceNumericMismatchEvidence {
+  const { source, start, end } = location;
+  const token = source.slice(start, end);
+  const canonical = normalizeSummaryV3StyleText(source);
+  const prefix = source.slice(0, start);
+  const canonicalStart = normalizeSummaryV3StyleText(prefix).length
+    + (/\s$/u.test(prefix) && prefix.trim().length > 0 ? 1 : 0);
+  const canonicalToken = normalizeSummaryV3StyleText(token);
+  const canonicalEnd = canonicalStart + canonicalToken.length;
+  if (canonical.slice(canonicalStart, canonicalEnd) !== canonicalToken) {
+    return { sourceNumericMismatchClass: 'unclassified', sourceNumericMismatchComparisonClass: 'unclassified' };
+  }
+  const spans = summaryV3StyleFactAnchorTokens(canonical).filter((span) => span.startsWith('span:'));
+  // The existing semantic-span formatter removes percent/currency spacing.
+  // Project only this captured location through that same formatting surface.
+  const semanticSurface = (text: string): string => text.replace(/\s*(?:%|٪)/gu, '%')
+    .replace(/(\p{Sc})\s+/gu, '$1').replace(/\s+(\p{Sc})/gu, '$1');
+  const semanticSource = semanticSurface(canonical);
+  const semanticStart = semanticSurface(canonical.slice(0, canonicalStart)).length;
+  const semanticEnd = semanticSurface(canonical.slice(0, canonicalEnd)).length;
+  const owningSpans = spans.filter((span) => {
+    const surface = span.slice('span:'.length);
+    let offset = 0;
+    while (offset < semanticSource.length) {
+      const index = semanticSource.indexOf(surface, offset);
+      if (index < 0) return false;
+      if (semanticStart >= index && semanticEnd <= index + surface.length) return true;
+      offset = index + surface.length;
+    }
+    return false;
+  });
+  const calendar = summaryV3StyleCalendarDateRanges(canonical)
+    .some(([left, right]) => canonicalStart < right && canonicalEnd > left);
+  const duration = owningSpans.find((span) => summaryV3StyleDurationMonthsFromSemanticSpan(span) !== null);
+  const ambiguous = /[.,٫]\p{N}{3,}/u.test(token)
+    || /[\p{Pd}−±+]\s*$/u.test(source.slice(0, start))
+    || /^\s*[\p{Pd}−±+]\s*\p{N}/u.test(source.slice(end));
+  // Precedence: existing calendar/duration authority, percent, currency,
+  // letter-bearing technical span, residual numeral script, decimal, integer.
+  const family: SummaryStyleSourceNumericMismatchEvidence['sourceNumericMismatchClass'] = calendar
+    ? /^(?:19|20)\d{2}$/u.test(token) ? 'year_component' : 'calendar_component'
+    : duration ? 'duration_component'
+      : owningSpans.some((span) => /(?:%|٪)$/u.test(span)) ? 'percentage'
+        : owningSpans.some((span) => /\p{Sc}/u.test(span)) ? 'currency_amount'
+          : owningSpans.some((span) => /\p{L}/u.test(span.slice('span:'.length))
+            && /^(?:[\p{L}\p{N}]+(?:\+\+|#)|[\p{L}\p{N}]+(?:\.[\p{L}\p{N}]+)+|\.[\p{L}\p{N}]{2,})$/u.test(span.slice('span:'.length))) ? 'technical_identifier'
+            : /[^0-9.,٫]/u.test(token) ? 'locale_numeric_surface'
+              : ambiguous || /\p{L}/u.test(source[start - 1] || '') || /\p{L}/u.test(source[end] || '') ? 'unclassified'
+                : /[.,٫]/u.test(token) ? 'decimal_number'
+                  : 'plain_integer_surface';
+  return {
+    sourceNumericMismatchClass: family,
+    sourceNumericMismatchComparisonClass: duration && isStructuredDurationSemanticSpan(duration, snapshot)
+      ? 'typed_duration_equivalent_not_excluded'
+      : ambiguous ? 'ambiguous_numeric_surface' : 'exact_manifest_token_absent',
+  };
+}
+
+function sourceFloorFirstPositiveProducer(
+  snapshot: SummaryV3StyleOperationSnapshot,
+  observeNumericMismatch?: (evidence: SummaryStyleSourceNumericMismatchEvidence) => void,
+): SummaryStyleSourceFloorFirstProducer | null {
   if (snapshot.mode !== 'enhance_existing_content') return null;
   if (hasExplicitSourceIdentityInconsistency(snapshot)) return 'explicit_source_identity_inconsistency';
   if (hasUnannotatedSourceRoleEmployerFrameInconsistency(snapshot)) return 'unannotated_source_role_employer_frame_inconsistency';
@@ -1373,8 +1449,17 @@ function sourceFloorFirstPositiveProducer(snapshot: SummaryV3StyleOperationSnaps
   // Grouping-like fractions and signed/range surfaces retain the exact path.
   const numericComparisonSource = /[.,٫]\p{N}{3,}|[\p{Pd}−±+]\s*\p{N}/u.test(percentComparisonSource)
     ? percentComparisonSource : percentComparisonSource.replace(/\s+/gu, ' ').trim();
-  const sourceNumbers = numericTokensOutsideValidatedStructuredDurationSurfaces(snapshot, numericComparisonSource, true);
-  if (sourceNumbers.some((number) => !manifestNumbers.has(number))) return 'source_numeric_membership_mismatch';
+  const sourceNumberLocations: SourceNumericTokenLocation[] = [];
+  const sourceNumbers = numericTokensOutsideValidatedStructuredDurationSurfaces(snapshot, numericComparisonSource, true, sourceNumberLocations);
+  let firstUnmatchedIndex = -1;
+  if (sourceNumbers.some((number, index) => {
+    const unmatched = !manifestNumbers.has(number);
+    if (unmatched) firstUnmatchedIndex = index;
+    return unmatched;
+  })) {
+    if (observeNumericMismatch) observeNumericMismatch(sourceNumericMismatchEvidence(snapshot, sourceNumberLocations[firstUnmatchedIndex]!));
+    return 'source_numeric_membership_mismatch';
+  }
   if (hasRoleLocalSourceDurationContradiction(snapshot)) return 'role_local_source_duration_contradiction';
   const manifestSemanticClaims = new Set(snapshot.manifestFacts
     .flatMap((fact) => summaryV3StyleFactAnchorTokens(fact.text))
@@ -1627,6 +1712,9 @@ interface LocalHardDecision {
   readonly predicate: SummaryStyleHardPredicate | null;
 }
 
+// Bound to this winning decision, not a later source scan or terminal inference.
+const sourceNumericHardDiagnostics = new WeakMap<LocalHardDecision, SummaryStyleSourceNumericMismatchEvidence>();
+
 function localHardRejectionDecision(
   snapshot: SummaryV3StyleOperationSnapshot,
   candidateText: string,
@@ -1640,8 +1728,13 @@ function localHardRejectionDecision(
   // opposite relation, but it cannot silently erase an explicit source state.
   if (employmentSourceStatePreservationFailure(snapshot, candidateText)) return { reason: 'lost_source_fact', predicate: null };
   // The same ordered short-circuit execution returns both reason and winner.
-  const sourceFloorFirstProducer = sourceFloorFirstPositiveProducer(snapshot);
-  if (sourceFloorFirstProducer !== null) return { reason: 'unsupported_claim', predicate: 'unsupported_source_inconsistency', sourceFloorFirstProducer };
+  let numericEvidence: SummaryStyleSourceNumericMismatchEvidence | null = null;
+  const sourceFloorFirstProducer = sourceFloorFirstPositiveProducer(snapshot, (value) => { numericEvidence = value; });
+  if (sourceFloorFirstProducer !== null) {
+    const decision: LocalHardDecision = { reason: 'unsupported_claim', predicate: 'unsupported_source_inconsistency', sourceFloorFirstProducer };
+    if (numericEvidence !== null) sourceNumericHardDiagnostics.set(decision, numericEvidence);
+    return decision;
+  }
   if (hasInjectedManifestFact(snapshot, candidateText)) return { reason: 'unsupported_claim', predicate: 'injected_manifest_fact' };
   if (hasUnsupportedAuthorityOrSeniority(snapshot, candidateText)) return { reason: 'unsupported_claim', predicate: 'unsupported_authority_or_seniority' };
   if (hasUnsupportedNumericMetric(snapshot, candidateText)) return { reason: 'unsupported_claim', predicate: 'unsupported_numeric_metric' };
@@ -2784,6 +2877,7 @@ function withLocalDecisionDiagnostics(
     : owner === 'role_identity_resolution' ? 'role_identity_rejection' : null;
   const evidence = result.kind === 'not_applicable' ? null : result.evidence;
   return recordSummaryStyleLocalDiagnostics(result, {
+    ...sourceNumericHardDiagnostics.get(hardDecision),
     sourceFloorFirstProducer: owner === 'hard_guard' && predicate === 'unsupported_source_inconsistency'
       ? hardDecision.sourceFloorFirstProducer ?? null : null,
     postEvaluatorLocalOwner: owner,

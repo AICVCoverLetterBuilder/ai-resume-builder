@@ -341,10 +341,13 @@ describe('Task 058 privacy, provider and identity noninterference', () => {
       evaluatorAllPhasesPassed: null, evaluatorViolationCount: null, evaluatorRoleIdentityResolution: null,
       strongerSafeNoOpEligibility: null });
   });
-  it('serializes only the ten approved finite fields for an actual local terminal', async () => {
+  it('serializes only the ten prior and two Task075 finite fields for an actual local terminal', async () => {
     const { result, diagnostic } = await parity(hardCases[6]![1]);
     const local = candidate.sidecar!.readSummaryStyleLocalDiagnostics(result);
-    expect(Object.keys(local)).toHaveLength(10);
+    expect(Object.keys(local)).toHaveLength(12);
+    expect(Object.keys(local).filter(key => !['sourceNumericMismatchClass', 'sourceNumericMismatchComparisonClass'].includes(key))).toHaveLength(10);
+    expect(local.sourceNumericMismatchClass).toBeNull();
+    expect(local.sourceNumericMismatchComparisonClass).toBeNull();
     expect(local.sourceFloorFirstProducer).toBeNull();
     expect(Object.isFrozen(local)).toBe(true);
     const serialized = JSON.stringify(diagnostic);

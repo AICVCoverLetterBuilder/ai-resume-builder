@@ -35,6 +35,22 @@ export const SUMMARY_STYLE_SOURCE_FLOOR_FIRST_PRODUCERS = [
   'source_authority_term_membership_mismatch',
 ] as const;
 export type SummaryStyleSourceFloorFirstProducer = (typeof SUMMARY_STYLE_SOURCE_FLOOR_FIRST_PRODUCERS)[number];
+// Syntactic/typed source families only, never raw numeric or user surfaces.
+export const SUMMARY_STYLE_SOURCE_NUMERIC_MISMATCH_CLASSES = [
+  'plain_integer_surface', 'decimal_number', 'percentage', 'duration_component',
+  'calendar_component', 'year_component', 'currency_amount', 'technical_identifier',
+  'locale_numeric_surface', 'unclassified',
+] as const;
+export const SUMMARY_STYLE_SOURCE_NUMERIC_MISMATCH_COMPARISON_CLASSES = [
+  'exact_manifest_token_absent', 'typed_duration_equivalent_not_excluded',
+  'ambiguous_numeric_surface', 'unclassified',
+] as const;
+export type SummaryStyleSourceNumericMismatchClass = (typeof SUMMARY_STYLE_SOURCE_NUMERIC_MISMATCH_CLASSES)[number];
+export type SummaryStyleSourceNumericMismatchComparisonClass = (typeof SUMMARY_STYLE_SOURCE_NUMERIC_MISMATCH_COMPARISON_CLASSES)[number];
+export interface SummaryStyleSourceNumericMismatchEvidence {
+  readonly sourceNumericMismatchClass: SummaryStyleSourceNumericMismatchClass;
+  readonly sourceNumericMismatchComparisonClass: SummaryStyleSourceNumericMismatchComparisonClass;
+}
 const UNSUPPORTED_CATEGORIES = [
   'unsupported_metric', 'unsupported_result_relation', 'unsupported_achievement',
   'unsupported_authority', 'source_floor_mismatch', 'manifest_ceiling_mismatch',
@@ -56,6 +72,8 @@ export const SUMMARY_STYLE_MAX_EVALUATOR_VIOLATIONS = SUMMARY_V3_STYLE_M5_PHASES
   * SUMMARY_V3_STYLE_M5_EVALUATOR_TOOL.input_schema.properties.phases.properties.structural.properties.violations.maxItems;
 
 export interface SummaryStyleLocalDiagnostics {
+  readonly sourceNumericMismatchClass: SummaryStyleSourceNumericMismatchClass | null;
+  readonly sourceNumericMismatchComparisonClass: SummaryStyleSourceNumericMismatchComparisonClass | null;
   readonly sourceFloorFirstProducer: SummaryStyleSourceFloorFirstProducer | null;
   readonly postEvaluatorLocalOwner: (typeof SUMMARY_STYLE_LOCAL_OWNERS)[number] | null;
   readonly postEvaluatorHardPredicate: SummaryStyleHardPredicate | null;
@@ -76,12 +94,20 @@ const finite = <T extends string>(value: unknown, allowed: readonly T[]): T | nu
 
 export function recordSummaryStyleLocalDiagnostics(
   result: SummaryV3StyleResult,
-  value: Omit<SummaryStyleLocalDiagnostics, 'sourceFloorFirstProducer'> & {
+  value: Omit<SummaryStyleLocalDiagnostics, 'sourceFloorFirstProducer' | 'sourceNumericMismatchClass' | 'sourceNumericMismatchComparisonClass'> & {
+    readonly sourceNumericMismatchClass?: SummaryStyleSourceNumericMismatchClass | null;
+    readonly sourceNumericMismatchComparisonClass?: SummaryStyleSourceNumericMismatchComparisonClass | null;
     readonly sourceFloorFirstProducer?: SummaryStyleSourceFloorFirstProducer | null;
   },
 ): SummaryV3StyleResult {
   const owner = finite(value.postEvaluatorLocalOwner, SUMMARY_STYLE_LOCAL_OWNERS);
+  const numericOwner = owner === 'hard_guard' && value.postEvaluatorHardPredicate === 'unsupported_source_inconsistency'
+    && value.sourceFloorFirstProducer === 'source_numeric_membership_mismatch';
+  const numericClass = numericOwner ? finite(value.sourceNumericMismatchClass, SUMMARY_STYLE_SOURCE_NUMERIC_MISMATCH_CLASSES) : null;
+  const comparisonClass = numericOwner ? finite(value.sourceNumericMismatchComparisonClass, SUMMARY_STYLE_SOURCE_NUMERIC_MISMATCH_COMPARISON_CLASSES) : null;
   diagnostics.set(result, Object.freeze({
+    sourceNumericMismatchClass: numericClass && comparisonClass ? numericClass : null,
+    sourceNumericMismatchComparisonClass: numericClass && comparisonClass ? comparisonClass : null,
     sourceFloorFirstProducer: owner === 'hard_guard'
       && value.postEvaluatorHardPredicate === 'unsupported_source_inconsistency'
       ? finite(value.sourceFloorFirstProducer, SUMMARY_STYLE_SOURCE_FLOOR_FIRST_PRODUCERS) : null,
@@ -105,6 +131,7 @@ export function recordSummaryStyleLocalDiagnostics(
 
 export function readSummaryStyleLocalDiagnostics(result: object): SummaryStyleLocalDiagnostics {
   return diagnostics.get(result) ?? {
+    sourceNumericMismatchClass: null, sourceNumericMismatchComparisonClass: null,
     sourceFloorFirstProducer: null,
     postEvaluatorLocalOwner: null, postEvaluatorHardPredicate: null,
     postEvaluatorRoleIdentityFailureClass: null, postEvaluatorUnsupportedClaimCategory: null,
