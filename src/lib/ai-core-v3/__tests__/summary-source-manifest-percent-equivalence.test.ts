@@ -8,6 +8,7 @@ import type * as Domain from '../summary-style-m5';
 import type * as Server from '../summary-style-m5-server';
 import type * as Provider from '../summary-style-m5-provider';
 import type * as Projector from '../summary-v3-production-observability';
+import { historicalPreTask084Source } from './fixtures/task085-historical-current-contract';
 
 const BASELINE = '95f519c67cb2b4cf8fc19eabc8191e9e307f429f';
 const root = process.cwd();
@@ -255,12 +256,14 @@ describe('Task 062 local source/manifest decimal-percent repair', () => {
       'summaryV3StyleCandidateSourceFloorDecision']) {
       expect(functionText(readFileSync(domainPath, 'utf8'), name)).toBe(functionText(domainBefore, name));
     }
-    // Task 068's sidecar-only extension is checked against its exact Git
-    // baseline by that task's declaration/functional parity gate. The
-    // provider and terminal projector remain byte-exact here.
+    // Historical Task062 provider/projector bytes remain proven at immutable
+    // pre-Task084 HEAD. The live envelope equality above uses CURRENT provider.
+    // Task085's relation-state matrix separately proves the only permitted
+    // provider differential: validated stale CURRENT bounded guidance.
     for (const relative of ['summary-style-m5-provider.ts', 'summary-v3-production-observability.ts']) {
-      expect(readFileSync(resolve(root, 'src/lib/ai-core-v3', relative), 'utf8')).toBe(
-        execFileSync('git', ['show', BASELINE + ':src/lib/ai-core-v3/' + relative], { cwd: root, encoding: 'utf8' }));
+      const path = 'src/lib/ai-core-v3/' + relative;
+      expect(historicalPreTask084Source(path)).toBe(
+        execFileSync('git', ['show', BASELINE + ':' + path], { cwd: root, encoding: 'utf8' }));
     }
   });
 });

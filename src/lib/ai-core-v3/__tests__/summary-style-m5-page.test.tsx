@@ -21,6 +21,8 @@ import {
 import { CV_AI_DIAGNOSTICS_CHANGED_EVENT } from '@/lib/cv-ai-diagnostics-lifecycle';
 import { translations, type Locale } from '@/lib/i18n/translations';
 import { aiErrorMessage } from '@/lib/ai-error-codes';
+import { findExactDurationMeasurements } from '../exact-duration-measurement';
+import { saveCvDraft, loadCvDraft } from '@/lib/draft-storage';
 import type { CVData } from '@/lib/types';
 import {
   canonicalSummaryV3StyleLocale,
@@ -200,6 +202,7 @@ async function actualPageStyleFlow(options: {
   readonly holdTransport?: boolean;
   readonly mutateLiveSummaryWhilePending?: boolean;
   readonly cv?: CVData;
+  readonly afterStyleFlow?: (replaceCanonicalCv: (next: CVData) => void) => Promise<void>;
   readonly routeProviderMode?: 'safe_rewrite' | 'unsafe_result' | 'unsafe_metric' | 'provider_no_op'
     | 'invalid_existing_source' | 'role_contradiction' | 'role_unresolved';
 }): Promise<{
@@ -261,9 +264,9 @@ async function actualPageStyleFlow(options: {
   }
   const storageWrites = vi.spyOn(Storage.prototype, 'setItem');
   const commitEvents: Event[] = [];
-  let releaseTransport: (() => void) | null = null;
+  const transportControl: { release: (() => void) | null } = { release: null };
   const transportGate = options.holdTransport
-    ? new Promise<void>((resolve) => { releaseTransport = resolve; })
+    ? new Promise<void>((resolve) => { transportControl.release = resolve; })
     : null;
   const onDiagnosticCommit = (event: Event) => {
     const detail = (event as CustomEvent<{ kind?: string; action?: string }>).detail;
@@ -319,11 +322,13 @@ async function actualPageStyleFlow(options: {
   const beginSpy = vi.spyOn(aiRequest, 'beginAiClientRequest');
   try {
     const Page = (await import('@/app/cv-builder/page')).default;
-    render(React.createElement(Page));
+    const rendered = render(React.createElement(Page));
     fireEvent.click(screen.getByRole('button', { name: translations[pageUiLocale].cv.summary }));
     const subtitle = options.style === 'shorter' ? translations[pageUiLocale].cv.shorterSubtext
       : options.style === 'stronger' ? translations[pageUiLocale].cv.strongerSubtext : translations[pageUiLocale].cv.professionalSubtext;
-    const findStyleButton = () => screen.getAllByRole('button').find((button) => button.textContent?.includes(subtitle));
+    const findStyleButton = () => screen.getAllByRole('button').find(
+      (button): button is HTMLButtonElement => button instanceof HTMLButtonElement
+        && button.textContent?.includes(subtitle) === true);
     await waitFor(() => {
       const button = findStyleButton();
       expect(button).toBeDefined();
@@ -339,10 +344,14 @@ async function actualPageStyleFlow(options: {
       fireEvent.change(editor!, { target: { value: 'User edited Summary while Stronger is pending.' } });
       await waitFor(() => expect(pageRuntimeCv.summary).toBe('User edited Summary while Stronger is pending.'));
     }
-    releaseTransport?.();
+    transportControl.release?.();
     if (options.terminalResponse || options.awaitDiagnostic) {
       await waitFor(() => expect(readStoredSummaryDiagnostic()?.rewriteStyle).toBe(options.style));
     }
+    await options.afterStyleFlow?.((next) => {
+      pageRuntimeCv = next;
+      rendered.rerender(React.createElement(Page));
+    });
     return {
       m5Requests: [...pageRequests],
       legacyRequests: [...pageLegacyRequests],
@@ -358,7 +367,7 @@ async function actualPageStyleFlow(options: {
       diagnosticCommitEvents: commitEvents.length,
     };
   } finally {
-    releaseTransport?.();
+    transportControl.release?.();
     window.removeEventListener(CV_AI_DIAGNOSTICS_CHANGED_EVENT, onDiagnosticCommit);
     beginSpy.mockRestore(); cleanup(); localStorage.clear(); sessionStorage.clear();
     clearSummaryAiDiagnosticsForTests(); clearCvAiDiagnosticHistory();
@@ -763,7 +772,14 @@ function pageRouteProviderMessage(
   };
 }
 
-async function run(options: RunOptions = {}) {
+type TestRunResult = {
+  outcome: Awaited<ReturnType<typeof runSummaryV3StyleClientOperation>>;
+  capturedRequest: Record<string, unknown> | null;
+  commitRequest: SummaryV3CommitRequest | null;
+  requestCount: number;
+};
+
+async function run(options: RunOptions = {}): Promise<TestRunResult> {
   const locale = options.locale || 'en';
   const style = options.style || 'shorter';
   const initialCv = options.initialCv || options.liveCv || cvFor(locale, options.summary || '');
@@ -1027,50 +1043,59 @@ describe('M5.3 Summary style client/page boundary', () => {
   });
 
   it('runs the AAB571 German-position fixture through the rendered page/request-builder/route/server and multi-unit writer-parser path', async () => {
-    const result = await actualPageStyleFlow({
-      style: 'stronger',
-      cv: physicalGermanPositionMixedLocaleCv(),
-      routeProviderMode: 'safe_rewrite',
-      awaitDiagnostic: true,
-    });
-    expect(result.m5Requests).toHaveLength(1);
-    expect(result.legacyRequests).toHaveLength(0);
-    const request = result.m5Requests[0] as SummaryV3StyleRouteParams;
-    expect(request).toMatchObject({
-      action: 'summary_stronger',
-      requestedLocale: 'en',
-      sourceLocale: 'en',
-      visibleSummary: physicalMixedLocaleSummary,
-    });
-    const manifest = request.manifest as unknown as { entries: unknown[] };
-    const entry = manifest.entries[0] as Record<string, unknown>;
-    expect(entry).toMatchObject({
-      role: 'Servicetechniker Elektrotechnik',
-      employer: 'NordWerk Elektroservice Test',
-      roleSourceLocale: 'de',
-      rolePresentation: undefined,
-      durationMonths: 37,
-    });
-    expect(result.finalCv.summary).not.toBe(physicalMixedLocaleSummary);
-    expect(result.commitCalls).toBe(1);
-    expect(result.usageCalls).toBe(1);
-    expect(result.latestDiagnostic).toMatchObject({
-      m5Operation: 'summary_style',
-      rewriteStyle: 'stronger',
-      operationMode: 'enhance_existing_content',
-      countedAsSuccess: true,
-      visibleApplySucceeded: true,
-      usageCountBefore: 0,
-      usageCountAfter: 1,
-      roleIdentityResolution: 'equivalent',
-      writerOutputContractFailureClass: null,
-      evaluatorOutputContractFailureClass: null,
-      diagnosticCompletenessPassed: true,
-      diagnosticInvariantCheckPassed: true,
-      missingRequiredDiagnosticFields: [],
-      nullRequiredDiagnosticFields: [],
-      notApplicableDiagnosticFieldViolations: [],
-    });
+    // This historical fixture was accepted at the September click-time
+    // reference. Fake Date only: async page timers stay real, and finally
+    // restores the ambient clock even if an assertion fails.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-09-15T12:00:00Z'));
+    try {
+      const result = await actualPageStyleFlow({
+        style: 'stronger',
+        cv: physicalGermanPositionMixedLocaleCv(),
+        routeProviderMode: 'safe_rewrite',
+        awaitDiagnostic: true,
+      });
+      expect(result.m5Requests).toHaveLength(1);
+      expect(result.legacyRequests).toHaveLength(0);
+      const request = result.m5Requests[0] as SummaryV3StyleRouteParams;
+      expect(request).toMatchObject({
+        action: 'summary_stronger',
+        requestedLocale: 'en',
+        sourceLocale: 'en',
+        visibleSummary: physicalMixedLocaleSummary,
+      });
+      const manifest = request.manifest as unknown as { entries: unknown[] };
+      const entry = manifest.entries[0] as Record<string, unknown>;
+      expect(entry).toMatchObject({
+        role: 'Servicetechniker Elektrotechnik',
+        employer: 'NordWerk Elektroservice Test',
+        roleSourceLocale: 'de',
+        rolePresentation: undefined,
+        durationMonths: 37,
+      });
+      expect(result.finalCv.summary).not.toBe(physicalMixedLocaleSummary);
+      expect(result.commitCalls).toBe(1);
+      expect(result.usageCalls).toBe(1);
+      expect(result.latestDiagnostic).toMatchObject({
+        m5Operation: 'summary_style',
+        rewriteStyle: 'stronger',
+        operationMode: 'enhance_existing_content',
+        countedAsSuccess: true,
+        visibleApplySucceeded: true,
+        usageCountBefore: 0,
+        usageCountAfter: 1,
+        roleIdentityResolution: 'equivalent',
+        writerOutputContractFailureClass: null,
+        evaluatorOutputContractFailureClass: null,
+        diagnosticCompletenessPassed: true,
+        diagnosticInvariantCheckPassed: true,
+        missingRequiredDiagnosticFields: [],
+        nullRequiredDiagnosticFields: [],
+        notApplicableDiagnosticFieldViolations: [],
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it.each([
@@ -2138,5 +2163,74 @@ describe('M5.3 Summary style client/page boundary', () => {
     const result = await run({ commitResult: { kind: 'failed', reason } as SummaryV3CommitReceipt });
     expect(result.outcome).toMatchObject({ kind: 'terminal', reason });
     expect(result.requestCount).toBe(1);
+  });
+});
+
+describe('Task084 real CV Builder tenure confirmation (no AI retry)', () => {
+  const source = 'Synthetic worker has about 8 months of tenure. Synthetic worker builds reliable APIs.';
+  function legacyRemediation() {
+    const measurement = findExactDurationMeasurements(source)[0]!;
+    return { status: 422, data: { kind: 'handled_failure', style: 'stronger', mode: 'enhance_existing_content',
+      typedReason: 'unsupported_claim', remediation: { type: 'employment_tenure_binding_required',
+        summaryHash: hashSummaryV3StyleValue(source), durationSpanStart: measurement.start,
+        durationSpanEnd: measurement.end, durationSpanHash: hashSummaryV3StyleValue(source.slice(measurement.start, measurement.end)) } } };
+  }
+  async function controls() {
+    await waitFor(() => expect(document.querySelector('[data-tenure-entry]')).not.toBeNull());
+    const selection = document.querySelector('[data-tenure-entry]') as HTMLSelectElement;
+    const confirm = document.querySelector('[data-tenure-confirm]') as HTMLButtonElement;
+    return { selection, confirm };
+  }
+  it('single Experience still has no default, no confirmation authority and no usage', async () => {
+    const result = await actualPageStyleFlow({ style: 'stronger', summary: source, terminalResponse: legacyRemediation(),
+      afterStyleFlow: async () => {
+        const { selection, confirm } = await controls();
+        expect(selection.value).toBe(''); expect(confirm.disabled).toBe(true);
+        expect(selection.querySelectorAll('option')).toHaveLength(3);
+        expect(document.querySelector('[data-tenure-local-surface]')?.textContent).toBe('8 months');
+      } });
+    expect(result.finalCv.summary).toBe(source); expect(result.finalCv.summaryEmploymentTenureRelations).toBeUndefined();
+    expect(result.commitCalls).toBe(0); expect(result.usageCalls).toBe(0); expect(result.m5Requests).toHaveLength(1);
+  });
+  it('explicit selection saves through the existing owner, survives draft reload, and does not retry/increment', async () => {
+    const result = await actualPageStyleFlow({ style: 'stronger', summary: source, terminalResponse: legacyRemediation(),
+      afterStyleFlow: async () => {
+        const { selection, confirm } = await controls();
+        fireEvent.change(selection, { target: { value: 'experience-current' } });
+        await waitFor(() => expect(confirm.disabled).toBe(false));
+        fireEvent.click(confirm);
+        await waitFor(() => expect(pageRuntimeCv.summaryEmploymentTenureRelations).toHaveLength(1));
+        expect(saveCvDraft({ cv: pageRuntimeCv, savedAt: 'synthetic' })).toBe(true);
+        expect(loadCvDraft()!.cv.summaryEmploymentTenureRelations).toEqual(pageRuntimeCv.summaryEmploymentTenureRelations);
+      } });
+    expect(result.finalCv.summary).toBe(source); expect(result.commitCalls).toBe(1);
+    expect(result.usageCalls).toBe(0); expect(result.m5Requests).toHaveLength(1);
+  });
+  it('negative choice creates no relation, persistence action, retry or usage', async () => {
+    const result = await actualPageStyleFlow({ style: 'stronger', summary: source, terminalResponse: legacyRemediation(),
+      afterStyleFlow: async () => {
+        const { selection, confirm } = await controls();
+        fireEvent.change(selection, { target: { value: 'not_employment_tenure' } }); fireEvent.click(confirm);
+        await waitFor(() => expect(document.querySelector('[data-tenure-entry]')).toBeNull());
+      } });
+    expect(result.finalCv.summaryEmploymentTenureRelations).toBeUndefined(); expect(result.commitCalls).toBe(0);
+    expect(result.usageCalls).toBe(0); expect(result.m5Requests).toHaveLength(1);
+  });
+  it.each(['summary', 'delete', 'replace', 'cv'] as const)('rejects modal confirmation after canonical %s change', async (change) => {
+    const result = await actualPageStyleFlow({ style: 'stronger', summary: source, terminalResponse: legacyRemediation(),
+      afterStyleFlow: async (replaceCanonicalCv) => {
+        const { selection, confirm } = await controls();
+        fireEvent.change(selection, { target: { value: 'experience-current' } });
+        const next = change === 'summary' ? { ...pageRuntimeCv, summary: source + ' Changed.' }
+          : change === 'delete' ? { ...pageRuntimeCv, experience: [] }
+            : change === 'replace' ? { ...pageRuntimeCv, experience: [{ ...pageRuntimeCv.experience[0]!, company: 'Other synthetic employer' }] }
+              : { ...pageRuntimeCv, id: 'synthetic-other-cv' };
+        replaceCanonicalCv(next);
+        await waitFor(() => expect(pageRuntimeCv).toBe(next));
+        fireEvent.click(confirm);
+        await waitFor(() => expect(document.querySelector('[data-tenure-entry]')).toBeNull());
+      } });
+    expect(result.finalCv.summaryEmploymentTenureRelations).toBeUndefined(); expect(result.commitCalls).toBe(0);
+    expect(result.usageCalls).toBe(0); expect(result.m5Requests).toHaveLength(1);
   });
 });

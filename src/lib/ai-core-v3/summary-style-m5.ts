@@ -575,7 +575,7 @@ export type SummaryV3StyleEvidence = Readonly<{
   readonly v2Fallthrough: 0;
 }>;
 
-export type SummaryV3StyleResult =
+export type SummaryV3StyleResult = (
   | Readonly<{ kind: 'not_applicable'; reason: SummaryV3StyleNotApplicableReason }>
   | Readonly<{
     kind: 'handled_failure';
@@ -597,6 +597,9 @@ export type SummaryV3StyleResult =
     mode: SummaryV3StyleMode;
     candidate: SummaryV3StyleCandidate;
     evidence: SummaryV3StyleEvidence;
+  }>) & Readonly<{
+    tenureOperationFingerprint?: string;
+    remediation?: import('./summary-trusted-tenure-runtime').SummaryTenureRemediation;
   }>;
 
 /** Runtime discriminator authority shared by the server-result union and HTTP client. */
@@ -1405,7 +1408,7 @@ function punctuationInsensitive(value: string): string {
   return normalizeSummaryV3StyleText(value).replace(/[^\p{L}\p{N}]/gu, '').toLocaleLowerCase();
 }
 
-function sourceUnitTexts(value: string): readonly string[] {
+export function summaryV3StyleSourceUnitTexts(value: string): readonly string[] {
   const normalized = normalizeSummaryV3StyleText(value);
   if (!normalized) return [];
   // A period is a sentence boundary only when followed by whitespace. This
@@ -1413,6 +1416,8 @@ function sourceUnitTexts(value: string): readonly string[] {
   // prose sentence units and script-native sentence delimiters.
   return normalized.split(/(?<=[!?。！？।])\s*|(?<=\.)\s+(?=\S)/u).filter(Boolean);
 }
+
+const sourceUnitTexts = summaryV3StyleSourceUnitTexts;
 
 /**
  * A compact, literal multi-token surface guard for cased identities. It does

@@ -23,6 +23,7 @@ import {
 } from './summary-style-m5-server';
 import { createSummaryV3ProviderTransportError } from './summary-generate-server';
 import type { SummaryV3ProviderPhase } from './summary-generate';
+import type { SummaryTenureM5Request } from './summary-employment-tenure-relation';
 
 /** The only route actions owned by M5.2. */
 export const SUMMARY_V3_STYLE_M5_ROUTE_ACTIONS = {
@@ -48,6 +49,7 @@ export interface SummaryV3StyleRouteParams {
   readonly protectedEntities?: unknown;
   readonly manifest?: unknown;
   readonly requestIdentity?: unknown;
+  readonly summaryEmploymentTenure?: unknown;
 }
 
 /**
@@ -58,7 +60,7 @@ export function normalizeSummaryV3StyleRouteRequest(
   action: SummaryV3StyleRouteAction,
   params: SummaryV3StyleRouteParams,
   createdAt: number,
-): SummaryV3StyleRequest {
+): SummaryTenureM5Request {
   const requestedLocale = params.requestedLocale ?? params.locale;
   const sourceLocale = params.sourceLocale ?? params.locale;
   return {
@@ -78,6 +80,9 @@ export function normalizeSummaryV3StyleRouteRequest(
     manifest: params.manifest as SummaryV3StyleRequest['manifest'],
     requestIdentity: typeof params.requestIdentity === 'string' ? params.requestIdentity : undefined,
     createdAt,
+    ...(params.summaryEmploymentTenure !== undefined
+      ? { summaryEmploymentTenure: params.summaryEmploymentTenure as SummaryTenureM5Request['summaryEmploymentTenure'] }
+      : {}),
   };
 }
 
@@ -134,6 +139,9 @@ function isWriterInput(
 }
 
 function providerPrompt(input: SummaryV3StyleProviderInput): string {
+  const tenureInstruction = input.trustedTenureClaims?.length
+    ? 'TRUSTED TENURE CLAIM ONLY: preserve the identified source unit verbatim outside its exact tenure measurement. Refresh that complete measurement to currentDurationMonths using locale-native grammar; do not move/drop the claim. Other duties may be strengthened under the existing contract. A stale unchanged measurement is not a safe no-op. Local validation, not your output, owns this relation.'
+    : null;
   const strongerWriterInstruction = isWriterInput(input) && input.style === 'stronger'
     ? [
       'STRONGER SOURCE AUTHORITY: sourceText is the sole fact authority for enhance_existing_content.',
@@ -166,6 +174,7 @@ function providerPrompt(input: SummaryV3StyleProviderInput): string {
     strongerWriterInstruction,
     evaluatorReferenceDomainInstruction,
     unresolvedRoleIdentityInstruction,
+    tenureInstruction,
     JSON.stringify(input),
   ].filter((value): value is string => value !== null).join('\n\n');
 }

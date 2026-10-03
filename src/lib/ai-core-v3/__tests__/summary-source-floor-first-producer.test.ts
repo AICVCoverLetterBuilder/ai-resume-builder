@@ -10,6 +10,7 @@ import type * as Provider from '../summary-style-m5-provider';
 import type * as Projector from '../summary-v3-production-observability';
 import * as Sidecar from '../summary-style-m5-local-observability';
 import { removeTask075ObservationFootprint } from './fixtures/summary-numeric-mismatch-observation-footprint';
+import { assertCurrentTask084SourceFloorContract, historicalPreTask084Source } from './fixtures/task085-historical-current-contract';
 
 const BASELINE = '1b7426f98c0dcc4806048beab4c04df1483d8d40';
 const root = process.cwd();
@@ -309,10 +310,11 @@ describe('Task 068 first positive source-floor producer', () => {
     expect(JSON.stringify(invocations)).not.toContain('sourceFloorFirstProducer');
   });
 
-  it('same ordered decision body; all other server declarations and provider/projector/domain remain unchanged', () => {
+  it('historical footprint restores exact declarations; current producer and diagnostic semantics stay ordered', () => {
+    assertCurrentTask084SourceFloorContract();
     const relative = 'src/lib/ai-core-v3/summary-style-m5-server.ts';
     const old = execFileSync('git', ['show', BASELINE + ':' + relative], { cwd: root, encoding: 'utf8' });
-    const current = removeTask075ObservationFootprint(readFileSync(resolve(root, relative), 'utf8'), 'summary-style-m5-server.ts');
+const current = removeTask075ObservationFootprint(historicalPreTask084Source(relative), 'summary-style-m5-server.ts');
     const declarations = (text: string) => {
       const source = ts.createSourceFile(relative, text, ts.ScriptTarget.Latest, true);
       return new Map(source.statements.filter(ts.isFunctionDeclaration).map(node => [node.name!.text,
@@ -339,7 +341,7 @@ describe('Task 068 first positive source-floor producer', () => {
     expect([...b.keys()].filter(name => !a.has(name))).toEqual(['sourceFloorFirstPositiveProducer']);
     for (const moduleName of ['summary-style-m5.ts', 'summary-style-m5-provider.ts', 'summary-v3-production-observability.ts']) {
       const path = 'src/lib/ai-core-v3/' + moduleName;
-      expect(readFileSync(resolve(root, path), 'utf8')).toBe(execFileSync('git', ['show', BASELINE + ':' + path], { cwd: root, encoding: 'utf8' }));
+expect(historicalPreTask084Source(path)).toBe(execFileSync('git', ['show', BASELINE + ':' + path], { cwd: root, encoding: 'utf8' }));
     }
     expect(Sidecar.SUMMARY_STYLE_SOURCE_FLOOR_FIRST_PRODUCERS).toEqual(producers.map(p => p[0]));
   });

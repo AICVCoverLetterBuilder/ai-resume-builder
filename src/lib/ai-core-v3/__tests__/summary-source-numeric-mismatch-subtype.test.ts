@@ -10,6 +10,7 @@ import type * as Provider from '../summary-style-m5-provider';
 import type * as Projector from '../summary-v3-production-observability';
 import * as Sidecar from '../summary-style-m5-local-observability';
 import { removeTask075ObservationFootprint } from './fixtures/summary-numeric-mismatch-observation-footprint';
+import { assertCurrentTask084SourceFloorContract, historicalPreTask084Source } from './fixtures/task085-historical-current-contract';
 
 const BASELINE = 'cfb1eaee24261f9b0117893309f5858fbc79ab1d';
 const root = process.cwd();
@@ -314,19 +315,30 @@ describe('Task075 first source numeric mismatch subtype (offline only)', () => {
     expect(JSON.stringify(event)).not.toContain('PRIVATE');
     expect('sourceNumericMismatchOrdinal' in event).toBe(false);
   });
-  it('complete baseline byte restoration removes exactly observation footprint and no authority delta', () => {
+  it('historical restoration removes exactly observation footprint; current guards and telemetry remain strict', () => {
+    assertCurrentTask084SourceFloorContract();
     for (const moduleName of changedModules) {
       const path = 'src/lib/ai-core-v3/' + moduleName;
-      const current = readFileSync(resolve(root, path), 'utf8');
+      const current = historicalPreTask084Source(path);
       const expected = execFileSync('git', ['show', BASELINE + ':' + path], { cwd: root, encoding: 'utf8' });
       expect(removeTask075ObservationFootprint(current, moduleName)).toBe(expected);
       expect(() => removeTask075ObservationFootprint(current.replace(moduleName.includes('server') ? '!manifestNumbers.has(number)' : "'exact_manifest_token_absent'", moduleName.includes('server') ? 'manifestNumbers.has(number)' : "'unclassified'"), moduleName))
         .toThrow(); // For sidecar, no predicate occurs: separately control a finite field below.
     }
   });
-  it('exact observation footprint cannot erase membership, ordering or diagnostic predicate mutations', () => {
+  it('historical and current gates cannot erase membership, ordering or diagnostic predicate mutations', () => {
     const path = 'src/lib/ai-core-v3/summary-style-m5-server.ts';
-    const current = readFileSync(resolve(root, path), 'utf8');
+    const current = historicalPreTask084Source(path);
+    const live = readFileSync(resolve(root, path), 'utf8');
+    assertCurrentTask084SourceFloorContract(live);
+    for (const mutated of [
+      live.replace('!manifestNumbers.has(number)', 'manifestNumbers.has(number)'),
+      live.replace('if (unmatched) firstUnmatchedIndex = index;', 'if (unmatched) firstUnmatchedIndex = 0;'),
+      live.replace('sourceNumberLocations[firstUnmatchedIndex]!', 'sourceNumberLocations[0]!'),
+    ]) {
+      expect(mutated).not.toBe(live);
+      expect(() => assertCurrentTask084SourceFloorContract(mutated)).toThrow();
+    }
     for (const mutated of [
       current.replace('!manifestNumbers.has(number)', 'manifestNumbers.has(number)'),
       current.replace('if (unmatched) firstUnmatchedIndex = index;', 'if (unmatched) firstUnmatchedIndex = 0;'),
@@ -335,7 +347,7 @@ describe('Task075 first source numeric mismatch subtype (offline only)', () => {
     for (const path of ['src/lib/ai-core-v3/summary-style-m5.ts', 'src/lib/ai-core-v3/summary-style-m5-client.ts',
       'src/lib/ai-core-v3/summary-style-m5-provider.ts', 'src/lib/ai-core-v3/summary-v3-production-observability.ts',
       'src/app/api/generate/route.ts', 'src/app/cv-builder/page.tsx', 'android/app/build.gradle']) {
-      expect(readFileSync(resolve(root, path))).toEqual(execFileSync('git', ['show', BASELINE + ':' + path], { cwd: root }));
+expect(Buffer.from(historicalPreTask084Source(path))).toEqual(execFileSync('git', ['show', BASELINE + ':' + path], { cwd: root }));
     }
   });
 });

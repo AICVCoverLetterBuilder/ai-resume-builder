@@ -1,6 +1,7 @@
 'use client';
 
 import type { CVData, CoverLetterData } from './types';
+import { pruneSummaryEmploymentTenureRelations } from './ai-core-v3/summary-employment-tenure-relation';
 import {
   CV_RUNTIME_MIGRATION_VERSION,
   normalizeLegacyCvRuntime,
@@ -70,12 +71,12 @@ function isBrowser(): boolean {
 }
 
 function normalizeCvForDraftStorage(cv: CVData): CVData {
-  if (!isCvSimpleV1Enabled()) return normalizeLegacyCvRuntime(cv);
+  if (!isCvSimpleV1Enabled()) return pruneSummaryEmploymentTenureRelations(normalizeLegacyCvRuntime(cv));
 
   const uiLocale = isBrowser()
     ? resolveInitialLocalePreference(localStorage.getItem(LOCALE_STORAGE_KEY))
     : undefined;
-  return materializeSimpleV1ContentLocale(cv, { uiLocale });
+  return pruneSummaryEmploymentTenureRelations(materializeSimpleV1ContentLocale(cv, { uiLocale }));
 }
 
 export function saveCvDraft(data: CvDraftData): boolean {

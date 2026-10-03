@@ -70,8 +70,14 @@ import {
   type SummaryV3StyleViolationCode,
 } from './summary-style-m5';
 import { immutableCopy } from './immutability';
+import { prepareSummaryEmploymentTenureServerRequest, type SummaryTenureM5Request,
+  type SummaryTenureResolution } from './summary-employment-tenure-relation';
+import { bindTrustedEmploymentTenureRuntime, trustedEmploymentTenureAuthority,
+  trustedTenureCandidateComparison, trustedTenureSourceComparison, trustedTenureProviderGuidance,
+  createSummaryTenureRemediation } from './summary-trusted-tenure-runtime';
 import {
   recordSummaryStyleLocalDiagnostics,
+  readSummaryStyleLocalDiagnostics,
   type SummaryStyleHardPredicate,
   type SummaryStyleRoleFailure,
   type SummaryStyleSafeNoOpEligibility,
@@ -90,6 +96,7 @@ import type {
 
 /** The server executor is injected; no external SDK is instantiated here. */
 export interface SummaryV3StyleWriterInput {
+  readonly trustedTenureClaims?: ReturnType<typeof trustedTenureProviderGuidance>;
   readonly operationId: string;
   readonly snapshotHash: string;
   readonly manifestHash: string;
@@ -122,6 +129,7 @@ export interface SummaryV3StyleWriterInput {
 }
 
 export interface SummaryV3StyleEvaluatorInput {
+  readonly trustedTenureClaims?: ReturnType<typeof trustedTenureProviderGuidance>;
   readonly operationId: string;
   readonly snapshotHash: string;
   readonly manifestHash: string;
@@ -1436,11 +1444,13 @@ function sourceNumericMismatchEvidence(
 function sourceFloorFirstPositiveProducer(
   snapshot: SummaryV3StyleOperationSnapshot,
   observeNumericMismatch?: (evidence: SummaryStyleSourceNumericMismatchEvidence) => void,
+  observeNumericLocation?: (location: SourceNumericTokenLocation) => void,
 ): SummaryStyleSourceFloorFirstProducer | null {
   if (snapshot.mode !== 'enhance_existing_content') return null;
   if (hasExplicitSourceIdentityInconsistency(snapshot)) return 'explicit_source_identity_inconsistency';
   if (hasUnannotatedSourceRoleEmployerFrameInconsistency(snapshot)) return 'unannotated_source_role_employer_frame_inconsistency';
   if (hasUnsupportedSourceNonnumericMaterialResultRelation(snapshot)) return 'unsupported_source_nonnumeric_material_result_relation';
+  snapshot = trustedTenureSourceComparison(snapshot);
   const manifestText = snapshot.manifestFacts.map((fact) => fact.text).join(' ');
   const manifestNumbers = new Set(numericTokens(manifestText));
   const percentComparisonSource = sourceManifestDecimalPercentComparison(snapshot);
@@ -1458,6 +1468,7 @@ function sourceFloorFirstPositiveProducer(
     return unmatched;
   })) {
     if (observeNumericMismatch) observeNumericMismatch(sourceNumericMismatchEvidence(snapshot, sourceNumberLocations[firstUnmatchedIndex]!));
+    observeNumericLocation?.(sourceNumberLocations[firstUnmatchedIndex]!);
     return 'source_numeric_membership_mismatch';
   }
   if (hasRoleLocalSourceDurationContradiction(snapshot)) return 'role_local_source_duration_contradiction';
@@ -1714,11 +1725,16 @@ interface LocalHardDecision {
 
 // Bound to this winning decision, not a later source scan or terminal inference.
 const sourceNumericHardDiagnostics = new WeakMap<LocalHardDecision, SummaryStyleSourceNumericMismatchEvidence>();
+const sourceNumericHardLocations = new WeakMap<LocalHardDecision, SourceNumericTokenLocation>();
+const resultNumericLocations = new WeakMap<SummaryV3StyleResult, SourceNumericTokenLocation>();
 
 function localHardRejectionDecision(
   snapshot: SummaryV3StyleOperationSnapshot,
   candidateText: string,
 ): LocalHardDecision {
+  const comparison = trustedTenureCandidateComparison(snapshot, candidateText);
+  if (!comparison) return { reason: 'lost_source_fact', predicate: null };
+  snapshot = comparison;
   // Language/native surface has the more specific typed terminal. Let the
   // regular local style guard classify it before considering ceiling facts.
   if (!summaryV3StyleLocaleSurfaceMatches(candidateText, snapshot.requestedLocale)
@@ -1729,10 +1745,13 @@ function localHardRejectionDecision(
   if (employmentSourceStatePreservationFailure(snapshot, candidateText)) return { reason: 'lost_source_fact', predicate: null };
   // The same ordered short-circuit execution returns both reason and winner.
   let numericEvidence: SummaryStyleSourceNumericMismatchEvidence | null = null;
-  const sourceFloorFirstProducer = sourceFloorFirstPositiveProducer(snapshot, (value) => { numericEvidence = value; });
+  let numericLocation: SourceNumericTokenLocation | null = null;
+  const sourceFloorFirstProducer = sourceFloorFirstPositiveProducer(snapshot,
+    (value) => { numericEvidence = value; }, (value) => { numericLocation = value; });
   if (sourceFloorFirstProducer !== null) {
     const decision: LocalHardDecision = { reason: 'unsupported_claim', predicate: 'unsupported_source_inconsistency', sourceFloorFirstProducer };
     if (numericEvidence !== null) sourceNumericHardDiagnostics.set(decision, numericEvidence);
+    if (numericLocation !== null) sourceNumericHardLocations.set(decision, numericLocation);
     return decision;
   }
   if (hasInjectedManifestFact(snapshot, candidateText)) return { reason: 'unsupported_claim', predicate: 'injected_manifest_fact' };
@@ -1959,6 +1978,9 @@ function parseWriterOutput(value: unknown, snapshot: SummaryV3StyleOperationSnap
     || candidateTransportHasProhibitedSurface(units, candidate.text)) {
     return writerFailure('candidate_malformed');
   }
+  const comparison = trustedTenureCandidateComparison(snapshot, candidate.text);
+  if (!comparison) return writerFailure('lost_source_fact', 'candidate_source_floor', candidate);
+  snapshot = comparison;
   const coverage = summarizeSummaryV3StyleFactCoverage(snapshot, candidate);
   const allowedFacts = new Set(snapshot.requiredFacts.map((fact) => fact.id));
   const suppliedFacts = candidate.units.flatMap((unit) => unit.factIds);
@@ -2317,6 +2339,7 @@ function sourceRetainingSafeNoOpAllowedForCandidate(
   evaluatorRoleIdentityResolution?: SummaryV3StyleRoleIdentityResolution,
   observe?: (reason: SummaryStyleSafeNoOpEligibility) => void,
 ): boolean {
+  if (trustedEmploymentTenureAuthority(snapshot)?.slots.some((slot) => slot.stale)) return false;
   // A source-retaining no-op may preserve an unchanged source, but it must
   // never mask an explicit opposite employment state in the candidate.
   if (hasEmploymentStateContradiction(snapshot, candidateText)) {
@@ -2407,6 +2430,9 @@ function styleNoOp(styleEvidence: ParsedStyleEvidence): boolean {
 }
 
 function localStyleFailure(snapshot: SummaryV3StyleOperationSnapshot, candidate: SummaryV3StyleCandidate, evidence: ParsedStyleEvidence): SummaryV3StyleFailureReason | null {
+  const comparison = trustedTenureCandidateComparison(snapshot, candidate.text);
+  if (!comparison) return 'lost_source_fact';
+  snapshot = comparison;
   const source = snapshot.sourceSummary;
   const normalizedSource = normalizeSummaryV3StyleText(source);
   const normalizedCandidate = normalizeSummaryV3StyleText(candidate.text);
@@ -2723,6 +2749,7 @@ function writerInput(snapshot: SummaryV3StyleOperationSnapshot): SummaryV3StyleW
     entityLocks: snapshot.entityLocks,
     roleIdentity: roleEmployerIdentityDecision(snapshot),
     styleContract,
+    ...(trustedTenureProviderGuidance(snapshot).length ? { trustedTenureClaims: trustedTenureProviderGuidance(snapshot) } : {}),
     forcedTool: {
       toolName: SUMMARY_V3_STYLE_M5_WRITER_TOOL_NAME,
       toolChoice: 'required',
@@ -2747,6 +2774,7 @@ function evaluatorInput(snapshot: SummaryV3StyleOperationSnapshot, candidate: Su
     locale: snapshot.requestedLocale,
     mode: snapshot.mode,
     candidate,
+    ...(trustedTenureProviderGuidance(snapshot).length ? { trustedTenureClaims: trustedTenureProviderGuidance(snapshot) } : {}),
     sourceText: snapshot.sourceSummary,
     sourceUnits: snapshot.sourceUnits,
     selectedEntries: snapshot.selectedEntries,
@@ -2876,6 +2904,8 @@ function withLocalDecisionDiagnostics(
   const expectedMismatch = predicate ? mismatchForPredicate[predicate] ?? null
     : owner === 'role_identity_resolution' ? 'role_identity_rejection' : null;
   const evidence = result.kind === 'not_applicable' ? null : result.evidence;
+  const location = sourceNumericHardLocations.get(hardDecision);
+  if (ownsUnsupportedTerminal && location) resultNumericLocations.set(result, location);
   return recordSummaryStyleLocalDiagnostics(result, {
     ...sourceNumericHardDiagnostics.get(hardDecision),
     sourceFloorFirstProducer: owner === 'hard_guard' && predicate === 'unsupported_source_inconsistency'
@@ -2929,9 +2959,10 @@ function safeNoOpResult(
  * Runs exactly one shared writer/evaluator path and, only for finite repairable
  * evaluator findings, one shared repair pass. It contains no retry or fallback.
  */
-export async function executeSummaryV3StyleServer(
+async function executeSummaryV3StyleServerContent(
   request: SummaryV3StyleRequest,
   dependencies: SummaryV3StyleServerDependencies,
+  context: { resolution: SummaryTenureResolution; snapshot?: SummaryV3StyleOperationSnapshot },
 ): Promise<SummaryV3StyleResult> {
   // Decide ownership separately so malformed M5-owned input is a handled failure.
   if (!request || typeof request !== 'object') return createSummaryV3StyleNotApplicable('operation_not_m5_style');
@@ -2943,6 +2974,8 @@ export async function executeSummaryV3StyleServer(
   let snapshot: SummaryV3StyleOperationSnapshot;
   try {
     snapshot = createSummaryV3StyleOperationSnapshot(snapshotRequest);
+    snapshot = bindTrustedEmploymentTenureRuntime(snapshot, context.resolution);
+    context.snapshot = snapshot;
   } catch (error) {
     // The request has already been determined M5-owned above; never fall through.
     const style = request.style as SummaryV3Style;
@@ -3217,4 +3250,41 @@ export async function executeSummaryV3StyleServer(
         repairStyleFailure === 'repair_rejected' ? null : repairStyleFailure)));
   }
   return finishRepair(candidateReady(snapshot, parsedRepairWriter.candidate, repairEvidence));
+}
+
+/** Actual live server boundary: validated metadata never enters provider input.
+ * Invalid/absent metadata keeps the pre-existing content request contract.
+ */
+export async function executeSummaryV3StyleServer(
+  request: SummaryV3StyleRequest, dependencies: SummaryV3StyleServerDependencies,
+): Promise<SummaryV3StyleResult> {
+  let content = request;
+  let resolution: SummaryTenureResolution = { status: 'absent', reason: null, relations: [] };
+  try {
+    const prepared = prepareSummaryEmploymentTenureServerRequest(request as SummaryTenureM5Request);
+    content = prepared.contentRequest;
+    resolution = prepared.resolution;
+  } catch {
+    // Malformed owned content is still classified by the existing executor.
+    resolution = { status: 'invalid', reason: 'invalid_snapshot', relations: [] };
+  }
+  const context: { resolution: SummaryTenureResolution; snapshot?: SummaryV3StyleOperationSnapshot } = { resolution };
+  const result = await executeSummaryV3StyleServerContent(content, dependencies, context);
+  const snapshot = context.snapshot;
+  if (!snapshot) return result;
+  const authority = trustedEmploymentTenureAuthority(snapshot);
+  const diagnostics = readSummaryStyleLocalDiagnostics(result);
+  const location = resultNumericLocations.get(result);
+  const remediation = result.kind === 'handled_failure' && result.typedReason === 'unsupported_claim'
+    && diagnostics.sourceFloorFirstProducer === 'source_numeric_membership_mismatch'
+    && diagnostics.sourceNumericMismatchClass === 'duration_component'
+    && diagnostics.sourceNumericMismatchComparisonClass === 'exact_manifest_token_absent' && location
+    ? createSummaryTenureRemediation(snapshot, location) : null;
+  if (!authority && !remediation) return result;
+  const enriched = immutableCopy({ ...result,
+    ...(authority ? { tenureOperationFingerprint: authority.fingerprint } : {}),
+    ...(remediation ? { remediation } : {}),
+  });
+  // Preserve the existing diagnostic sidecar. Response selectors are not logs.
+  return recordSummaryStyleLocalDiagnostics(enriched, diagnostics);
 }

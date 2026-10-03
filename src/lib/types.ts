@@ -179,6 +179,8 @@ export interface CVData {
   name: string;
   personal: PersonalInfo;
   summary: string;
+  /** Exact-span user-confirmed tenure ownership; absent legacy metadata means empty. */
+  summaryEmploymentTenureRelations?: readonly import('./ai-core-v3/summary-employment-tenure-relation').SummaryEmploymentTenureRelation[];
   /** Explicit language of this CV's content. Optional only for legacy drafts. */
   contentLocale?: Locale;
   /** Locale of the last generated Summary, when the visible Summary is AI-authored. */

@@ -254,7 +254,7 @@ import {
   type SummaryV3CommitRequest,
 } from '@/lib/ai-core-v3';
 import { runSummaryV3StyleClientOperation } from '@/lib/ai-core-v3/summary-style-m5-client';
-import { canonicalSummaryV3StyleLocale } from '@/lib/ai-core-v3/summary-style-m5';
+import { canonicalSummaryV3StyleLocale, hashSummaryV3StyleValue } from '@/lib/ai-core-v3/summary-style-m5';
 import {
   createContentLocalizeM6Operation,
   type ContentLocalizeM6TargetLocale,
@@ -282,6 +282,9 @@ import { TemplatePreview } from '@/components/TemplatePreview';
 import { CvExportCopyDiagnosticsButton } from '@/components/CvExportDiagnosticsControls';
 import { TemplatePreviewFullscreenModal } from '@/components/TemplatePreviewFullscreenModal';
 import { TargetContentLocaleDialog } from '@/components/ai/TargetContentLocaleDialog';
+import { EmploymentTenureDialog } from '@/components/ai/EmploymentTenureDialog';
+import { createConfirmedEmploymentTenureRelation } from '@/lib/ai-core-v3/summary-employment-tenure-relation';
+import { resolveSummaryTenureRemediation, type SummaryTenureRemediation } from '@/lib/ai-core-v3/summary-trusted-tenure-runtime';
 import {
   createElegantFormalPortraitPhoto,
   isCleanElegantFormalPortraitPhoto,
@@ -297,6 +300,7 @@ const emptyCV = createEmptyCv;
 function summaryTransactionProjection(cv: CVData): unknown {
   return {
     summary: cv.summary,
+    summaryEmploymentTenureRelations: cv.summaryEmploymentTenureRelations,
     summaryOrigin: cv.summaryOrigin,
     summaryGeneratedLocale: cv.summaryGeneratedLocale,
     summarySourceLocale: cv.summarySourceLocale,
@@ -315,6 +319,7 @@ function mergeSummaryTransactionCv(base: CVData, summarySource: CVData): CVData 
   return {
     ...base,
     summary: summarySource.summary,
+    summaryEmploymentTenureRelations: summarySource.summaryEmploymentTenureRelations,
     summaryOrigin: summarySource.summaryOrigin,
     summaryGeneratedLocale: summarySource.summaryGeneratedLocale,
     summarySourceLocale: summarySource.summarySourceLocale,
@@ -948,6 +953,9 @@ export default function CVBuilderPage() {
   const [isSummaryGenerating, setIsSummaryGenerating] = useState(false);
   const [rewritingStyle, setRewritingStyle] = useState<string | null>(null);
   const [summaryTranslateIntent, setSummaryTranslateIntent] = useState<SummaryTranslateDialogIntent | null>(null);
+  const [tenureIntent, setTenureIntent] = useState<Readonly<{ cvId: string; remediation: SummaryTenureRemediation;
+    entryIdentities: readonly Readonly<{ id: string; hash: string }>[] }> | null>(null);
+  const [tenureSelection, setTenureSelection] = useState('');
   const [summaryTranslateTargetLocale, setSummaryTranslateTargetLocale] = useState<ContentLocalizeM6TargetLocale | null>(null);
   const [experienceTranslateIntent, setExperienceTranslateIntent] = useState<ExperienceTranslateDialogIntent | null>(null);
   const [experienceTranslateTargetLocale, setExperienceTranslateTargetLocale] = useState<ContentLocalizeM6TargetLocale | null>(null);
@@ -3759,6 +3767,15 @@ export default function CVBuilderPage() {
         getActiveOperationId: () => latestSummaryRequestIdRef.current || '',
         commitCandidate: commitSummaryV3Candidate,
       });
+      if (outcome.kind === 'terminal' && outcome.remediation && latestSummaryRequestIdRef.current === reqCtx.requestId) {
+        const current = cvRef.current;
+        if (current.id === liveCvAtPress.id && resolveSummaryTenureRemediation(outcome.remediation, current.summary)) {
+          setTenureSelection('');
+          setTenureIntent({ cvId: current.id, remediation: outcome.remediation,
+            entryIdentities: current.experience.map((entry) => ({ id: entry.id,
+              hash: hashSummaryV3StyleValue(JSON.stringify([entry.position, entry.company])) })) });
+        }
+      }
       if (outcome.kind === 'committed') {
         const usageAfter = getProAiUsageCount();
         summaryDiag.stage('api_response', 'ok');
@@ -3896,6 +3913,28 @@ export default function CVBuilderPage() {
       clearTimeout(timer);
       setRewritingStyle(null);
     }
+  };
+
+  const closeTenureDialog = () => { setTenureIntent(null); setTenureSelection(''); };
+  const confirmTenureRelation = () => {
+    const current = cvRef.current;
+    const intent = tenureIntent;
+    const resolved = intent && current.id === intent.cvId
+      ? resolveSummaryTenureRemediation(intent.remediation, current.summary) : null;
+    if (!intent || !resolved || !tenureSelection) { closeTenureDialog(); return; }
+    if (tenureSelection === 'not_employment_tenure') { closeTenureDialog(); return; }
+    const entry = current.experience.find((item) => item.id === tenureSelection);
+    if (!entry || !intent.entryIdentities.some((item) => item.id === entry.id
+      && item.hash === hashSummaryV3StyleValue(JSON.stringify([entry.position, entry.company])))) {
+      closeTenureDialog(); return;
+    }
+    const confirmation = createConfirmedEmploymentTenureRelation({ confirmation: 'employment_tenure', cv: current,
+      measurement: resolved.measurement, explicitlySelectedExperienceStableId: tenureSelection });
+    if (confirmation.status === 'created') {
+      const next = { ...current, summaryEmploymentTenureRelations: confirmation.relations };
+      if (persistCurrentCvTransactionally(next)) scheduleSummaryCvCommit(next);
+    }
+    closeTenureDialog();
   };
 
   const closeSummaryTranslateDialog = () => {
@@ -6626,6 +6665,11 @@ export default function CVBuilderPage() {
           </div>
         </div>
       )}
+      <EmploymentTenureDialog open={tenureIntent !== null}
+        durationSurface={tenureIntent && resolveSummaryTenureRemediation(tenureIntent.remediation, cv.summary)
+          ? cv.summary.slice(tenureIntent.remediation.durationSpanStart, tenureIntent.remediation.durationSpanEnd) : ''}
+        entries={cv.experience} selection={tenureSelection} onSelection={setTenureSelection}
+        onConfirm={confirmTenureRelation} onCancel={closeTenureDialog} />
       <TargetContentLocaleDialog
         open={summaryTranslateIntent !== null}
         sourceLocale={summaryTranslateIntent?.sourceLocale || null}

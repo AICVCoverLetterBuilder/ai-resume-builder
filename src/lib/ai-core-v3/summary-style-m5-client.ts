@@ -4,6 +4,9 @@ import { hashSummarySourceLocaleText } from '@/lib/cv-summary-source-locale';
 import { isProjectionFresh } from '@/lib/cv-canonical-snapshot';
 import { CV_EXPORT_TITLE_LOCALIZATION_REVISION } from '@/lib/cv-export-title-localization';
 import { resolveLocaleCandidate } from '@/lib/i18n/translations';
+import { projectSummaryEmploymentTenureRequest, prepareSummaryEmploymentTenureServerRequest } from './summary-employment-tenure-relation';
+import { bindTrustedEmploymentTenureRuntime, trustedEmploymentTenureAuthority,
+  validateTrustedTenureCandidate, resolveSummaryTenureRemediation, type SummaryTenureRemediation } from './summary-trusted-tenure-runtime';
 import {
   canonicalSummaryV3StyleLocale,
   createSummaryV3StyleOperationSnapshot,
@@ -65,7 +68,7 @@ export interface SummaryV3StyleClientDependencies {
 export type SummaryV3StyleClientOutcome =
   | Readonly<{ kind: 'committed'; status: number; receipt: Extract<SummaryV3CommitReceipt, { kind: 'committed' }>; evidence: SummaryV3StyleClientEvidence }>
   | Readonly<{ kind: 'safe_no_op'; status: number; reason: string; evidence: SummaryV3StyleClientEvidence }>
-  | Readonly<{ kind: 'terminal'; status: number; reason: string; evidence?: SummaryV3StyleClientEvidence }>;
+  | Readonly<{ kind: 'terminal'; status: number; reason: string; evidence?: SummaryV3StyleClientEvidence; remediation?: SummaryTenureRemediation }>;
 
 export type SummaryV3StyleClientEvidence = SummaryV3StyleM5BoundedEvidence;
 
@@ -252,6 +255,16 @@ export function summaryV3StyleSourceStillCurrent(options: Readonly<{
   liveCv: CVData;
 }>): boolean {
   const { input, snapshot, liveCv } = options;
+  const authority = trustedEmploymentTenureAuthority(snapshot);
+  if (authority) {
+    try {
+      const projected = projectSummaryEmploymentTenureRequest(buildSummaryV3StyleRequest(
+        { ...input, cv: liveCv }, snapshot.requestedLocale, snapshot.sourceLocale), liveCv);
+      const prepared = prepareSummaryEmploymentTenureServerRequest(projected);
+      const current = bindTrustedEmploymentTenureRuntime(createSummaryV3StyleOperationSnapshot(prepared.contentRequest), prepared.resolution);
+      if (trustedEmploymentTenureAuthority(current)?.fingerprint !== authority.fingerprint) return false;
+    } catch { return false; }
+  }
   if (snapshot.mode === 'enhance_existing_content') {
     return liveCv.summary === snapshot.sourceSummary;
   }
@@ -401,10 +414,11 @@ export async function runSummaryV3StyleClientOperation(
   const requestedLocale = canonicalSummaryV3StyleLocale(input.requestedLocale);
   const sourceLocale = canonicalSummaryV3StyleLocale(input.sourceLocale);
   if (!requestedLocale || requestedLocale !== sourceLocale) return { kind: 'terminal', status: 422, reason: 'unsupported_or_cross_locale' };
-  const request = buildSummaryV3StyleRequest(input, requestedLocale, sourceLocale);
+  const request = projectSummaryEmploymentTenureRequest(buildSummaryV3StyleRequest(input, requestedLocale, sourceLocale), input.cv);
   let snapshot;
   try {
-    snapshot = createSummaryV3StyleOperationSnapshot(request);
+    const prepared = prepareSummaryEmploymentTenureServerRequest(request);
+    snapshot = bindTrustedEmploymentTenureRuntime(createSummaryV3StyleOperationSnapshot(prepared.contentRequest), prepared.resolution);
   } catch (error) {
     return { kind: 'terminal', status: 422, reason: error instanceof Error ? error.message : 'malformed_request' };
   }
@@ -437,6 +451,12 @@ export async function runSummaryV3StyleClientOperation(
   const result = transportResult.response;
   if (result.kind === 'safe_no_op') {
     if (transport.status !== 200) return { kind: 'terminal', status: transport.status || 502, reason: 'safe_no_op_non_200' };
+    const authority = trustedEmploymentTenureAuthority(snapshot);
+    if (authority && (authority.slots.some((slot) => slot.stale)
+      || result.tenureOperationFingerprint !== authority.fingerprint
+      || !summaryV3StyleSourceStillCurrent({ input, snapshot, liveCv: dependencies.getLiveCv() }))) {
+      return { kind: 'terminal', status: 422, reason: 'safe_no_op_invalid' };
+    }
     const evidence = result.evidence && typeof result.evidence === 'object' ? result.evidence as Record<string, unknown> : null;
     const clientEvidence = readClientEvidence(evidence);
     const expectedMode = input.cv.summary === '' ? 'generate_from_context' : 'enhance_existing_content';
@@ -452,11 +472,15 @@ export async function runSummaryV3StyleClientOperation(
   }
   if (result.kind === 'not_applicable' || result.kind === 'handled_failure') {
     const evidence = readClientEvidence(result.evidence);
+    const remediation = input.style === 'stronger' && result.kind === 'handled_failure'
+      && result.typedReason === 'unsupported_claim' && dependencies.getLiveCv().summary === snapshot.sourceSummary
+      ? resolveSummaryTenureRemediation(result.remediation, snapshot.sourceSummary)?.remediation : undefined;
     return {
       kind: 'terminal',
       status: transport.status,
       reason: typeof result.typedReason === 'string' ? result.typedReason : typeof result.reason === 'string' ? result.reason : result.kind,
       ...(evidence ? { evidence } : {}),
+      ...(remediation ? { remediation } : {}),
     };
   }
   if (result.kind !== 'candidate_ready') return { kind: 'terminal', status: transport.status || 502, reason: 'unclassified_transport_response' };
@@ -481,6 +505,14 @@ export async function runSummaryV3StyleClientOperation(
     && clientEvidence.safeNoOpSelected === false
     && evidence.retries === 0 && evidence.fallbacks === 0 && evidence.v2Fallthrough === 0;
   if (!valid) return { kind: 'terminal', status: transport.status || 422, reason: 'candidate_identity_mismatch' };
+  const authority = trustedEmploymentTenureAuthority(snapshot);
+  const continuation = validateTrustedTenureCandidate(snapshot, candidate.text as string);
+  if (authority && (result.tenureOperationFingerprint !== authority.fingerprint || !continuation.valid)) {
+    return { kind: 'terminal', status: 422, reason: 'candidate_identity_mismatch' };
+  }
+  if (authority && candidate.snapshotHash !== snapshot.snapshotHash) {
+    return { kind: 'terminal', status: 422, reason: 'candidate_identity_mismatch' };
+  }
   const before = dependencies.getLiveCv();
   if (!summaryV3StyleSourceStillCurrent({ input, snapshot, liveCv: before })) {
     return { kind: 'terminal', status: 409, reason: 'stale_snapshot' };
@@ -496,6 +528,7 @@ export async function runSummaryV3StyleClientOperation(
     // M5 styles remain same-locale; preserve the document/default fallback so
     // a future mixed-locale Summary cannot relabel untouched Experience text.
     contentLocale: before.contentLocale,
+    ...(authority ? { summaryEmploymentTenureRelations: continuation.continuations } : {}),
   };
   let receipt: SummaryV3CommitReceipt;
   try {
