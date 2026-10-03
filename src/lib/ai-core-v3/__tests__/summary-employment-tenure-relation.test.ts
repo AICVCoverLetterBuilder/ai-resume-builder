@@ -13,14 +13,15 @@ import {
   type SummaryTenureM5Request,
 } from '../summary-employment-tenure-relation';
 import { findExactDurationMeasurements as find } from '../exact-duration-measurement';
-import { hashSummaryV3StyleValue as hash } from '../summary-style-m5';
+import { hashSummaryV3StyleValue as hash, createSummaryV3StyleOperationSnapshot } from '../summary-style-m5';
+import { bindTrustedEmploymentTenureRuntime, summaryDurationCandidateComparison,
+  trustedEmploymentTenureAuthority } from '../summary-trusted-tenure-runtime';
 import { CV_DRAFT_STORAGE_KEY, loadCvDraft, saveCvDraft } from '../../draft-storage';
 import { buildCanonicalSnapshotFromCv } from '../../cv-canonical-snapshot';
 import type * as Domain from '../summary-style-m5';
 import type * as Server from '../summary-style-m5-server';
 import type * as Provider from '../summary-style-m5-provider';
 import type { CVData } from '../../types';
-import { expectedLegacyTenureRemediation } from './fixtures/task085-historical-current-contract';
 
 // Immutable baseline graph loaded from Git, candidate graph from disk. The
 // retained harness is reused in memory, never rewritten and never networked.
@@ -410,15 +411,25 @@ describe('Task083 immutable baseline/candidate request/provider/decision parity'
           expect(current.result).not.toHaveProperty('remediation');
         }
       } else {
-        // Invalid metadata is discarded (POLICY 2). Only the exact legacy
-        // source-floor remediation selector differs, never provider/usage.
+        // Discarded/absent metadata grants no employment owner or refresh.
+        // Only the deliberate unbound stale-duration terminal is superseded.
         expect(resolution.relations).toEqual([]);
-        const expected = reference === '2026-10-01'
-          ? { ...prior, result: { ...prior.result, remediation: expectedLegacyTenureRemediation(cv.summary) } }
-          : prior;
-        expect(current).toEqual(expected);
+        if (reference === '2026-09-01') expect(current).toEqual(prior);
+        else {
+          expect(prior.result.kind).toBe('handled_failure');
+          expect(current.result).toMatchObject({ kind: 'safe_no_op', typedReason: 'safe_no_op',
+            evidence: { safeNoOpSelected: true, writerAttempts: 1, evaluatorAttempts: 1 } });
+        }
+        const opaque = bindTrustedEmploymentTenureRuntime(createSummaryV3StyleOperationSnapshot(prepare(req).contentRequest), resolution);
+        expect(trustedEmploymentTenureAuthority(opaque)).toBeNull();
+        expect(opaque.sourceSummary).toBe(cv.summary);
+        expect(summaryDurationCandidateComparison(opaque, cv.summary)).not.toBeNull();
+        expect(summaryDurationCandidateComparison(opaque, cv.summary.replace('8 months', '9 months'))).toBeNull();
         expect(JSON.stringify(current.inputs)).toBe(JSON.stringify(prior.inputs));
+        expect(current.inputs.map((call) => call.role)).toEqual(['writer', 'evaluator']);
         expect(current.result).not.toHaveProperty('tenureOperationFingerprint');
+        expect(current.result).not.toHaveProperty('remediation');
+        expect(current.result).not.toHaveProperty('candidate');
         for (const call of current.inputs) expect(call.input).not.toHaveProperty('trustedTenureClaims');
       }
       expect(JSON.stringify(current.inputs)).not.toContain('summaryEmploymentTenure');

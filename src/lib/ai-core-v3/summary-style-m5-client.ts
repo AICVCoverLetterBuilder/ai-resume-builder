@@ -6,7 +6,7 @@ import { CV_EXPORT_TITLE_LOCALIZATION_REVISION } from '@/lib/cv-export-title-loc
 import { resolveLocaleCandidate } from '@/lib/i18n/translations';
 import { projectSummaryEmploymentTenureRequest, prepareSummaryEmploymentTenureServerRequest } from './summary-employment-tenure-relation';
 import { bindTrustedEmploymentTenureRuntime, trustedEmploymentTenureAuthority,
-  validateTrustedTenureCandidate, resolveSummaryTenureRemediation, type SummaryTenureRemediation } from './summary-trusted-tenure-runtime';
+  validateTrustedTenureCandidate, summaryDurationCandidateComparison, resolveSummaryTenureRemediation, type SummaryTenureRemediation } from './summary-trusted-tenure-runtime';
 import {
   canonicalSummaryV3StyleLocale,
   createSummaryV3StyleOperationSnapshot,
@@ -511,6 +511,9 @@ export async function runSummaryV3StyleClientOperation(
     return { kind: 'terminal', status: 422, reason: 'candidate_identity_mismatch' };
   }
   if (authority && candidate.snapshotHash !== snapshot.snapshotHash) {
+    return { kind: 'terminal', status: 422, reason: 'candidate_identity_mismatch' };
+  }
+  if (!summaryDurationCandidateComparison(snapshot, candidate.text as string)) {
     return { kind: 'terminal', status: 422, reason: 'candidate_identity_mismatch' };
   }
   const before = dependencies.getLiveCv();

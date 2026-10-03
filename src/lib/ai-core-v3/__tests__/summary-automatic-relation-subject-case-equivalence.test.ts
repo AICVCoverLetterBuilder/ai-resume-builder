@@ -40,6 +40,9 @@ function graph(baseline: boolean): Graph {
       module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true,
     } }).outputText;
     if (relative === 'src/lib/ai-core-v3/summary-style-m5.ts') {
+      // Only this synthetic hybrid exposes the frozen helper under its later
+      // public name; its body and all historical expectations stay unchanged.
+      if (baseline) code += '\nexports.summaryV3StyleSourceUnitTexts=sourceUnitTexts;';
       code += '\nexports.audit={origin:(snapshot,index)=>sourceLockOrigins.get(snapshot)?.[index]??"unknown",'
         + 'identity:inspectCandidatePreservesUnexpandedIdentityLock};';
     }

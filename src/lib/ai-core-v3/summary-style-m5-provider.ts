@@ -49,6 +49,7 @@ export interface SummaryV3StyleRouteParams {
   readonly protectedEntities?: unknown;
   readonly manifest?: unknown;
   readonly requestIdentity?: unknown;
+  readonly createdAt?: unknown;
   readonly summaryEmploymentTenure?: unknown;
 }
 
@@ -79,7 +80,10 @@ export function normalizeSummaryV3StyleRouteRequest(
       : undefined,
     manifest: params.manifest as SummaryV3StyleRequest['manifest'],
     requestIdentity: typeof params.requestIdentity === 'string' ? params.requestIdentity : undefined,
-    createdAt,
+    // Request-owned identity, not a CV fact or trust grant. The shared snapshot
+    // validator strictly rejects non-number/non-finite/negative supplied values.
+    // Older callers without this field retain the existing server-time fallback.
+    createdAt: params.createdAt === undefined ? createdAt : params.createdAt as number,
     ...(params.summaryEmploymentTenure !== undefined
       ? { summaryEmploymentTenure: params.summaryEmploymentTenure as SummaryTenureM5Request['summaryEmploymentTenure'] }
       : {}),

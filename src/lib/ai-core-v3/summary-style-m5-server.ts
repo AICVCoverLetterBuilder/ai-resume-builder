@@ -73,7 +73,7 @@ import { immutableCopy } from './immutability';
 import { prepareSummaryEmploymentTenureServerRequest, type SummaryTenureM5Request,
   type SummaryTenureResolution } from './summary-employment-tenure-relation';
 import { bindTrustedEmploymentTenureRuntime, trustedEmploymentTenureAuthority,
-  trustedTenureCandidateComparison, trustedTenureSourceComparison, trustedTenureProviderGuidance,
+  summaryDurationCandidateComparison, trustedTenureCandidateComparison, trustedTenureSourceComparison, trustedTenureProviderGuidance,
   createSummaryTenureRemediation } from './summary-trusted-tenure-runtime';
 import {
   recordSummaryStyleLocalDiagnostics,
@@ -2927,6 +2927,11 @@ function withLocalDecisionDiagnostics(
 
 function candidateReady(snapshot: SummaryV3StyleOperationSnapshot, candidate: SummaryV3StyleCandidate, evidence: SummaryV3StyleEvidence): SummaryV3StyleResult {
   if (JSON.stringify(evidence).length > 8_192) return createSummaryV3StyleHandledFailure(snapshot, 'diagnostic_size_exceeded', evidence);
+  // Single final admission gate, shared by initial and repaired success. Existing
+  // writer, evaluator, hard predicates, repair and terminal winners run first.
+  if (!summaryDurationCandidateComparison(snapshot, candidate.text)) {
+    return createSummaryV3StyleHandledFailure(snapshot, 'lost_source_fact', evidence);
+  }
   return immutableCopy({ kind: 'candidate_ready', style: snapshot.style, mode: snapshot.mode, candidate, evidence }) as SummaryV3StyleResult;
 }
 

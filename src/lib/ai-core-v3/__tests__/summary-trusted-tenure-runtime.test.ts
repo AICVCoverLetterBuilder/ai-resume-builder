@@ -4,7 +4,7 @@ import { findExactDurationMeasurements } from '../exact-duration-measurement';
 import { createConfirmedEmploymentTenureRelation, projectSummaryEmploymentTenureRequest,
   prepareSummaryEmploymentTenureServerRequest } from '../summary-employment-tenure-relation';
 import { bindTrustedEmploymentTenureRuntime, trustedEmploymentTenureAuthority,
-  trustedTenureCandidateComparison, trustedTenureSourceComparison, validateTrustedTenureCandidate,
+  trustedTenureCandidateComparison, trustedTenureSourceComparison, validateTrustedTenureCandidate, summaryDurationCandidateComparison,
   resolveSummaryTenureRemediation, createSummaryTenureRemediation } from '../summary-trusted-tenure-runtime';
 import { createSummaryV3StyleOperationSnapshot, hashSummaryV3StyleValue, summaryV3StyleCandidateUnitHash,
   inspectSummaryV3StyleCandidatePreservesLocks, inspectSummaryV3StyleCandidateSourceFloor,
@@ -91,18 +91,22 @@ async function run(value = bind(), text = CURRENT) {
 
 describe('Task084 trusted tenure runtime authority and actual server/client wiring', () => {
   it('runs the exact legacy topology and returns only bounded remediation selectors', async () => {
-    const { result, writes, evaluations } = await run(cv(), SOURCE);
-    expect(result.kind).toBe('handled_failure');
+    const value = cv(), before = JSON.stringify(value);
+    const { result, writes, evaluations } = await run(value, SOURCE);
+    expect(result).toMatchObject({ kind: 'safe_no_op', typedReason: 'safe_no_op', evidence: { safeNoOpSelected: true } });
     expect(writes).toHaveLength(1); expect(evaluations).toHaveLength(1);
-    expect(readSummaryStyleLocalDiagnostics(result)).toMatchObject({
-      sourceFloorFirstProducer: 'source_numeric_membership_mismatch', sourceNumericMismatchClass: 'duration_component',
-      sourceNumericMismatchComparisonClass: 'exact_manifest_token_absent',
-    });
-    expect(result.remediation?.type).toBe('employment_tenure_binding_required');
-    expect(Object.keys(result.remediation!).sort()).toEqual(['type', 'summaryHash', 'durationSpanStart', 'durationSpanEnd', 'durationSpanHash'].sort());
-    expect(JSON.stringify(result.remediation)).not.toMatch(/SyntheticPerson|FictionalLab|Clerk|8 months|experienceStableId/);
-    expect(resolveSummaryTenureRemediation(result.remediation, SOURCE)?.measurement.totalMonths).toBe(8);
-    expect(result.kind === 'handled_failure' && result.evidence.safeNoOpSelected).toBe(false);
+    expect(readSummaryStyleLocalDiagnostics(result).sourceFloorFirstProducer).toBeNull();
+    expect(result).not.toHaveProperty('remediation');
+    expect(result).not.toHaveProperty('tenureOperationFingerprint');
+    expect(result).not.toHaveProperty('candidate');
+    expect(writes[0]!.sourceText).toBe(SOURCE);
+    expect(writes[0]!).not.toHaveProperty('trustedTenureClaims');
+    const snapshot = state(value);
+    expect(trustedEmploymentTenureAuthority(snapshot)).toBeNull();
+    expect(summaryDurationCandidateComparison(snapshot, SOURCE)).not.toBeNull();
+    expect(summaryDurationCandidateComparison(snapshot, SOURCE.replace('8 months', '9 months'))).toBeNull();
+    expect(value.summaryEmploymentTenureRelations).toBeUndefined();
+    expect(JSON.stringify(value)).toBe(before);
   });
   it('accepts the refreshed current candidate through the actual writer/evaluator/finalizer', async () => {
     const { result, writes, evaluations } = await run();
@@ -137,14 +141,23 @@ describe('Task084 trusted tenure runtime authority and actual server/client wiri
       expect(validateTrustedTenureCandidate(state({ ...value, summaryEmploymentTenureRelations: next.relations }), CURRENT).valid).toBe(false);
     }
   });
-  it('reconciles only the exact trusted source span, not another duration or equal numeral', () => {
+  it('reconciles only the exact trusted source span, not another duration or equal numeral', async () => {
     const value = bind(cv(SOURCE + ' SyntheticPerson worked on a project for 8 months and used 8 tools.'));
     const snapshot = state(value);
     const view = trustedTenureSourceComparison(snapshot);
     expect(view.sourceSummary).not.toContain('for about 8 months');
-    expect(view.sourceSummary).toContain('project for 8 months');
+    expect(view.sourceSummary).not.toContain('project for 8 months');
     expect(view.sourceSummary).toContain('used 8 tools');
     expect(snapshot.sourceSummary).toBe(value.summary);
+    const refreshed = value.summary.replace('about 8 months', 'about 9 months');
+    expect(validateTrustedTenureCandidate(snapshot, refreshed).valid).toBe(true);
+    expect(summaryDurationCandidateComparison(snapshot, refreshed)).not.toBeNull();
+    expect(summaryDurationCandidateComparison(snapshot, refreshed.replace('project for 8 months', 'project for 9 months'))).toBeNull();
+    // The equal plain numeral remains subject to the existing numeric owner.
+    const plain = await run(value, refreshed);
+    expect(plain.result.kind).toBe('handled_failure');
+    expect(plain.result.kind === 'handled_failure' && plain.result.typedReason).toBe('unsupported_claim');
+    expect(readSummaryStyleLocalDiagnostics(plain.result).sourceFloorFirstProducer).toBe('source_numeric_membership_mismatch');
   });
   it('provides source-lock and fact comparison only after the independent candidate validator passes', () => {
     const snapshot = state();
@@ -264,6 +277,22 @@ describe('Task084 trusted tenure runtime authority and actual server/client wiri
     const tail = family === 'other number' ? ' SyntheticPerson uses 77 tools.' : ' SyntheticPerson completed a project for 7 months.';
     const value = bind(cv(SOURCE + tail));
     const result = await run(value, CURRENT + tail);
+    if (family === 'other duration') {
+      expect(result.result.kind).toBe('candidate_ready');
+      if (result.result.kind !== 'candidate_ready') throw new Error('Trusted-plus-opaque candidate missing');
+      expect(result.result.candidate.text).toBe(CURRENT + tail);
+      expect(result.result.tenureOperationFingerprint).toBe(trustedEmploymentTenureAuthority(state(value))!.fingerprint);
+      for (const candidate of [CURRENT + tail.replace('7 months', '8 months'),
+        CURRENT + tail.replace(' for 7 months', ''),
+        CURRENT + tail.replace(' for 7 months', '') + ' SyntheticPerson worked for 7 months.',
+        SOURCE + tail,
+        CURRENT.replace('9 months', '7 months') + tail.replace('7 months', '9 months')]) {
+        expect(summaryDurationCandidateComparison(state(value), candidate)).toBeNull();
+        expect((await run(value, candidate)).result.kind).toBe('handled_failure');
+      }
+      expect(value.summary).toBe(SOURCE + tail);
+      return;
+    }
     expect(result.result.kind).toBe('handled_failure');
     expect(result.result.kind === 'handled_failure' && result.result.typedReason).toBe('unsupported_claim');
     expect(readSummaryStyleLocalDiagnostics(result.result).sourceFloorFirstProducer).toBe('source_numeric_membership_mismatch');
@@ -340,6 +369,21 @@ describe('Task084 trusted tenure runtime authority and actual server/client wiri
       const req = metadata ? projectSummaryEmploymentTenureRequest(request(value), bind(value)) : request(value);
       const before = await capture(baseline.executeSummaryV3StyleRoute, req), after = await capture(executeSummaryV3StyleRoute, req);
       expect(after.calls).toEqual(before.calls);
+      expect(JSON.stringify(after.calls)).toBe(JSON.stringify(before.calls));
+      if (!metadata && value.summary === SOURCE && value.experience[0]!.isPresent) {
+        expect(before.result.kind).toBe('handled_failure');
+        expect(after.result).toMatchObject({ kind: 'safe_no_op', typedReason: 'safe_no_op',
+          evidence: { safeNoOpSelected: true, writerAttempts: 1, evaluatorAttempts: 1 } });
+        expect(after.result).not.toHaveProperty('remediation');
+        expect(after.result).not.toHaveProperty('tenureOperationFingerprint');
+        expect(after.calls).toHaveLength(2);
+        expect(JSON.stringify(after.calls)).not.toContain('trustedTenureClaims');
+        expect(trustedEmploymentTenureAuthority(state(value))).toBeNull();
+        expect(summaryDurationCandidateComparison(state(value), SOURCE.replace('8 months', '9 months'))).toBeNull();
+        expect(value.summary).toBe(SOURCE);
+        expect(value.summaryEmploymentTenureRelations).toBeUndefined();
+        continue;
+      }
       const { remediation: _remediation, tenureOperationFingerprint: _fingerprint, ...contentResult } = after.result;
       expect(contentResult).toEqual(before.result);
       if (value.experience[0]!.isPresent === false) expect(after.result).toEqual(before.result);
@@ -357,6 +401,6 @@ describe('Task084 exact parser reuse, native runtime and UI label coverage acros
     expect(validateTrustedTenureCandidate(snapshot, value.summary.replace(surface(8), surface(9))).valid).toBe(true);
     expect(validateTrustedTenureCandidate(snapshot, value.summary).valid).toBe(false);
     expect(validateTrustedTenureCandidate(snapshot, value.summary.replace(surface(8), surface(11))).valid).toBe(false);
-    expect(Object.values(translations[locale].employmentTenureConfirmation).every((label) => label.trim().length > 0)).toBe(true);
+    expect(translations[locale]).not.toHaveProperty('employmentTenureConfirmation');
   });
 });

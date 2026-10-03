@@ -22,6 +22,79 @@ export type TrustedEmploymentTenureRuntimeAuthority = Readonly<{
 }>;
 const authorities = new WeakMap<SummaryV3StyleOperationSnapshot, TrustedEmploymentTenureRuntimeAuthority>();
 
+// Opaque means literal preservation only: no Experience lookup, truth assertion,
+// refresh, relation creation or persisted metadata. Task082 alone selects spans.
+type OpaqueDurationSlot = Readonly<{
+  start: number; end: number; unitIndex: number; ordinal: number; unitMeasurementCount: number; surface: string;
+}>;
+type OpaqueDurationPreservation = Readonly<{
+  slots: readonly OpaqueDurationSlot[]; resolved: boolean; measurementCount: number;
+}>;
+const opaqueDurations = new WeakMap<SummaryV3StyleOperationSnapshot, OpaqueDurationPreservation>();
+
+function bindOpaqueDurationPreservation(snapshot: SummaryV3StyleOperationSnapshot, resolution: SummaryTenureResolution): void {
+  if (snapshot.style !== 'stronger' || snapshot.mode !== 'enhance_existing_content') return;
+  const measurements = findExactDurationMeasurements(snapshot.sourceSummary);
+  if (measurements.length === 0) return;
+  const units = summaryV3StyleSourceUnitTexts(snapshot.sourceSummary);
+  const text = normalizeSummaryV3StyleText(snapshot.sourceSummary);
+  const slots: OpaqueDurationSlot[] = [];
+  let resolved = true;
+  for (const m of measurements) {
+    // ALL valid relation-owned spans take precedence, including closed entries.
+    if (resolution.status === 'valid' && resolution.relations.some((r) =>
+      r.durationSpanStart === m.start && r.durationSpanEnd === m.end)) continue;
+    const start = canonicalStart(snapshot.sourceSummary, m.start);
+    const surface = normalizeSummaryV3StyleText(snapshot.sourceSummary.slice(m.start, m.end));
+    const matches = units.flatMap((unit, unitIndex) => occurrences(text, unit).map((at) => ({ unit, unitIndex, at })))
+      .filter(({ unit, at }) => at <= start && start + surface.length <= at + unit.length);
+    if (matches.length !== 1) { resolved = false; break; }
+    const unitMeasurements = findExactDurationMeasurements(matches[0]!.unit);
+    const ordinal = unitMeasurements.findIndex((value) => value.start === start - matches[0]!.at);
+    if (ordinal < 0) { resolved = false; break; }
+    slots.push({ start: m.start, end: m.end, unitIndex: matches[0]!.unitIndex,
+      ordinal, unitMeasurementCount: unitMeasurements.length, surface });
+  }
+  if (slots.length || !resolved) opaqueDurations.set(snapshot, immutableCopy({ slots, resolved,
+    measurementCount: measurements.length }));
+}
+
+function carryOpaqueDurationPreservation(from: SummaryV3StyleOperationSnapshot, to: SummaryV3StyleOperationSnapshot): void {
+  const authority = opaqueDurations.get(from);
+  if (authority) opaqueDurations.set(to, authority);
+}
+
+/** One literal preservation owner: same unit, measurement ordinal and exact
+ * normalized surface. Other words remain governed by existing Stronger rules.
+ * Task084, not opaque matching, owns trusted candidate measurement selection.
+ */
+export function summaryDurationCandidateComparison(snapshot: SummaryV3StyleOperationSnapshot, candidate: string):
+  SummaryV3StyleOperationSnapshot | null {
+  const view = trustedTenureCandidateComparison(snapshot, candidate);
+  if (!view) return null;
+  const opaque = opaqueDurations.get(view);
+  if (!opaque) return view;
+  if (!opaque.resolved) return null;
+  const actual = summaryV3StyleSourceUnitTexts(candidate);
+  const normalized = normalizeSummaryV3StyleText(candidate);
+  const trusted = validateTrustedTenureCandidate(snapshot, candidate);
+  if (!trusted.valid || findExactDurationMeasurements(candidate).length !== opaque.measurementCount) return null;
+  for (const slot of opaque.slots) {
+    const unit = actual[slot.unitIndex];
+    if (!unit) return null;
+    const hits = occurrences(normalized, unit);
+    if (hits.length !== 1) return null;
+    const measurements = findExactDurationMeasurements(unit);
+    const measurement = measurements[slot.ordinal];
+    if (!measurement || measurements.length !== slot.unitMeasurementCount
+      || normalizeSummaryV3StyleText(unit.slice(measurement.start, measurement.end)) !== slot.surface) return null;
+    // A relation-owned candidate span cannot discharge an unbound literal slot.
+    if (trusted.measurements.some((value) => canonicalStart(candidate, value.start)
+      === hits[0]! + measurement.start)) return null;
+  }
+  return view;
+}
+
 // Position in the existing NFKC/whitespace-canonical text, without an inferred
 // semantic referent. Task082 owns the ORIGINAL UTF-16 measurement coordinates.
 function canonicalStart(text: string, start: number): number {
@@ -49,6 +122,7 @@ export function bindTrustedEmploymentTenureRuntime(
   snapshot: SummaryV3StyleOperationSnapshot,
   resolution: SummaryTenureResolution,
 ): SummaryV3StyleOperationSnapshot {
+  bindOpaqueDurationPreservation(snapshot, resolution);
   if (resolution.status !== 'valid' || resolution.relations.length === 0
     || snapshot.style !== 'stronger' || snapshot.mode !== 'enhance_existing_content') return snapshot;
   const text = normalizeSummaryV3StyleText(snapshot.sourceSummary);
@@ -90,6 +164,7 @@ export function bindTrustedEmploymentTenureRuntime(
       ? hashSummaryV3StyleValue(`${snapshot.snapshotHash}:trusted-tenure:${authority.fingerprint}`) : snapshot.snapshotHash,
   });
   authorities.set(bound, authority);
+  carryOpaqueDurationPreservation(snapshot, bound);
   return bound;
 }
 
@@ -177,15 +252,23 @@ export function trustedTenureCandidateComparison(
   const view = immutableCopy({ ...snapshot, sourceSummary: replace(canonicalSource, 0),
     requiredFacts: facts as SummaryV3StyleOperationSnapshot['requiredFacts'] });
   authorities.set(view, authority);
+  carryOpaqueDurationPreservation(snapshot, view);
   return view;
 }
 
 export function trustedTenureSourceComparison(snapshot: SummaryV3StyleOperationSnapshot): SummaryV3StyleOperationSnapshot {
   const authority = authorities.get(snapshot);
-  if (!authority?.claimSlotResolved || !authority.slots.some((slot) => slot.stale)) return snapshot;
-  let text = authority.sourceSummary;
-  for (const slot of [...authority.slots].reverse()) {
-    if (slot.stale) text = text.slice(0, slot.source.start) + ' ' + text.slice(slot.source.end);
+  const opaque = opaqueDurations.get(snapshot);
+  const source = authority?.sourceSummary ?? snapshot.sourceSummary;
+  const ranges = [
+    ...(opaque?.resolved ? opaque.slots : []),
+    ...(authority?.claimSlotResolved ? authority.slots.filter((slot) => slot.stale).map((slot) => slot.source) : []),
+  ];
+  if (!ranges.length) return snapshot;
+  let text = source;
+  // Preserve coordinates while excluding only exact authorized measurements.
+  for (const slot of [...ranges].sort((a, b) => b.start - a.start)) {
+    text = text.slice(0, slot.start) + ' '.repeat(slot.end - slot.start) + text.slice(slot.end);
   }
   // Only numeric/role-duration source predicates use this view. The original
   // source/required facts are retained for writer, evaluator and candidate locks.

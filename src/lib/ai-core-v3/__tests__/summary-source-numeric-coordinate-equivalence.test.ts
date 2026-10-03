@@ -11,6 +11,10 @@ import type * as Projector from '../summary-v3-production-observability';
 import * as Sidecar from '../summary-style-m5-local-observability';
 import { removeTask075ObservationFootprint } from './fixtures/summary-numeric-mismatch-observation-footprint';
 import { assertCurrentTask084SourceFloorContract, historicalPreTask084Source } from './fixtures/task085-historical-current-contract';
+import { createSummaryV3StyleOperationSnapshot } from '../summary-style-m5';
+import { findExactDurationMeasurements } from '../exact-duration-measurement';
+import { bindTrustedEmploymentTenureRuntime, summaryDurationCandidateComparison,
+  trustedEmploymentTenureAuthority } from '../summary-trusted-tenure-runtime';
 
 const BASELINE = '8cd06554718c8a0fba232035e5c8cdf328774fed';
 const root = process.cwd();
@@ -260,7 +264,30 @@ describe('Tasks 071/072 bounded source numeric coordinate equivalence', () => {
     expect(after.server.audit.first(b)).toBe(before.server.audit.first(a));
     expect(after.server.audit.hard(b, source)).toEqual(before.server.audit.hard(a, source));
     expect(after.server.audit.tokens(b, source, false)).toEqual(before.server.audit.tokens(a, source, false));
-    await parity(req);
+    if (_label === 'wrong duration' || _label === 'wrong unit') {
+      // No comparator relaxation for any other numeric family. Only these
+      // two Task082 exact, unbound source measurements have opaque admission.
+      expect(findExactDurationMeasurements(source)).toHaveLength(1);
+      const prior = await run(before, req), current = await run(after, req);
+      expect(prior.result.kind).toBe('handled_failure');
+      expect(current.result).toMatchObject({ kind: 'safe_no_op', typedReason: 'safe_no_op',
+        evidence: { safeNoOpSelected: true, writerAttempts: 1, evaluatorAttempts: 1 } });
+      expect(current.invocations).toEqual(prior.invocations);
+      expect(JSON.stringify(current.invocations)).toBe(JSON.stringify(prior.invocations));
+      expect(current.invocations.map((call) => call.role)).toEqual(['writer', 'evaluator']);
+      expect(b).toEqual(a);
+      expect(current.result).not.toHaveProperty('tenureOperationFingerprint');
+      expect(current.result).not.toHaveProperty('remediation');
+      expect(current.diagnostic).toMatchObject({ finalApplyEligible: false, usageDecision: 'no_increment' });
+      const opaque = bindTrustedEmploymentTenureRuntime(createSummaryV3StyleOperationSnapshot(req), { status: 'absent', reason: null, relations: [] });
+      expect(trustedEmploymentTenureAuthority(opaque)).toBeNull();
+      expect(opaque.sourceSummary).toBe(source);
+      expect(summaryDurationCandidateComparison(opaque, source)).not.toBeNull();
+      const mutated = source.replace('2   ', '3   ');
+      expect(summaryDurationCandidateComparison(opaque, mutated)).toBeNull();
+      expect((await run(after, req, mutated)).result.kind).toBe('handled_failure');
+      for (const call of current.invocations) expect(call.input).not.toHaveProperty('trustedTenureClaims');
+    } else await parity(req);
   });
 
   it('does not identify the physical Serbian 8-month clue as a defective membership', async () => {

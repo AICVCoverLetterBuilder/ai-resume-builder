@@ -22,7 +22,6 @@ import { CV_AI_DIAGNOSTICS_CHANGED_EVENT } from '@/lib/cv-ai-diagnostics-lifecyc
 import { translations, type Locale } from '@/lib/i18n/translations';
 import { aiErrorMessage } from '@/lib/ai-error-codes';
 import { findExactDurationMeasurements } from '../exact-duration-measurement';
-import { saveCvDraft, loadCvDraft } from '@/lib/draft-storage';
 import type { CVData } from '@/lib/types';
 import {
   canonicalSummaryV3StyleLocale,
@@ -1783,7 +1782,7 @@ describe('M5.3 Summary style client/page boundary', () => {
     expect(createSummaryV3StyleOperationSnapshot(normalized).mode).toBe('generate_from_context');
   });
 
-  it('accepts server-owned createdAt while local preflight createdAt differs', async () => {
+  it('preserves request-owned createdAt when server receipt time differs (Task089)', async () => {
     let serverSnapshot: ReturnType<typeof createSummaryV3StyleOperationSnapshot> | null = null;
     const { outcome, capturedRequest, commitRequest } = await run({
       serverReceivedAt: 2000,
@@ -1801,7 +1800,8 @@ describe('M5.3 Summary style client/page boundary', () => {
     const observedCommitRequest = commitRequest as unknown as SummaryV3CommitRequest;
     expect(outcome.kind).toBe('committed');
     expect((capturedRequest as unknown as Record<string, unknown> | null)?.createdAt).toBe(1000);
-    expect(localSnapshot.snapshotHash).not.toBe(observedServerSnapshot.snapshotHash);
+    expect(localSnapshot.snapshotHash).toBe(observedServerSnapshot.snapshotHash);
+    expect(observedServerSnapshot.createdAt).toBe(1000);
     expect(localSnapshot.manifestHash).toBe(observedServerSnapshot.manifestHash);
     expect(observedCommitRequest.candidateHash).toBe(hashSummaryV3Value('server-owned candidate'));
   });
@@ -2166,7 +2166,7 @@ describe('M5.3 Summary style client/page boundary', () => {
   });
 });
 
-describe('Task084 real CV Builder tenure confirmation (no AI retry)', () => {
+describe('Task089 real CV Builder ignores legacy tenure remediation without replacement UI', () => {
   const source = 'Synthetic worker has about 8 months of tenure. Synthetic worker builds reliable APIs.';
   function legacyRemediation() {
     const measurement = findExactDurationMeasurements(source)[0]!;
@@ -2175,60 +2175,29 @@ describe('Task084 real CV Builder tenure confirmation (no AI retry)', () => {
         summaryHash: hashSummaryV3StyleValue(source), durationSpanStart: measurement.start,
         durationSpanEnd: measurement.end, durationSpanHash: hashSummaryV3StyleValue(source.slice(measurement.start, measurement.end)) } } };
   }
-  async function controls() {
-    await waitFor(() => expect(document.querySelector('[data-tenure-entry]')).not.toBeNull());
-    const selection = document.querySelector('[data-tenure-entry]') as HTMLSelectElement;
-    const confirm = document.querySelector('[data-tenure-confirm]') as HTMLButtonElement;
-    return { selection, confirm };
-  }
-  it('single Experience still has no default, no confirmation authority and no usage', async () => {
+  const assertNoModal = () => {
+    expect(document.querySelector('[data-tenure-entry]')).toBeNull();
+    expect(document.querySelector('[data-tenure-confirm]')).toBeNull();
+    expect(document.querySelector('[data-tenure-local-surface]')).toBeNull();
+    expect(document.body.textContent).not.toContain('Confirm employment duration');
+  };
+  it.each(['single Experience', 'no hidden confirmation', 'no negative-choice replacement'])('%s has no extra user step, binding, retry or usage', async () => {
     const result = await actualPageStyleFlow({ style: 'stronger', summary: source, terminalResponse: legacyRemediation(),
-      afterStyleFlow: async () => {
-        const { selection, confirm } = await controls();
-        expect(selection.value).toBe(''); expect(confirm.disabled).toBe(true);
-        expect(selection.querySelectorAll('option')).toHaveLength(3);
-        expect(document.querySelector('[data-tenure-local-surface]')?.textContent).toBe('8 months');
-      } });
+      afterStyleFlow: async () => { assertNoModal(); } });
     expect(result.finalCv.summary).toBe(source); expect(result.finalCv.summaryEmploymentTenureRelations).toBeUndefined();
     expect(result.commitCalls).toBe(0); expect(result.usageCalls).toBe(0); expect(result.m5Requests).toHaveLength(1);
+    expect(result.errorToasts).toBe(1);
   });
-  it('explicit selection saves through the existing owner, survives draft reload, and does not retry/increment', async () => {
-    const result = await actualPageStyleFlow({ style: 'stronger', summary: source, terminalResponse: legacyRemediation(),
-      afterStyleFlow: async () => {
-        const { selection, confirm } = await controls();
-        fireEvent.change(selection, { target: { value: 'experience-current' } });
-        await waitFor(() => expect(confirm.disabled).toBe(false));
-        fireEvent.click(confirm);
-        await waitFor(() => expect(pageRuntimeCv.summaryEmploymentTenureRelations).toHaveLength(1));
-        expect(saveCvDraft({ cv: pageRuntimeCv, savedAt: 'synthetic' })).toBe(true);
-        expect(loadCvDraft()!.cv.summaryEmploymentTenureRelations).toEqual(pageRuntimeCv.summaryEmploymentTenureRelations);
-      } });
-    expect(result.finalCv.summary).toBe(source); expect(result.commitCalls).toBe(1);
-    expect(result.usageCalls).toBe(0); expect(result.m5Requests).toHaveLength(1);
-  });
-  it('negative choice creates no relation, persistence action, retry or usage', async () => {
-    const result = await actualPageStyleFlow({ style: 'stronger', summary: source, terminalResponse: legacyRemediation(),
-      afterStyleFlow: async () => {
-        const { selection, confirm } = await controls();
-        fireEvent.change(selection, { target: { value: 'not_employment_tenure' } }); fireEvent.click(confirm);
-        await waitFor(() => expect(document.querySelector('[data-tenure-entry]')).toBeNull());
-      } });
-    expect(result.finalCv.summaryEmploymentTenureRelations).toBeUndefined(); expect(result.commitCalls).toBe(0);
-    expect(result.usageCalls).toBe(0); expect(result.m5Requests).toHaveLength(1);
-  });
-  it.each(['summary', 'delete', 'replace', 'cv'] as const)('rejects modal confirmation after canonical %s change', async (change) => {
+  it.each(['summary', 'delete', 'replace', 'cv'] as const)('cannot grant a hidden confirmation after canonical %s change', async (change) => {
     const result = await actualPageStyleFlow({ style: 'stronger', summary: source, terminalResponse: legacyRemediation(),
       afterStyleFlow: async (replaceCanonicalCv) => {
-        const { selection, confirm } = await controls();
-        fireEvent.change(selection, { target: { value: 'experience-current' } });
         const next = change === 'summary' ? { ...pageRuntimeCv, summary: source + ' Changed.' }
           : change === 'delete' ? { ...pageRuntimeCv, experience: [] }
             : change === 'replace' ? { ...pageRuntimeCv, experience: [{ ...pageRuntimeCv.experience[0]!, company: 'Other synthetic employer' }] }
               : { ...pageRuntimeCv, id: 'synthetic-other-cv' };
         replaceCanonicalCv(next);
         await waitFor(() => expect(pageRuntimeCv).toBe(next));
-        fireEvent.click(confirm);
-        await waitFor(() => expect(document.querySelector('[data-tenure-entry]')).toBeNull());
+        assertNoModal();
       } });
     expect(result.finalCv.summaryEmploymentTenureRelations).toBeUndefined(); expect(result.commitCalls).toBe(0);
     expect(result.usageCalls).toBe(0); expect(result.m5Requests).toHaveLength(1);

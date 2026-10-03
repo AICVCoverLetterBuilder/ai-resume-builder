@@ -225,15 +225,32 @@ describe('Task078 stale CURRENT role duration safety audit (offline; no producti
     for (const ref of ['2026-09-01', '2026-10-01']) {
       const baseline = await run(before, ref), current = await run(after, ref);
       expect(baseline.result).not.toHaveProperty('remediation');
-      const expected = ref === '2026-10-01'
-        ? { ...baseline, result: { ...baseline.result, remediation: expectedLegacyTenureRemediation(source) } }
-        : baseline;
-      expect(current).toEqual(expected);
-      expect(JSON.stringify(current)).toBe(JSON.stringify(expected));
+      if (ref === '2026-09-01') expect(current).toEqual(baseline);
+      else {
+        // The historical rollover rejection above remains proven. With no
+        // trusted relation, today's product preserves rather than refreshes 8.
+        expect(baseline.result.kind).toBe('handled_failure');
+        expect(current.result).toMatchObject({ kind: 'safe_no_op', typedReason: 'safe_no_op',
+          evidence: { safeNoOpSelected: true, writerAttempts: 1, evaluatorAttempts: 1 } });
+        expect(current.diagnostic).toMatchObject({ httpStatus: 200, finalApplyEligible: false, usageDecision: 'no_increment' });
+      }
+      expect(current.result).not.toHaveProperty('remediation');
+      expect(current.result).not.toHaveProperty('tenureOperationFingerprint');
+      expect(current.result).not.toHaveProperty('candidate');
       expect(current.invocations).toEqual(baseline.invocations);
-      expect(current.diagnostic).toEqual(baseline.diagnostic);
+      expect(JSON.stringify(current.invocations)).toBe(JSON.stringify(baseline.invocations));
+      for (const call of current.invocations) expect(call.input).not.toHaveProperty('trustedTenureClaims');
       expect(snapshot(after, ref)).toEqual(snapshot(before, ref));
-      expect(cv().summaryEmploymentTenureRelations).toBeUndefined();
+      const value = cv(), original = JSON.stringify(value);
+      const req = request(after, ref, value);
+      expect(req.manifest.entries[0]!.durationMonths).toBe(ref === '2026-09-01' ? 8 : 9);
+      const opaque = bindTrustedEmploymentTenureRuntime(createSummaryV3StyleOperationSnapshot(req), { status: 'absent', reason: null, relations: [] });
+      expect(trustedEmploymentTenureAuthority(opaque)).toBeNull();
+      expect(opaque.sourceSummary).toBe(source);
+      expect(summaryDurationCandidateComparison(opaque, source)).not.toBeNull();
+      expect(summaryDurationCandidateComparison(opaque, source.replace('8 months', '9 months'))).toBeNull();
+      expect(value.summaryEmploymentTenureRelations).toBeUndefined();
+      expect(JSON.stringify(value)).toBe(original);
     }
   });
   it('binds an explicitly named fictional duration clause to one stable current entry', () => {
@@ -392,5 +409,8 @@ describe('Task078 stale CURRENT role duration safety audit (offline; no producti
 });
 
 // After the reusable harness boundary so Task082-084 extraction stays unchanged.
-import { assertCurrentTask084SourceFloorContract, expectedLegacyTenureRemediation,
+import { assertCurrentTask084SourceFloorContract,
   historicalPreTask084Source, historicalSourcePins } from './fixtures/task085-historical-current-contract';
+import { createSummaryV3StyleOperationSnapshot } from '../summary-style-m5';
+import { bindTrustedEmploymentTenureRuntime, summaryDurationCandidateComparison,
+  trustedEmploymentTenureAuthority } from '../summary-trusted-tenure-runtime';

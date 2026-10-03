@@ -78,9 +78,6 @@ export function resolveInitialLocalePreference(
 }
 
 export type TranslationKeys = {
-  employmentTenureConfirmation: {
-    title: string; question: string; select: string; notTenure: string; confirm: string;
-  };
   nav: {
     home: string;
     cvBuilder: string;
@@ -645,7 +642,7 @@ export type TranslationKeys = {
   };
 };
 
-type BaseTranslationKeys = Omit<TranslationKeys, 'titleLocaleConfirmation' | 'employmentTenureConfirmation'>;
+type BaseTranslationKeys = Omit<TranslationKeys, 'titleLocaleConfirmation'>;
 
 const enBase: BaseTranslationKeys = {
   nav: { home: 'Home', cvBuilder: 'CV Builder', coverLetter: 'Cover Letter', templates: 'Templates', pricing: 'Pricing', about: 'About', contact: 'Contact', login: 'Log In', register: 'Sign Up', dashboard: 'Dashboard', logout: 'Log Out' },
@@ -2867,25 +2864,10 @@ const titleLocaleConfirmationByLocale: Record<Locale, TranslationKeys['titleLoca
   },
 };
 
-const employmentTenureConfirmationByLocale: Record<Locale, TranslationKeys['employmentTenureConfirmation']> = {
-  en: { title: 'Confirm employment duration', question: 'Which work experience does this duration describe? Confirming saves the link only; press Stronger again yourself.', select: 'Choose explicitly', notTenure: 'Not employment tenure', confirm: 'Confirm link' },
-  de: { title: 'Beschäftigungsdauer bestätigen', question: 'Welche Berufserfahrung beschreibt diese Dauer? Es wird nur die Verknüpfung gespeichert. Klicken Sie danach selbst erneut auf Stärker.', select: 'Bitte auswählen', notTenure: 'Keine Beschäftigungsdauer', confirm: 'Verknüpfung bestätigen' },
-  es: { title: 'Confirmar duración del empleo', question: '¿A qué experiencia laboral corresponde esta duración? Solo se guarda el vínculo. Pulsa Más potente de nuevo manualmente.', select: 'Selecciona una opción', notTenure: 'No es duración del empleo', confirm: 'Confirmar vínculo' },
-  fr: { title: 'Confirmer la durée d’emploi', question: 'À quelle expérience cette durée correspond-elle ? Seul le lien est enregistré. Relancez ensuite Plus fort vous-même.', select: 'Choisir explicitement', notTenure: 'Ce n’est pas une durée d’emploi', confirm: 'Confirmer le lien' },
-  it: { title: 'Conferma durata del lavoro', question: 'A quale esperienza si riferisce questa durata? Si salva solo il collegamento. Premi di nuovo Più incisivo manualmente.', select: 'Seleziona esplicitamente', notTenure: 'Non è una durata di impiego', confirm: 'Conferma collegamento' },
-  ar: { title: 'تأكيد مدة العمل', question: 'إلى أي خبرة عمل تشير هذه المدة؟ يُحفظ الربط فقط. اضغط زر التحسين مرة أخرى بنفسك.', select: 'اختر صراحةً', notTenure: 'ليست مدة عمل', confirm: 'تأكيد الربط' },
-  sr: { title: 'Potvrdi trajanje zaposlenja', question: 'Na koje radno iskustvo se odnosi ovo trajanje? Čuva se samo veza. Posle potvrde samostalno ponovo pritisni Jače.', select: 'Izaberi iskustvo', notTenure: 'Ne odnosi se na trajanje zaposlenja', confirm: 'Potvrdi vezu' },
-  hr: { title: 'Potvrdi trajanje zaposlenja', question: 'Na koje se radno iskustvo odnosi ovo trajanje? Sprema se samo veza. Nakon potvrde samostalno ponovno pritisni Jače.', select: 'Odaberi iskustvo', notTenure: 'Ne odnosi se na trajanje zaposlenja', confirm: 'Potvrdi vezu' },
-  ru: { title: 'Подтвердите стаж работы', question: 'К какому опыту работы относится этот срок? Сохраняется только связь. Затем нажмите Усилить ещё раз самостоятельно.', select: 'Выберите опыт', notTenure: 'Это не стаж работы', confirm: 'Подтвердить связь' },
-  'pt-BR': { title: 'Confirmar duração do emprego', question: 'A qual experiência corresponde esta duração? Apenas o vínculo é salvo. Depois, pressione Mais forte novamente.', select: 'Selecione explicitamente', notTenure: 'Não é tempo de emprego', confirm: 'Confirmar vínculo' },
-  hi: { title: 'रोज़गार अवधि की पुष्टि करें', question: 'यह अवधि किस कार्य अनुभव की है? केवल संबंध सहेजा जाएगा। इसके बाद मज़बूत करें बटन स्वयं दोबारा दबाएँ।', select: 'अनुभव चुनें', notTenure: 'यह रोज़गार अवधि नहीं है', confirm: 'संबंध की पुष्टि करें' },
-  ja: { title: '在職期間を確認', question: 'この期間はどの職歴に対応しますか？関連付けのみ保存します。その後、ご自身で強化ボタンを再度押してください。', select: '職歴を選択', notTenure: '在職期間ではありません', confirm: '関連付けを確認' },
-};
 
 export const en: TranslationKeys = {
   ...enBase,
   titleLocaleConfirmation: titleLocaleConfirmationByLocale.en,
-  employmentTenureConfirmation: employmentTenureConfirmationByLocale.en,
 };
 
 const translationRecords: Record<Locale, BaseTranslationKeys> = { en: enBase, de, es, fr, it, ar, sr, hr, ru, 'pt-BR': ptBR, hi, ja };
@@ -2897,6 +2879,5 @@ export const translations: Record<Locale, TranslationKeys> = Object.fromEntries(
   languages.map(({ code }) => [code, {
     ...translationRecords[code],
     titleLocaleConfirmation: titleLocaleConfirmationByLocale[code],
-    employmentTenureConfirmation: employmentTenureConfirmationByLocale[code],
   }]),
 ) as Record<Locale, TranslationKeys>;
