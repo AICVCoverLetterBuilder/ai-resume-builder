@@ -19,6 +19,8 @@ import {
   type SummaryV3StyleRepairWriterInput,
   type SummaryV3StyleWriterInput,
 } from '../summary-style-m5-server';
+import { createSummaryStyleTerminalDiagnostic } from '../summary-style-m5-terminal-observability';
+import { recordSummaryStyleRepairDiagnostics } from '../summary-style-m5-repair-observability';
 
 const source = 'Ava Patel is a Product Engineer at Atlas. She builds reliable APIs, mentors peers, and improved delivery by 20% over 24 months.';
 
@@ -673,6 +675,31 @@ describe('M5 shared injected Summary style server executor', () => {
     });
     expect(result).toMatchObject({ kind: 'handled_failure', typedReason: 'candidate_malformed' });
     expect(evaluatorCalls).toBe(0);
+  });
+
+  it('projects only finite repair diagnostics even if the process-local sidecar receives untrusted text', async () => {
+    const result = await executeSummaryV3StyleServer(requestFor('shorter'), {
+      async write(input) { return writerEnvelope(input, candidateByStyle.shorter); },
+      async evaluate(input) { return evaluatorEnvelope(input); },
+    });
+    const returned = recordSummaryStyleRepairDiagnostics(result, {
+      initialEvaluatorPhase: source,
+      initialEvaluatorViolationCode: source,
+      initialEvaluatorViolationRepairable: source,
+      repairFailureClass: source,
+      repairFailureOwner: source,
+    } as unknown as Parameters<typeof recordSummaryStyleRepairDiagnostics>[1]);
+    expect(returned).toBe(result);
+    const event = createSummaryStyleTerminalDiagnostic({
+      requestId: 'safe-correlation-095a', requestedLocale: 'en',
+      mode: 'enhance_existing_content', httpStatus: 200, result, style: 'shorter',
+    });
+    expect(event).toMatchObject({
+      initialEvaluatorPhase: null, initialEvaluatorViolationCode: null,
+      initialEvaluatorViolationRepairable: null, repairFailureClass: null, repairFailureOwner: null,
+    });
+    expect(JSON.stringify(event)).not.toContain(source);
+    expect(JSON.stringify(result)).not.toContain('repairFailureClass');
   });
 
   it('lets evaluator semantic grounding reject an empty-source candidate that injects a fact outside the manifest', async () => {
@@ -2316,6 +2343,66 @@ describe('M5 shared injected Summary style server executor', () => {
     });
     expect(result).toMatchObject({ kind: 'handled_failure', typedReason: 'repair_identity_mismatch' });
     expect(calls).toEqual({ repairWriter: 1, repairEvaluator: 0 });
+  });
+
+  it.each([
+    ['writer_transport_malformed', 'repair_writer_envelope', 'repair_transport_malformed', 502],
+    ['candidate_malformed', 'repair_writer_candidate_structure', 'repair_transport_malformed', 502],
+    ['lost_source_fact', 'repair_writer_source_validation', 'repair_transport_malformed', 502],
+    ['writer_identity_mismatch', 'repair_writer_identity', 'repair_identity_mismatch', 422],
+  ] as const)('records the finite %s repair parser class without changing the public result', async (
+    failureClass, owner, publicReason, status,
+  ) => {
+    const calls = { writer: 0, evaluator: 0, repairWriter: 0, repairEvaluator: 0 };
+    const result = await executeSummaryV3StyleServer(requestFor('shorter'), {
+      async write(input) { calls.writer += 1; return writerEnvelope(input, candidateByStyle.shorter); },
+      async evaluate(input) {
+        calls.evaluator += 1;
+        const phases = passingPhases();
+        phases.style_fulfillment = {
+          status: 'failed',
+          violations: [{ code: 'style_not_fulfilled', factIdHashes: [],
+            unitHashes: [summaryV3StyleCandidateUnitHash(input.candidate.units[0]!)], repairable: true }],
+        };
+        return evaluatorEnvelope(input, {
+          phases,
+          evidence: { ...styleEvidence(input), shorterFulfilled: false, semanticCompressionOperations: 0 },
+        });
+      },
+      async repairWrite(input) {
+        calls.repairWriter += 1;
+        if (failureClass === 'writer_transport_malformed') return {};
+        if (failureClass === 'lost_source_fact') {
+          return writerEnvelope(input, candidateByStyle.shorter,
+            input.requiredFacts.slice(0, -1).map((fact) => fact.id));
+        }
+        const response = writerEnvelope(input, candidateByStyle.shorter);
+        if (failureClass === 'candidate_malformed') response.input.units = [];
+        else response.input.operationId = 'wrong-repair-operation';
+        return response;
+      },
+      async repairEvaluate() { calls.repairEvaluator += 1; return {}; },
+    });
+    expect(result).toMatchObject({ kind: 'handled_failure', typedReason: publicReason });
+    expect(calls).toEqual({ writer: 1, evaluator: 1, repairWriter: 1, repairEvaluator: 0 });
+    const event = createSummaryStyleTerminalDiagnostic({
+      requestId: 'safe-correlation-095a', requestedLocale: 'en',
+      mode: 'enhance_existing_content', httpStatus: status, result, style: 'shorter',
+    });
+    expect(event).toMatchObject({
+      event: 'summary_stronger_terminal', style: 'shorter', terminalLayer: 'repair_validation',
+      terminalReason: publicReason, initialEvaluatorPhase: 'style_fulfillment',
+      initialEvaluatorViolationCode: 'style_not_fulfilled', initialEvaluatorViolationRepairable: true,
+      repairFailureClass: failureClass, repairFailureOwner: owner,
+      finalApplyEligible: false, usageDecision: 'no_increment',
+    });
+    const eventBytes = JSON.stringify(event);
+    expect(eventBytes).not.toContain(source);
+    expect(eventBytes).not.toContain('Ava Patel');
+    expect(eventBytes).not.toContain(candidateByStyle.shorter);
+    expect(eventBytes).not.toContain('candidate-1');
+    expect(JSON.stringify(result)).not.toContain('repairFailureClass');
+    expect(JSON.stringify(result)).not.toContain('initialEvaluatorPhase');
   });
 
   it('never repairs a rejected safe-no-op claim even when the violation is otherwise repairable', async () => {

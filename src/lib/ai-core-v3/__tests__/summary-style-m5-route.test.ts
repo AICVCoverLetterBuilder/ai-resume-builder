@@ -146,7 +146,7 @@ function providerMessage(invocation: SummaryV3StyleProviderInvocation, mode: 'pa
 
 async function invokeActualRoute(options: {
   action?: string; requestedLocale?: string; sourceLocale?: string;
-  auth?: 'valid' | 'invalid'; providerMode?: 'pass' | 'reject' | 'repair-fail' | 'malformed' | 'throw' | 'rate-limit' | 'timeout';
+  auth?: 'valid' | 'invalid'; providerMode?: 'pass' | 'reject' | 'repair-fail' | 'repair-malformed' | 'malformed' | 'throw' | 'rate-limit' | 'timeout';
   serverEnabled?: boolean; clientEnabled?: unknown; omitEnabled?: boolean;
   executorMode?: 'throw';
   routeOverrides?: Record<string, unknown>;
@@ -195,8 +195,9 @@ async function invokeActualRoute(options: {
         throw new APIConnectionTimeoutError('synthetic timeout');
       }
       if (mode === 'throw' || (mode === 'repair-fail' && calls.count === 4)) return providerMessage(invocation, 'throw');
+      if (mode === 'repair-malformed' && calls.count === 3) return providerMessage(invocation, 'malformed');
       if (mode === 'malformed') return providerMessage(invocation, 'malformed');
-      return providerMessage(invocation, mode === 'reject' || mode === 'repair-fail' ? 'reject' : 'pass');
+      return providerMessage(invocation, mode === 'reject' || mode === 'repair-fail' || mode === 'repair-malformed' ? 'reject' : 'pass');
     });
     vi.doMock('@anthropic-ai/sdk', () => { class MockAnthropic { readonly messages = { create }; constructor(options: unknown) { calls.clientOptions.push(options); } } return { default: MockAnthropic }; });
     if (calls.logs) {
@@ -462,6 +463,32 @@ describe('M5.2 actual production route boundary', () => {
     });
     expect(run.calls.count).toBe(4); expect(run.calls.retries).toBe(0);
     expect(run.calls.maxRetries).toEqual([0, 0, 0, 0]);
+  });
+
+  it('emits finite repair diagnostics after exactly three provider attempts without changing the 502 body', async () => {
+    const logs: string[] = [];
+    const calls = { count: 0, retries: 0, tools: [], choices: [], maxRetries: [], requests: [], clientOptions: [], logs };
+    const run = await invokeActualRoute({ action: 'summary_shorter', providerMode: 'repair-malformed', calls });
+    expect(run.response.status).toBe(502);
+    expect(run.body).toMatchObject({ kind: 'handled_failure', typedReason: 'repair_transport_malformed' });
+    expect(run.body).not.toHaveProperty('initialEvaluatorPhase');
+    expect(run.body).not.toHaveProperty('repairFailureClass');
+    expect(run.body.evidence).not.toHaveProperty('initialEvaluatorPhase');
+    expect(run.body.evidence).not.toHaveProperty('repairFailureClass');
+    expect(run.calls.count).toBe(3);
+    expect(run.calls.maxRetries).toEqual([0, 0, 0]);
+    const events = logs.filter((line) => line.includes('"event":"summary_stronger_terminal"'));
+    expect(events).toHaveLength(1);
+    expect(JSON.parse(events[0]!) as Record<string, unknown>).toMatchObject({
+      style: 'shorter', terminalLayer: 'repair_validation', terminalReason: 'repair_transport_malformed',
+      initialEvaluatorPhase: 'style_fulfillment', initialEvaluatorViolationCode: 'style_not_fulfilled',
+      initialEvaluatorViolationRepairable: true,
+      repairFailureClass: 'writer_transport_malformed', repairFailureOwner: 'repair_writer_envelope',
+      finalApplyEligible: false, usageDecision: 'no_increment',
+    });
+    expect(events[0]).not.toContain(source);
+    expect(events[0]).not.toContain('Ava Patel');
+    expect(events[0]).not.toContain('Product Engineer');
   });
 
   it('keeps a representative legacy Summary rewrite outside the M5 provider adapter', async () => {

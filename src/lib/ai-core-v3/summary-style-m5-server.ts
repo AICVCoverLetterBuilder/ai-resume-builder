@@ -84,6 +84,10 @@ import {
   type SummaryStyleSourceFloorFirstProducer,
   type SummaryStyleSourceNumericMismatchEvidence,
 } from './summary-style-m5-local-observability';
+import {
+  recordSummaryStyleRepairDiagnostics,
+  readSummaryStyleRepairDiagnostics,
+} from './summary-style-m5-repair-observability';
 import { detectRoleLabelSourceLocale } from '@/lib/cv-summary-structured-role-localization';
 import {
   SummaryV3ProviderTransportError,
@@ -3192,9 +3196,23 @@ async function executeSummaryV3StyleServerContent(
   const parsedRepairWriter = parseWriterOutput(rawRepairWriter, snapshot);
   if (!parsedRepairWriter.ok) {
     const reason = parsedRepairWriter.reason === 'writer_identity_mismatch' ? 'repair_identity_mismatch' : 'repair_transport_malformed';
-    return createSummaryV3StyleHandledFailure(snapshot, reason, makeEvidence(snapshot, {
+    const selected = evaluatorFailureDecision(parsedEvaluator.evaluation).selected;
+    const repairFailureOwner = {
+      writer_transport_malformed: 'repair_writer_envelope',
+      candidate_malformed: 'repair_writer_candidate_structure',
+      lost_source_fact: 'repair_writer_source_validation',
+      writer_identity_mismatch: 'repair_writer_identity',
+    } as const;
+    const result = createSummaryV3StyleHandledFailure(snapshot, reason, makeEvidence(snapshot, {
       writerAttempts: 1, evaluatorAttempts: 1, repairWriterAttempts: 1, candidate: parsedWriter.candidate, evaluation: parsedEvaluator.evaluation,
     }));
+    return recordSummaryStyleRepairDiagnostics(result, {
+      initialEvaluatorPhase: selected?.phase ?? null,
+      initialEvaluatorViolationCode: selected?.violation.code ?? null,
+      initialEvaluatorViolationRepairable: selected?.violation.repairable ?? null,
+      repairFailureClass: parsedRepairWriter.reason,
+      repairFailureOwner: repairFailureOwner[parsedRepairWriter.reason],
+    });
   }
   if (!repairCandidateStaysWithinViolationScope(snapshot, parsedWriter.candidate, parsedRepairWriter.candidate, violations)) {
     return createSummaryV3StyleHandledFailure(snapshot, 'repair_scope_violation', makeEvidence(snapshot, {
@@ -3279,6 +3297,7 @@ export async function executeSummaryV3StyleServer(
   if (!snapshot) return result;
   const authority = trustedEmploymentTenureAuthority(snapshot);
   const diagnostics = readSummaryStyleLocalDiagnostics(result);
+  const repairDiagnostics = readSummaryStyleRepairDiagnostics(result);
   const location = resultNumericLocations.get(result);
   const remediation = result.kind === 'handled_failure' && result.typedReason === 'unsupported_claim'
     && diagnostics.sourceFloorFirstProducer === 'source_numeric_membership_mismatch'
@@ -3291,5 +3310,8 @@ export async function executeSummaryV3StyleServer(
     ...(remediation ? { remediation } : {}),
   });
   // Preserve the existing diagnostic sidecar. Response selectors are not logs.
-  return recordSummaryStyleLocalDiagnostics(enriched, diagnostics);
+  const withLocalDiagnostics = recordSummaryStyleLocalDiagnostics(enriched, diagnostics);
+  return repairDiagnostics
+    ? recordSummaryStyleRepairDiagnostics(withLocalDiagnostics, repairDiagnostics)
+    : withLocalDiagnostics;
 }

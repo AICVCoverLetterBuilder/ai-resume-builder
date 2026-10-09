@@ -4,10 +4,14 @@ import {
   type SummaryStrongerTerminalDiagnosticInput,
 } from './summary-v3-production-observability';
 import type { SummaryV3Style } from './summary-style-m5';
+import {
+  readSummaryStyleRepairDiagnostics,
+  type SummaryStyleRepairDiagnostics,
+} from './summary-style-m5-repair-observability';
 
 export type SummaryStyleTerminalDiagnosticEvent = Omit<SummaryStrongerTerminalDiagnosticEvent, 'style'> & {
   readonly style: SummaryV3Style;
-};
+} & Partial<SummaryStyleRepairDiagnostics>;
 
 export type SummaryStyleTerminalDiagnosticInput = SummaryStrongerTerminalDiagnosticInput & {
   readonly style: SummaryV3Style;
@@ -22,7 +26,14 @@ export function createSummaryStyleTerminalDiagnostic(
   input: SummaryStyleTerminalDiagnosticInput,
 ): SummaryStyleTerminalDiagnosticEvent {
   const { style, ...legacyInput } = input;
-  return { ...createSummaryStrongerTerminalDiagnostic(legacyInput), style };
+  const repairDiagnostics = input.result.kind === 'not_applicable'
+    || input.result.kind === 'route_failure'
+    ? null : readSummaryStyleRepairDiagnostics(input.result);
+  return {
+    ...createSummaryStrongerTerminalDiagnostic(legacyInput),
+    style,
+    ...(repairDiagnostics ?? {}),
+  };
 }
 
 /** Logging is observational and must never alter the HTTP response or decision. */
