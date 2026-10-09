@@ -33,7 +33,7 @@ import {
   compactSavedSummaryNearWordBudget,
   SUMMARY_EXPORT_WORD_BUDGET_COMPACTION_REVISION,
 } from './cv-summary-word-budget';
-import { buildExperienceDurationSnapshot, formatApproximateDurationPhrase } from './cv-experience-duration';
+import { buildExperienceDurationSnapshot, formatApproximateDurationPhrase, validateSummaryDuration } from './cv-experience-duration';
 import { applyCvContentQuality } from './cv-content-quality';
 import {
   textMatchesRequestedFieldLocale,
@@ -2256,6 +2256,21 @@ export function prepareExportReadyCv(
     && savedSummaryHasCompleteCurrentV2Shell
     && visibleSummaryValidation.valid
     && !effectiveSummaryStale;
+  // A valid, unchanged editor Summary is the export source of truth. Content
+  // quality may still project Experience/title fields, but must not enrich or
+  // normalize this saved prose (including adding an Experience start date).
+  const preserveExistingSummarySource = Boolean(
+    rawCv.summary?.trim()
+    && rawCv.summary === appOwnedSummaryBeforeQuality
+    && initialSummaryValidation.valid
+    && summaryRecoverySource === 'saved_summary'
+    && !effectiveSummaryStale
+    && !appOwnedSummaryRequiresV2Authority
+    && validateSummaryDuration(rawCv.summary, durationSnapshot.total, {
+      requireDurationClaim: cv.summaryOrigin !== 'user',
+      locale: requestedLocale,
+    }).valid,
+  );
   const quality = applyCvContentQuality(cv, requestedLocale, {
     gender,
     durationSnapshot,
@@ -2264,11 +2279,13 @@ export function prepareExportReadyCv(
   });
   cv = {
     ...quality.cv,
-    summary: (appOwnedSummaryRequiresV2Authority || preserveValidatedAppOwnedSummary)
+    summary: preserveExistingSummarySource
+      ? rawCv.summary
+      : (appOwnedSummaryRequiresV2Authority || preserveValidatedAppOwnedSummary)
       ? appOwnedSummaryBeforeQuality
       : scrubOrphanDurationFragments(quality.cv.summary || ''),
-    ...((appOwnedSummaryRequiresV2Authority || preserveValidatedAppOwnedSummary)
-      ? { summaryOrigin: appOwnedSummaryOriginBeforeQuality }
+    ...((preserveExistingSummarySource || appOwnedSummaryRequiresV2Authority || preserveValidatedAppOwnedSummary)
+      ? { summaryOrigin: preserveExistingSummarySource ? rawCv.summaryOrigin : appOwnedSummaryOriginBeforeQuality }
       : {}),
   };
 
