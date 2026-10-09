@@ -374,6 +374,26 @@ describe('M5.2 actual production route boundary', () => {
   });
 
   it.each([
+    ['summary_shorter', 'shorter'],
+    ['summary_stronger', 'stronger'],
+    ['summary_professional', 'professional'],
+  ] as const)('emits the compatible privacy-safe terminal event for %s', async (action, style) => {
+    const logs: string[] = [];
+    const calls = { count: 0, retries: 0, tools: [], choices: [], maxRetries: [], requests: [], clientOptions: [], logs };
+    const run = await invokeActualRoute({ action, providerMode: 'throw', calls });
+    expect(run.response.status).toBe(500);
+    const events = logs.filter((value) => value.includes('"event":"summary_stronger_terminal"'));
+    expect(events).toHaveLength(1);
+    expect(JSON.parse(events[0]!) as Record<string, unknown>).toMatchObject({
+      event: 'summary_stronger_terminal', operation: 'summary_style', style,
+      terminalLayer: 'provider_transport', writerAttempted: true, usageDecision: 'no_increment',
+    });
+    expect(events[0]).not.toContain(source);
+    expect(events[0]).not.toContain('Ava Patel');
+    expect(events[0]).not.toContain('Product Engineer');
+  });
+
+  it.each([
     ['rate-limit', 429, 'rate_limit', 429],
     ['timeout', 504, 'timeout', null],
   ] as const)('preserves known %s cause through real route status mapping', async (

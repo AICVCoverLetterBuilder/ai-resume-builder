@@ -1243,6 +1243,19 @@ const CASED_SINGLE_TOKEN_SUBJECT_NONIDENTITY_PREFIXES = new Set([
   'a', 'an', 'the', 'current', 'former', 'past', 'previous', 'this', 'that', 'these', 'those',
   'i', 'we', 'he', 'she', 'they', 'it',
 ]);
+const CASED_LOCALE_NONIDENTITY_PREFIXES: Readonly<Partial<Record<SummaryV3StyleSupportedLocale, ReadonlySet<string>>>> = {
+  sr: new Set(['imam', 'trenutno']),
+  hr: new Set(['imam', 'trenutno']),
+};
+function isCasedLocaleNonidentityPrefix(value: string, locale: SummaryV3StyleSupportedLocale): boolean {
+  return CASED_LOCALE_NONIDENTITY_PREFIXES[locale]?.has(value.toLocaleLowerCase()) === true;
+}
+const AUTO_RELATION_SENTENCE_STARTERS = new Set(['imam', 'trenutno']);
+const AUTO_RELATION_SERBIAN_CONTEXT = /\b(?:meseci|iskustva|radim|trenutno|gde|porudžbine|otpremu)\b/iu;
+function isAutomaticRelationNonEntityStarter(value: string, source: string): boolean {
+  return AUTO_RELATION_SENTENCE_STARTERS.has(value.toLocaleLowerCase())
+    && AUTO_RELATION_SERBIAN_CONTEXT.test(source);
+}
 const CASED_SUBJECT_DISCOURSE_PREFIXES = new Set([
   'currently', 'formerly', 'previously', 'presently', 'now', 'today', 'recently', 'historically', 'initially',
 ]);
@@ -1332,7 +1345,8 @@ export function summaryV3StyleCandidatePreservesExactMaterialSurfaces(
         // Current/prior state is validated by the server's typed employment
         // guard; it is not a literal identity surface that should mask that
         // more precise terminal behind a generic source-floor failure.
-        && !CASED_MULTI_TOKEN_NONIDENTITY_PREFIXES.has(folded);
+        && !CASED_MULTI_TOKEN_NONIDENTITY_PREFIXES.has(folded)
+        && !isCasedLocaleNonidentityPrefix(token, snapshot.requestedLocale);
     })
     // A Professional rewrite may change cased ordinary duty wording.  Keep
     // true identity/technical surfaces in this local floor, but exclude only
@@ -1345,7 +1359,7 @@ export function summaryV3StyleCandidatePreservesExactMaterialSurfaces(
   // Individual token locks protect casing, while an exact cased phrase
   // anywhere in the source closes insertion/reordering (`Ava Priya Patel`
   // and `Patel Ava`) without assuming every title-cased word is a person.
-  const casedMultiTokenSurfaces = casedMultiTokenExactSurfaces(snapshot.sourceSummary)
+  const casedMultiTokenSurfaces = casedMultiTokenExactSurfaces(snapshot.sourceSummary, snapshot.requestedLocale)
     .filter((surface) => snapshot.style !== 'professional'
       || !snapshot.requiredFacts.some((fact) => fact.semanticKind === 'duty'
         && summaryV3StyleContainsExactSurface(fact.text, surface, true))
@@ -1426,7 +1440,7 @@ const sourceUnitTexts = summaryV3StyleSourceUnitTexts;
  * This closes insertion/reordering both at and away from unit start without
  * importing a locale-specific name parser.
  */
-function casedMultiTokenExactSurfaces(value: string): readonly string[] {
+function casedMultiTokenExactSurfaces(value: string, locale: SummaryV3StyleSupportedLocale): readonly string[] {
   return sourceUnitTexts(value)
     .flatMap((unit) => Array.from(unit.matchAll(/\p{Lu}[\p{L}\p{N}'’.-]*(?:\s+\p{Lu}[\p{L}\p{N}'’.-]*)+/gu))
       .map((match) => {
@@ -1434,7 +1448,8 @@ function casedMultiTokenExactSurfaces(value: string): readonly string[] {
         // as `Node.js`; strip only terminal sentence punctuation before
         // preserving a multi-token identity surface (`Product Engineer.`).
         const tokens = match[0].replace(/[.!?。！？।]+$/u, '').split(/\s+/u);
-        while (tokens.length > 0 && CASED_MULTI_TOKEN_NONIDENTITY_PREFIXES.has(tokens[0]!.toLocaleLowerCase())) tokens.shift();
+        while (tokens.length > 0 && (CASED_MULTI_TOKEN_NONIDENTITY_PREFIXES.has(tokens[0]!.toLocaleLowerCase())
+          || isCasedLocaleNonidentityPrefix(tokens[0]!, locale))) tokens.shift();
         return tokens.length >= 2 ? tokens.join(' ') : undefined;
       }))
     .filter((surface): surface is string => !!surface);
@@ -1497,7 +1512,8 @@ function casedSingleTokenSubjectIdentitySurfaces(
       /^([\p{Lu}][\p{L}\p{N}'’.-]*)\s+\p{Ll}[\p{L}\p{N}'’.-]*/u.exec(unit)?.[1],
     ])
     .filter((surface): surface is string => !!surface
-      && !CASED_SINGLE_TOKEN_SUBJECT_NONIDENTITY_PREFIXES.has(surface.toLocaleLowerCase())),
+      && !CASED_SINGLE_TOKEN_SUBJECT_NONIDENTITY_PREFIXES.has(surface.toLocaleLowerCase())
+      && !isCasedLocaleNonidentityPrefix(surface, snapshot.requestedLocale)),
     ...sourceClauseLeadingSegments(snapshot.sourceSummary)
       .flatMap((unit) => {
         const surface = /^([\p{Lu}][\p{L}\p{N}'’.-]*),\s+/u.exec(unit)?.[1];
@@ -2757,7 +2773,10 @@ function entityRelationBindings(
 }
 
 const AUTO_RELATION_STATE_WORDS = new Set(['current', 'former', 'previous', 'past', 'present']);
-
+// Serbian and Croatian sentence-initial verbs/adverbs are capitalized by
+// orthography, not because they are entity subjects. Keep these finite
+// language tokens out of the capitalization-only multi-subject heuristic;
+// explicit protectedEntities and the evaluator remain authoritative.
 /**
  * Optional page annotations remain unnecessary for the straightforward,
  * multi-person Latin-script case. We add only distinct clause-leading
@@ -2780,7 +2799,8 @@ function automaticRelationEntityLocks(
       // A leading state marker means this title-cased run is a role/state
       // phrase, not an automatically inferred person identity.
       && !AUTO_RELATION_STATE_WORDS.has(rawFactTokens(value)[0]?.toLocaleLowerCase() || '')
-      && !existing.has(normalizedRelationText(value)))));
+       && !isAutomaticRelationNonEntityStarter(value, source)
+       && !existing.has(normalizedRelationText(value)))));
   if (candidates.length < 2) return locks;
   const additions = candidates
     .map((value) => ({ kind: 'entity' as const, value, hash: hashSummaryV3StyleValue(`entity:auto:${value}`) }));

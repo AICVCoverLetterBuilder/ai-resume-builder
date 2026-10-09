@@ -124,9 +124,9 @@ import type {
 } from '@/lib/ai-core-v3/summary-generate';
 import {
   emitSummaryV3TerminalDiagnostic,
-  emitSummaryStrongerTerminalDiagnostic,
   type SummaryV3RouteTerminalFailure,
 } from '@/lib/ai-core-v3/summary-v3-production-observability';
+import { emitSummaryStyleTerminalDiagnostic } from '@/lib/ai-core-v3/summary-style-m5-terminal-observability';
 import {
   emitExperienceV3TerminalDiagnostic,
   type ExperienceV3RouteTerminalFailure,
@@ -142,6 +142,7 @@ import {
   summaryV3StyleM5TimeoutForPhase,
 } from '@/lib/ai-core-v3/summary-style-m5-timeout-policy';
 import { createSummaryV3StyleM5RouteFailure } from '@/lib/ai-core-v3/summary-style-m5-transport';
+import type { SummaryV3Style } from '@/lib/ai-core-v3/summary-style-m5';
 import {
   CONTENT_LOCALIZE_V3_OPERATION,
   createContentLocalizeV3ProviderDependencies,
@@ -2496,15 +2497,14 @@ Rules:
           classified.code,
           { ...M5_ROUTE_EXCEPTION_EVIDENCE, m5ProviderFailure: failure },
         );
-        if (m5Request.style === 'stronger') {
-          emitSummaryStrongerTerminalDiagnostic({
-            requestId: summaryV3RequestId,
-            requestedLocale: m5Request.requestedLocale,
-            mode: m5Mode,
-            httpStatus: classified.status,
-            result: routeFailure,
-          });
-        }
+        emitSummaryStyleTerminalDiagnostic({
+          requestId: summaryV3RequestId,
+          requestedLocale: m5Request.requestedLocale,
+          mode: m5Mode,
+          httpStatus: classified.status,
+          result: routeFailure,
+          style: m5Request.style as SummaryV3Style,
+        });
         return jsonResponse(routeFailure, {
           status: classified.status,
           headers: classified.retryAfter
@@ -2525,15 +2525,14 @@ Rules:
           : /(?:_request_failed|_transport_malformed)$/u.test(result.typedReason)
             ? 502
             : 422;
-      if (m5Request.style === 'stronger') {
-        emitSummaryStrongerTerminalDiagnostic({
-          requestId: summaryV3RequestId,
-          requestedLocale: m5Request.requestedLocale,
-          mode: result.kind === 'not_applicable' ? m5Mode : result.mode,
-          httpStatus: status,
-          result,
-        });
-      }
+      emitSummaryStyleTerminalDiagnostic({
+        requestId: summaryV3RequestId,
+        requestedLocale: m5Request.requestedLocale,
+        mode: result.kind === 'not_applicable' ? m5Mode : result.mode,
+        httpStatus: status,
+        result,
+        style: m5Request.style as SummaryV3Style,
+      });
       return jsonResponse(result, { status });
     }
 
